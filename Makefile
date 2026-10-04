@@ -115,8 +115,9 @@ $(FRICTIONLESS_BIN):
 # Skills and agents bundled into the binary. Single source of truth for both
 # the cache-invalidation prerequisites (CACHE_SRC) and the copy step in the
 # $(CACHE_DIR)/.cached recipe below, so the two lists cannot drift apart. Named
-# here; the SKILL.md / .md source paths derive from the names.
-CACHE_SKILLS := ark ark-search ark-usage bloodhound luhmann recall ui
+# here; the SKILL.md / .md source paths derive from the names. The ui-* skills
+# are not listed: `frictionless extract` supplies them, whole directories.
+CACHE_SKILLS := ark ark-search ark-usage bloodhound luhmann recall
 CACHE_AGENTS := ark-franklin ark-franklin-opus ark-messenger ark-recall-agent ark-searcher
 CACHE_SKILL_SRC := $(foreach s,$(CACHE_SKILLS),.claude/skills/$(s)/SKILL.md)
 CACHE_AGENT_SRC := $(foreach a,$(CACHE_AGENTS),.claude/agents/$(a).md)

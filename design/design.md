@@ -244,6 +244,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-PtyHost.md → `ptyhost_test.go`
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
 - [x] test-DirLink.md → `dirlink_test.go`
+- [x] test-LlamaLibs.md → `llamalibs_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`
 

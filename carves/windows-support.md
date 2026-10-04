@@ -145,17 +145,42 @@ and unknown items carry the negative marker rather than a false green.
       extraction symlinks are gated on app-activation, and the llama ones on
       Item 6. See Item 3.
   - [x] ~~**3.1 — the portable directory-link helper.**~~ **LANDED (2026-10-04, #136.)**
-  - [ ] **3.2 — test on Windows.** **OPEN (not queued.)** Needs a standard
-        (non-admin) account for the unprivileged case.
+  - [x] ~~**3.2 — test on Windows.**~~ **ASSESSED (2026-10-04.)** The helper
+        works for a standard user outside ssh; unprivileged `setup` still stops
+        at bundle extraction, as predicted. Measured in Item 3.
+  - [ ] **3.3 — warn when junctions will be unreadable.** **OPEN (not queued;
+        optional.)** `setup` reads its own RedirectionTrust policy and warns a
+        non-administrator whose session enforces it (an ssh login). Item 3.
 - **Item 9 — the install surface on Windows.** **SPLIT (Bill, 2026-09-24.)**
       Rides on [setup-and-update.md](setup-and-update.md): setup's self-copy
       into `~/.ark` and `update`'s replacement of a running `ark.exe`; the
       Windows exe semantics are measured. See Item 9.
   - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued.)**
   - [ ] **9.2 — test on Windows.** **OPEN (not queued.)**
-- [ ] **Item 6 — llama.cpp embedding provisioning on Windows.** **OPEN (not
-      queued.)** Unknown, and an independent track: whether `ark embed install`
-      has Windows artifacts at all is unexamined.
+- **Item 6 — llama.cpp embedding provisioning on Windows.** **SPLIT
+      (2026-10-04.)** Measured on the VM: provisioning dropped every file of
+      ggml-org's flat Windows zips (fixed, 6.1); with the files in place,
+      `ggml.dll` still will not load on a clean Windows, which has no MSVC
+      runtime (6.2); and auto-detection picked Vulkan on a VM with no Vulkan
+      device (6.3). See Item 6.
+  - [x] ~~**6.1 — extract flat Windows zips.**~~ **LANDED (2026-10-04.)**
+        `extractZip` strips a release directory only when every entry shares
+        one. R2969, `test-LlamaLibs.md`; live on the VM, 30 DLLs in `lib\`.
+  - [ ] **6.2 — the MSVC runtime, app-local.** **OPEN (not queued.)** Place
+        `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` in
+        `~/.ark\lib` when System32 lacks them. Source undecided: ark's Windows
+        release zip, or extracted from Microsoft's redistributable.
+  - [ ] **6.3 — auto-detection requires a real Vulkan device.** **OPEN (not
+        queued.)** The loader alone is not a device; with none, choose the CPU
+        build.
+  - [ ] **6.4 — test on Windows, CPU path.** **OPEN (not queued.)** The VM as it
+        is: no GPU driver, no MSVC runtime. Embedding must run end to end.
+  - [ ] **6.5 — test on Windows, GPU path.** **OPEN (not queued.)** Needs the
+        host's NVIDIA card passed through to the VM (Item 6 has the host
+        facts).
+- [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
+      Windows install path, beside `ark setup`, not replacing it: a portable
+      package whose manifest declares the VC++ redistributable as a dependency.
 - [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
       queued.)** Not verified, and an independent track: the mechanism is
       portable (fsnotify); conduct under Windows' quirks, and recovery from
@@ -365,10 +390,40 @@ so on an unprivileged Windows account `setup` is gated on that carve, not on
 this part. The **llama tar symlinks** (`llamalibs.go:283`) are Linux `.so`
 version links and belong to Item 6.
 
-**Testing caveat.** The VM's ssh session is an elevated Administrator, so
-`os.Symlink` succeeds there even with Developer Mode off. The unprivileged
-failure this part exists to fix can only be reproduced from a standard
-(non-admin) account.
+**Measured on Windows (2026-10-04, build 26200, part 3.2).** Run as a standard
+user with no symlink privilege, from a scheduled task:
+
+- The directory-link helper works: a junction is created without privilege and
+  read through, and `TestMakeAndReadDirLink` passes. As an administrator,
+  `ark setup` from a fresh home links all of `~/.claude` as junctions, and a
+  second run is a no-op.
+- Unprivileged `ark setup` still fails, at the first shipped symlink:
+  `failed to extract html/mcp: symlink ..\apps\mcp ...: A required privilege is
+  not held by the client`. That is the bundle-extraction case above, so the
+  gate on app-activation is now measured rather than predicted.
+
+**RedirectionGuard, and why the test ran from a task.** Over ssh the same
+junction test fails, for a reason that has nothing to do with ark. Windows'
+OpenSSH server runs with the RedirectionTrust process mitigation enforced, and
+every process under an ssh session inherits it. A process that enforces it
+refuses to traverse any junction a non-administrator created (error 448, "The
+path cannot be traversed because it contains an untrusted mount point"), whoever
+is reading: an administrator could not follow a standard user's junction either.
+A process cannot clear the policy for itself (`SetProcessMitigationPolicy`
+answers Access is denied). A desktop process and a scheduled task do not enforce
+it, so for those the junctions work.
+
+The consequence for users is narrow but real: a **standard user running ark or
+Claude Code over ssh** cannot read the junctions `setup` made, and nothing in
+ark can fix that, since Claude Code is a separate process. An option, not a
+decision: `setup` could read its own policy (`GetProcessMitigationPolicy`) and
+warn when enforcement is on and the user is not an administrator.
+
+The consequence for testing: an ssh shell gives the wrong answer for anything
+junction-shaped, so Windows tests run as scheduled tasks (S4U for the
+registering account, a password logon for another), with only console work such
+as `luhmann attach` done over ssh as the same user. The LinkTable tests also
+cannot run unprivileged on Windows: their fixtures call `os.Symlink` directly.
 
 <a id="4"></a>
 
@@ -550,6 +605,48 @@ unexamined. Flagged as UNKNOWN rather than worked, so the carve does not imply a
 analysis that has not happened. A Windows binary that builds and serves but
 cannot embed is a real and partial "works," and the release should say which.
 
+**Measured on the VM (2026-10-04, build 26200).** Three failures, each hidden
+behind the one before it:
+
+1. **Provisioning extracted nothing (6.1, fixed).** ggml-org's Windows zips are
+   flat, with `llama.dll` at the root, unlike the Linux tarballs' `llama-bXXXX/`
+   wrapper. The extractor stripped a leading directory unconditionally, so every
+   entry flattened to nothing, the download "completed", and only the post-check
+   noticed an empty `lib\`. A zip can be pre-scanned, so flattening is now
+   decided per archive; the tar path is unchanged.
+2. **`ggml.dll` will not load (6.2).** With all 30 DLLs present, loading fails
+   with "The specified module could not be found", which on Windows names a
+   missing *dependency*. A clean Windows has no MSVC runtime: `vcruntime140.dll`,
+   `vcruntime140_1.dll` and `msvcp140.dll` are all absent from System32.
+   Diagnosis by elimination, not yet confirmed by supplying them.
+3. **Vulkan chosen with no Vulkan device (6.3).** The VM's only GPU is a VirtIO
+   display adapter with no Vulkan driver, yet `auto` resolved to `vulkan`; the
+   Vulkan loader (`vulkan-1.dll`) is present, and that is likely what the
+   detection saw. A machine with no usable GPU is common on Windows (VMs, office
+   laptops) and should get the CPU build.
+
+**Why app-local for the runtime.** Windows has no apt-style dependency resolution
+for a plain installer: MSI, Inno Setup and WiX bundle their prerequisites and run
+them, and Microsoft's `vc_redist.x64.exe` needs administrator rights, which an
+unprivileged `ark setup` does not have. MSIX does declare dependencies, but it
+virtualizes the filesystem, a poor fit for a CLI that owns `~/.ark` and runs a
+server. Microsoft's license permits shipping the three runtime DLLs beside the
+application ("app-local"), and Windows finds a DLL's dependencies in the same
+folder, so `~/.ark\lib` can hold them and nothing system-wide changes. winget is
+the closest thing to apt and can declare the redistributable as a dependency;
+that is Item 10, a distribution channel rather than the fix.
+
+**The GPU path (6.5).** The VM cannot test it as built: a Windows guest gets
+real GPU acceleration only by PCI passthrough (VFIO), since QEMU's paravirtual
+3D (virgl, Venus) has guest drivers for Linux only. The container host has a
+candidate, an NVIDIA RTX 2060 Max-Q beside the Intel UHD the host can keep, in a
+clean IOMMU group (its four functions plus the CPU's PCIe bridge) and bound to
+the open `NovaCore` driver rather than anything the host depends on. The likely
+obstacles are laptop-specific: the card's VBIOS is often not readable from the
+card and has to be supplied to QEMU, and dockur's support for passthrough to a
+Windows guest is unverified. The GPU-less VM is the more valuable test bed
+first, because 6.3's fallback is what a VM or office machine gets.
+
 <a id="7"></a>
 
 ## Item 7
@@ -624,6 +721,22 @@ itself and rename itself aside, but cannot be overwritten in place, and the
 renamed-aside copy cannot be deleted until its process exits. So the self-copy
 needs nothing special, and `update` needs rename-aside plus a deferred delete.
 The Windows test for this part is those two paths run against the real binary.
+
+<a id="10"></a>
+
+## Item 10
+
+winget is Windows' package manager and the nearest thing it has to apt. A
+manifest can declare `PackageDependencies` (here `Microsoft.VCRedist.2015+.x64`),
+which winget installs first, and a "portable" package type that fits a single
+binary. That gives Windows users the install they expect, `winget install ark`,
+with the runtime handled by the system. It is a distribution channel beside
+`ark setup`, not a replacement: `setup` still owns `~/.ark`, and 6.2's app-local
+runtime still covers a machine where ark arrived some other way. Not examined:
+the manifest details, the review process for the public winget repository, and
+whether the redistributable's admin prompt is acceptable on that path. The
+dependency support was described from memory and wants checking against
+winget's documentation before this part is queued.
 
 ---
 

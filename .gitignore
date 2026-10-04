@@ -26,3 +26,4 @@ node_modules
 /release/
 /.minispec/backup
 /.claude/skills/ui*/
+/ark.exe

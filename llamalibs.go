@@ -294,8 +294,12 @@ func extractZip(zipPath, dest string) error {
 		return err
 	}
 	defer zr.Close()
+	wrapped := zipWrapped(zr.File)
 	for _, f := range zr.File {
-		name := flattenArchivePath(f.Name)
+		name := f.Name
+		if wrapped {
+			name = flattenArchivePath(f.Name)
+		}
 		if name == "" {
 			continue
 		}
@@ -317,6 +321,26 @@ func extractZip(zipPath, dest string) error {
 		}
 	}
 	return nil
+}
+
+// zipWrapped reports whether every entry sits under one shared top-level
+// directory. ggml-org's Windows zips are flat (llama.dll at the root), unlike
+// the Linux tarballs, so flattening must be decided per archive or every entry
+// is dropped and provisioning "completes" with an empty lib dir. R2969
+func zipWrapped(files []*zip.File) bool {
+	root := ""
+	for _, f := range files {
+		i := strings.Index(f.Name, "/")
+		if i == -1 {
+			return false
+		}
+		if root == "" {
+			root = f.Name[:i]
+		} else if f.Name[:i] != root {
+			return false
+		}
+	}
+	return root != ""
 }
 
 func extractFile(target string, r io.Reader, mode os.FileMode) error {
