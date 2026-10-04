@@ -36,7 +36,15 @@ func flatCommands() []*ucli.Command {
 	return []*ucli.Command{
 		// --- no-flag, positional-only (thin-delegate) ---
 		{Name: "version", Usage: "print the ark version", Action: flatDelegate(cmdVersion)},
-		{Name: "setup", Usage: "bootstrap ~/.ark/ (extract assets, install skills)", Action: flatDelegate(cmdSetup)},
+		{
+			Name:  "setup",
+			Usage: "install ark (global), or --local to connect the current directory",
+			Description: "Global install into ~/.ark and ~/.claude, idempotent on the\n" +
+				"   database marker. --local reads the CURRENT DIRECTORY and links\n" +
+				"   ark's skills and agents into ./.claude/, requiring a prior `ark setup`.",
+			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "local", Usage: "connect the current directory to an existing install"}},
+			Action: flatSetupAction,
+		},
 		{Name: "rebuild", Usage: "drop and rebuild the entire index", Action: flatDelegate(cmdRebuild)},
 		{Name: "scan", Usage: "walk source directories, index new files", Action: flatDelegate(cmdScan)},
 		{Name: "refresh", Usage: "re-index stale files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdRefresh)},
@@ -220,7 +228,37 @@ func flatCommands() []*ucli.Command {
 			Action: flatStopAction,
 		},
 		{Name: "install", Usage: "connect this project to ark (alias for ui install)", Action: flatDelegate(cmdUIInstall)},
+		{
+			Name:  "update",
+			Usage: "refresh this install to the latest GitHub release",
+			Description: "Version-checked, two-phase, manifest-aware, safe on failure.\n" +
+				"   Gripes on a symlinked ~/.ark/ark. --no-exe refreshes skills,\n" +
+				"   agents, apps, and the model from the running binary's own bundle\n" +
+				"   without touching the exe.",
+			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "no-exe", Usage: "refresh assets from the running bundle without touching the exe"}},
+			Action: flatUpdateAction,
+		},
 	}
+}
+
+// CRC: crc-CLI.md | Seq: seq-install.md#1, seq-install.md#2 | R3466, R3467
+func flatSetupAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("local") {
+		a = append(a, "--local")
+	}
+	cmdSetup(a)
+	return nil
+}
+
+// CRC: crc-CLI.md | Seq: seq-install.md#3 | R3478
+func flatUpdateAction(_ context.Context, c *ucli.Command) error {
+	var a []string
+	if c.Bool("no-exe") {
+		a = append(a, "--no-exe")
+	}
+	cmdUpdate(a)
+	return nil
 }
 
 // Batch-2 actions: declare flags on the node (self-documenting help), then

@@ -545,7 +545,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /luhmann/attach", srv.handleLuhmannAttach)
 	mux.HandleFunc("GET /luhmann/pty-status", srv.handleLuhmannStatus)
 	mux.HandleFunc("POST /luhmann/stop", srv.handleLuhmannStop)
-	// Portable graceful shutdown (windows-support Part 2): respond then tear
+	// Portable graceful shutdown (windows-support Item 2): respond then tear
 	// down, so `ark stop` works without a signal on every platform. R3441.
 	mux.HandleFunc("POST /shutdown", srv.handleShutdown)
 	// External CLI directed hunt (bloodhound-CLI S3): submit + blocking result.
@@ -4507,7 +4507,7 @@ type contentRender struct {
 // range does not resolve), the strategy, the fileID, and the template shell.
 // CRC: crc-Server.md | R1423-R1428, R2415, R3165
 func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *contentRender {
-	// R3387 step 1.1: verify this file's link premises on the actor, ONCE for
+	// R3387: step 1.1, verify this file's link premises on the actor, ONCE for
 	// the whole render, and do it BEFORE the read view is bound below. Order is
 	// load-bearing rather than tidy: a premise that moved rewrites X records
 	// and the ExtMap maps, so an fts copy taken first would freeze the state

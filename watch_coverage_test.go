@@ -7,7 +7,7 @@ import (
 )
 
 // TestIsWatchableDirMatchesScannerDescent is the Sleeping-Sentry guard for
-// R2952 (F1): the live watcher descends exactly the directories the Scanner
+// R2952: (F1) the live watcher descends exactly the directories the Scanner
 // walks. The bug was watchDirRecursive unconditionally skipping every
 // dot-prefixed subdirectory, so with dotfiles=true an edit under .scratch/
 // never auto-indexed (watch coverage ⊊ scan coverage). This marches the worst

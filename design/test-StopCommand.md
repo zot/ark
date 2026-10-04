@@ -1,7 +1,7 @@
 # Test Design: StopCommand
 **Source:** crc-CLI.md, crc-Server.md
 
-Covers `ark stop`'s portable graceful-shutdown path (windows-support Part 2):
+Covers `ark stop`'s portable graceful-shutdown path (windows-support Item 2):
 socket-dial liveness/release, the POST-/shutdown-then-poll flow, and the
 platform-split timeout fallback.
 

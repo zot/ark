@@ -532,9 +532,9 @@
 - **R279:** `ark setup` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
 - **R280:** `ark setup` is idempotent — safe to run after every binary update, overwrites assets from the binary
 - **R281:** `ark setup` creates `~/.ark/` if it doesn't exist
-- **R323:** `ark setup` installs the ark skill to `~/.claude/skills/ark/SKILL.md` from bundled assets
-- **R324:** `ark setup` installs the ui skill to `~/.claude/skills/ui/SKILL.md` from bundled assets
-- **R325:** `ark setup` copies each agent found in `~/.ark/agents/*.md` (globbed, so it never drifts from the bundled agent set) to `~/.claude/agents/` from bundled assets
+- **~~R323:~~** (Retired T284 — see R3461) `ark setup` installs the ark skill to `~/.claude/skills/ark/SKILL.md` from bundled assets
+- **~~R324:~~** (Retired T285 — see R3461) `ark setup` installs the ui skill to `~/.claude/skills/ui/SKILL.md` from bundled assets
+- **~~R325:~~** (Retired T286 — see R3462) `ark setup` copies each agent found in `~/.ark/agents/*.md` (globbed, so it never drifts from the bundled agent set) to `~/.claude/agents/` from bundled assets
 - **R326:** `ark setup` reports what was installed/updated — no crank-handle output
 
 ### ark init — Setup Integration
@@ -544,7 +544,7 @@
 - **R330:** (inferred) `--if-needed` checks for `index.db` in the database directory
 
 ### ark ui install — Per-project Setup
-- **R331:** `ark ui install` is the single entry point for connecting a project to ark
+- **R331:** `ark ui install` is the single entry point for connecting a project to ark (provisional: `ark setup` is now the install path, and this retires with the verb; see carves/setup-and-update.md Item 4)
 - **R332:** `ark ui install` internally runs `ark init --if-needed` to ensure setup and database exist
 - **R333:** `ark ui install` creates symlinks in the project's `.claude/skills/` pointing to `~/.ark/skills/ark/` and `~/.ark/skills/ui/`
 - **R334:** Symlinks, not copies — `ark setup` keeps the originals current
@@ -5173,3 +5173,39 @@ reason.
 - **R3411:** `ark tag get` / `ark message get-tags` default output is a markdown bullet list (`- tag: value`, values verbatim); `--compact` emits the legacy `tag\tvalue` TSV. Applies to both the full-tag-block listing and the requested-tag form.
 - **R3412:** `ark tag check` / `ark message check` prints one line on success naming the file and stating its tag block is well-formed (to stdout); on failure it prints the problems (to stderr). Exit codes are unchanged: 0 on success, 1 on problems.
 - **R3413:** `ark message inbox --counts` default output is a markdown bullet list (`- status (N)`); `--compact` emits the legacy `status\tcount` TSV. Same flag, same meaning.
+
+## Feature: Setup and Update (install path, links not copies)
+**Source:** specs/main.md
+
+- **R3453:** A portable directory-link helper makes a directory link — a symbolic link on Unix, a directory junction on Windows — needing no privilege or Developer Mode; the junction is created through `golang.org/x/sys/windows` reparse points, not by shelling out to `mklink`.
+- **R3454:** The link helper's removal uses `os.Remove` on the link itself and refuses to delete a real (non-link) directory at the destination, since a non-link directory there is the user's data.
+- **R3455:** The link helper uses `os.Readlink` to recognize a link it already owns (same target), so re-linking is idempotent.
+- **R3456:** `ark setup` keys idempotency on a marker — the database file — not on `~/.ark/` existing; with the marker present the global install does nothing.
+- **R3457:** When the marker is absent, `ark setup` creates `~/.ark/` if it does not exist.
+- **R3458:** `ark setup` copies the running executable into `~/.ark/` (`ark.exe` on Windows); the copy is skipped when setup is already running from `~/.ark/`.
+- **R3459:** `ark setup` extracts the bundled assets (html/, lua/, viewdefs/, apps/, skills/, agents/) into `~/.ark/`.
+- **R3460:** `ark setup` creates the database through a DB-setup function shared with `ark rebuild`, so setup does not run `ark init` and the old init→setup recursion cannot return; creating the database is what leaves the marker.
+- **R3461:** `ark setup` makes one directory link per bundled skill directory into `~/.claude/skills/`, globbing `~/.ark/skills/*` with no hardcoded list, via the directory-link helper (R3453).
+- **R3462:** `ark setup` makes one directory link `~/.claude/agents/ark` → `~/.ark/agents`, carrying the whole bundled agent set, via the directory-link helper (R3453).
+- **R3463:** `ark setup` downloads the configured embedding model when the model file is absent, from the configured per-model URL, verifying the download against the configured pinned SHA-256; a present file or a link is left alone.
+- **R3464:** `ark setup` prints that newly installed agents appear in the *next* Claude session, since agent definitions are read at session start.
+- **R3465:** `ark setup` copies no skills or agents anywhere; the directory links are the whole mechanism.
+- **R3466:** `ark setup --local` requires an existing install and refuses to run when the marker is absent.
+- **R3467:** `ark setup --local` makes the directory links — one per bundled skill plus `agents/ark` — into the current directory's `.claude/`, via the directory-link helper (R3453).
+- **R3468:** `ark setup --local` prints the crank-handle CLAUDE.md hint (`load /ark first`); the binary never edits CLAUDE.md, and the hint is written so any model tier can follow it.
+- **R3469:** `ark setup` removes a flat `~/.claude/agents/<name>.md` only when it is a regular file byte-identical to the bundled agent of that name.
+- **R3470:** `ark setup` reports and leaves in place a flat `~/.claude/agents/<name>.md` that differs from the bundled agent, or a hand-made link, since either may be the user's own.
+- **R3471:** `ark update` compares the build-time `ark.Version` against the latest GitHub release tag, does nothing when already current, and never downgrades.
+- **R3472:** `ark update` is two-phase: the running (old) binary downloads the new release binary for the current platform, verifies it against the release's published checksum, and swaps it into `~/.ark/`; the new binary then refreshes the remaining assets from its own bundle.
+- **R3473:** On Windows, `ark update`'s swap renames the running `~/.ark/ark.exe` aside, writes the new binary at the original name, and deletes the aside copy on a later run, since a running exe cannot delete its own aside copy.
+- **R3474:** `ark update` refreshes assets through the install manifest so it never clobbers a user-edited file and never replaces a link with a copy.
+- **R3475:** `ark update` downloads the configured embedding model when the model file is absent, the same way `ark setup` does (R3463).
+- **R3476:** A failed download, checksum, or swap during `ark update` leaves the old binary and `~/.ark/` intact.
+- **R3477:** When `~/.ark/ark` is a symbolic link (a developer install), plain `ark update` gripes — telling the user to use `--no-exe` — and refreshes nothing.
+- **R3478:** `ark update --no-exe` refreshes every asset (skills, agents, apps, and the model if missing) from the running binary's own bundle, downloading nothing for the executable and assuming the running exe is already current; the refresh is manifest-aware and never replaces a link with a copy, and on a symlinked `~/.ark/ark` it proceeds normally.
+- **R3479:** Installed-file hashes and a per-file collision policy live in `~/.ark/install-manifest.json` (not `ark.toml`), reusing the `{hash, onCollision, group}` entry shape.
+- **R3480:** The per-model download URL and pinned SHA-256 come from `[embedding]` config keys (`model_url`, `model_sha256`), so model download stays model-neutral and fetches whatever model the config names.
+- **R3481:** `ark setup` (when it performs the global install) and `ark update` stop a running ark server first, through the graceful `ark stop` path, and neither starts one afterward; on Windows a live server holds `~/.ark/lib` and loaded apps that cannot be overwritten. When the graceful stop does not complete within the grace period, setup and update **abort** with a message telling the user to run `ark stop -f` and retry, rather than continuing to overwrite files a live server holds.
+- **R3482:** The bundled reference `install/ark.toml` carries `model_url` and `model_sha256` for its default model (nomic-embed-text-v1.5 Q8_0).
+- **R3483:** (inferred) When the configured model file is absent and `model_url`/`model_sha256` are unset, setup and update report the missing model and how to add the keys instead of downloading.
+- **R3484:** `ark setup`'s global install seeds `~/.ark/install-manifest.json` with the hash of every extracted refreshable asset (same `{hash, onCollision, group}` entry as `ark update` writes), so the first `ark update` can tell a real user edit from an unchanged bundle copy instead of preserving everything. A refresh also records an already-current, un-manifested file (bytes equal to the bundle) without rewriting it, so an install that predates the manifest is seeded by one `ark update --no-exe`.

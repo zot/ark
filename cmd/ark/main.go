@@ -502,56 +502,192 @@ func requireServer(op string) *http.Client {
 
 // Command implementations
 
-// CRC: crc-CLI.md | Seq: seq-install.md | R278, R279, R323, R325
+// setupUsage / updateUsage document the two install verbs; --local's line says
+// it reads the current directory (seq-install.md#2).
+const setupUsage = `Usage: ark setup [--local]
+
+ark setup            global install: create ~/.ark, copy the binary in,
+                     extract the bundle, create the database, and link ark's
+                     skills and agents into ~/.claude/. Idempotent on the
+                     database marker.
+ark setup --local    connect the CURRENT DIRECTORY to an existing install:
+                     link ark's skills and agents into ./.claude/ and print
+                     the CLAUDE.md hint. Requires a prior ` + "`ark setup`" + `.`
+
+const updateUsage = `Usage: ark update [--no-exe]
+
+ark update           refresh this install to the latest GitHub release:
+                     version-checked, two-phase, manifest-aware, and safe on
+                     failure. Gripes on a symlinked ~/.ark/ark.
+ark update --no-exe  refresh skills, agents, apps, and the model from the
+                     running binary's own bundle, without touching the exe.`
+
+// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3456, R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481
 func cmdSetup(args []string) {
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(os.Stderr, "Usage: ark setup\n\nBootstrap ~/.ark/: extract bundled assets, install global skills\nand agent, run linkapp. Idempotent.")
-		os.Exit(0)
+	local := false
+	for _, a := range args {
+		switch a {
+		case "--help", "-h":
+			fmt.Fprintln(os.Stderr, setupUsage)
+			os.Exit(0)
+		case "--local":
+			local = true
+		}
 	}
-	if err := runSetup(); err != nil {
+	if local {
+		if err := cmdSetupLocal(); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	if err := runGlobalSetup(arkDir); err != nil {
 		fatal(err)
 	}
 }
 
-// runSetup is the idempotent global bootstrap. Extracts bundled assets to
-// ~/.ark/, installs global skills and agent, runs linkapp.
-func runSetup() error {
+// markerPresent reports whether ~/.ark holds the database marker. "Installed"
+// means the index exists, which is exactly what the marker records. R3456
+func markerPresent(arkDir string) bool {
+	_, err := os.Stat(filepath.Join(arkDir, ark.IndexFileName))
+	return err == nil
+}
+
+// userClaudeDir returns ~/.claude.
+func userClaudeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude"), nil
+}
+
+// runGlobalSetup is the global install, idempotent on the marker (the database
+// file), not on ~/.ark existing. With the marker present it does nothing.
+// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3456, R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481
+func runGlobalSetup(arkDir string) error {
+	// R3456: marker present → the global install is a no-op.
+	if markerPresent(arkDir) {
+		fmt.Fprintln(os.Stderr, "ark already installed (index present); nothing to do")
+		return nil
+	}
+	// R3481: stop a running server before mutating ~/.ark; never start one.
+	// Abort (do not continue) if it will not stop — a live server holds files
+	// the install must overwrite.
+	if err := stopServerForInstall(arkDir); err != nil {
+		return err
+	}
+
+	// R3457: create ~/.ark if absent.
+	if err := os.MkdirAll(arkDir, 0755); err != nil {
+		return fmt.Errorf("create %s: %w", arkDir, err)
+	}
+	// R3458: copy the running executable in (skip if already running from ~/.ark).
+	if err := copyRunningExe(arkDir); err != nil {
+		return fmt.Errorf("copy executable: %w", err)
+	}
+	// R3459: extract the bundle.
+	if err := extractBundleAssets(arkDir); err != nil {
+		return err
+	}
+	// R3484: seed the install manifest with each extracted asset's hash, so the
+	// first `ark update` can tell a real user edit from an unchanged bundle copy.
+	if err := SeedManifest(arkDir, bundleAssetSource{}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not seed install manifest: %v\n", err)
+	}
+	// R3460: create the database (leaves the marker), via the shared function.
+	if err := setupDatabase(ark.InitOpts{CaseInsensitive: true}); err != nil {
+		return fmt.Errorf("create database: %w", err)
+	}
+	// R3461, R3462: directory links into ~/.claude; R3465: no copies.
+	claudeDir, err := userClaudeDir()
+	if err != nil {
+		return err
+	}
+	if err := installLinks(claudeDir); err != nil {
+		return err
+	}
+	// R3469, R3470: retire byte-identical flat agent copies; leave the rest.
+	retireOldAgentCopies(claudeDir)
+	// R2969: provision the llama.cpp libs (best-effort).
+	provisionLlamaLibs(arkDir)
+	// R3463, R3483: download the configured model if missing.
+	provisionModelForInstall(arkDir)
+	// R3464: agent definitions load at session start.
+	fmt.Println("ark installed in", arkDir)
+	fmt.Println("Newly installed agents appear in your NEXT Claude session (agent definitions load at session start).")
+	return nil
+}
+
+// cmdSetupLocal is the --local arm: connect a project to an existing install.
+// It refuses without the marker (it connects a project, does not create one),
+// links into cwd/.claude, and prints the crank-handle CLAUDE.md hint. It never
+// edits CLAUDE.md. First setup path that reads the cwd (seq-install.md#2).
+// CRC: crc-CLI.md | Seq: seq-install.md#2 | R3466, R3467, R3468
+func cmdSetupLocal() error {
+	// R3466: refuse without the marker.
+	if !markerPresent(arkDir) {
+		return fmt.Errorf("no ark install found — run `ark setup` first; --local connects a project to an existing install")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	claudeDir := filepath.Join(cwd, ".claude")
+	// R3467: the directory links into the current directory's .claude/.
+	if err := installLinks(claudeDir); err != nil {
+		return err
+	}
+	retireOldAgentCopies(claudeDir)
+	// R3468: print the hint; never edit CLAUDE.md.
+	fmt.Println("Linked ark skills and agents into", claudeDir)
+	fmt.Println("Add this line near the top of this project's CLAUDE.md so sessions load ark:")
+	fmt.Println("    load /ark first")
+	return nil
+}
+
+// copyRunningExe copies the running executable into ~/.ark (ark.exe on Windows).
+// Skipped when setup is already running from ~/.ark.
+// CRC: crc-CLI.md | Seq: seq-install.md#1.3 | R3458
+func copyRunningExe(arkDir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(arkDir, arkExeName())
+	// Skip when already running from ~/.ark (compare resolved paths).
+	exeResolved, _ := filepath.EvalSymlinks(exe)
+	destResolved, _ := filepath.EvalSymlinks(dest)
+	if exe == dest || (exeResolved != "" && exeResolved == destResolved) {
+		return nil
+	}
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0755)
+}
+
+// extractBundleAssets extracts the grafted bundle (html/, lua/, viewdefs/,
+// apps/, skills/, agents/) into ~/.ark and links the ark app's viewdefs/lua.
+// CRC: crc-CLI.md | Seq: seq-install.md#1.4 | R3459
+func extractBundleAssets(arkDir string) error {
 	bundled, err := cli.IsBundled()
 	if err != nil || !bundled {
 		return fmt.Errorf("binary is not bundled — cannot extract assets")
 	}
-
-	// Create ~/.ark/ if needed
-	if err := os.MkdirAll(arkDir, 0755); err != nil {
-		return fmt.Errorf("create %s: %w", arkDir, err)
-	}
-
-	// Extract bundled assets (html/, lua/, viewdefs/, apps/, skills/, agents/)
 	if err := cli.BundleExtractBundle(arkDir); err != nil {
 		return fmt.Errorf("extract bundle: %w", err)
 	}
 	fmt.Println("Extracted bundled assets to", arkDir)
-
-	// Run linkapp for the ark app
-	appsDir := filepath.Join(arkDir, "apps", "ark")
-	if _, err := os.Stat(appsDir); err == nil {
+	if _, err := os.Stat(filepath.Join(arkDir, "apps", "ark")); err == nil {
 		runLinkapp(arkDir, "ark")
 	}
+	return nil
+}
 
-	// Install global skills and agent to ~/.claude/
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("home dir: %w", err)
-	}
-	claudeDir := filepath.Join(home, ".claude")
-	installed := installBundledSkillsAndAgent(arkDir, claudeDir)
-	for _, item := range installed {
-		fmt.Println("Installed:", item)
-	}
-
-	// R2969: provision the llama.cpp libs if a model is configured and the
-	// libs are absent. Best-effort — a download failure leaves the rest of
-	// setup intact; `ark embed install` retries.
+// provisionLlamaLibs provisions the llama.cpp shared libs when a model is
+// configured. Best-effort — a failure leaves the rest of setup intact. R2969
+func provisionLlamaLibs(arkDir string) {
 	if cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml")); err == nil && cfg.Embedding.Model != "" {
 		libs := ark.NewLlamaLibs(cfg.Embedding, arkDir)
 		if err := libs.Provision(false); err != nil {
@@ -560,51 +696,146 @@ func runSetup() error {
 			fmt.Println("llama.cpp libraries ready in", libs.LibDir())
 		}
 	}
+}
 
+// provisionModelForInstall downloads the configured embedding model when it is
+// absent. A missing-keys condition is reported (not fatal); search falls back
+// to trigram-only. Shared reporting for setup and update. R3463, R3483
+func provisionModelForInstall(arkDir string) {
+	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+	if err != nil {
+		return
+	}
+	if err := ark.ProvisionModel(cfg.Embedding, arkDir); err != nil {
+		var keys *ark.ErrModelKeysMissing
+		if errors.As(err, &keys) {
+			fmt.Fprintln(os.Stderr, err.Error())
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: model download failed: %v\n", err)
+		}
+		return
+	}
+	if cfg.Embedding.Model != "" {
+		fmt.Println("embedding model ready:", cfg.Embedding.Model)
+	}
+}
+
+// installLinks makes one directory link per bundled skill directory into
+// claudeDir/skills/ (globbed, no hardcoded list) and one link
+// claudeDir/agents/ark → ~/.ark/agents, via ark.MakeDirLink. Shared by
+// runGlobalSetup (~/.claude) and cmdSetupLocal (cwd/.claude).
+// CRC: crc-CLI.md | Seq: seq-install.md#1.6 | R3461, R3462, R3465
+func installLinks(claudeDir string) error {
+	// R3461: one link per bundled skill directory.
+	skillDirs, _ := filepath.Glob(filepath.Join(arkDir, "skills", "*"))
+	for _, sd := range skillDirs {
+		if fi, err := os.Stat(sd); err != nil || !fi.IsDir() {
+			continue
+		}
+		link := filepath.Join(claudeDir, "skills", filepath.Base(sd))
+		if err := ark.MakeDirLink(link, sd); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: link skill %s: %v\n", filepath.Base(sd), err)
+		}
+	}
+	// R3462: one link carrying the whole bundled agent set.
+	agentsSrc := filepath.Join(arkDir, "agents")
+	if fi, err := os.Stat(agentsSrc); err == nil && fi.IsDir() {
+		link := filepath.Join(claudeDir, "agents", "ark")
+		if err := ark.MakeDirLink(link, agentsSrc); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: link agents: %v\n", err)
+		}
+	}
 	return nil
 }
 
-// installBundledSkillsAndAgent copies skills and agents from ~/.ark/ to ~/.claude/.
-func installBundledSkillsAndAgent(arkDir, claudeDir string) []string {
-	var installed []string
-
-	// Skills: ~/.ark/skills/ark/ → ~/.claude/skills/ark/
-	//         ~/.ark/skills/ui/  → ~/.claude/skills/ui/
-	for _, skill := range []string{"ark", "ui"} {
-		src := filepath.Join(arkDir, "skills", skill, "SKILL.md")
-		if _, err := os.Stat(src); err != nil {
+// retireOldAgentCopies removes a flat claudeDir/agents/<name>.md only when it is
+// a regular file byte-identical to the bundled agent of that name (R3469). A
+// differing file or a hand-made link is reported and left, since either may be
+// the user's own (R3470).
+// CRC: crc-CLI.md | Seq: seq-install.md#1.7 | R3469, R3470
+func retireOldAgentCopies(claudeDir string) {
+	bundledAgents, _ := filepath.Glob(filepath.Join(arkDir, "agents", "*.md"))
+	for _, ba := range bundledAgents {
+		flat := filepath.Join(claudeDir, "agents", filepath.Base(ba))
+		fi, err := os.Lstat(flat)
+		if err != nil {
 			continue
 		}
-		dstDir := filepath.Join(claudeDir, "skills", skill)
-		os.MkdirAll(dstDir, 0755)
-		dst := filepath.Join(dstDir, "SKILL.md")
-		if data, err := os.ReadFile(src); err == nil {
-			if err := os.WriteFile(dst, data, 0644); err == nil {
-				installed = append(installed, dst)
+		// R3470: a hand-made link (symlink or Windows junction) may be the user's.
+		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			fmt.Fprintf(os.Stderr, "left in place (a link, may be yours): %s\n", flat)
+			continue
+		}
+		if !fi.Mode().IsRegular() {
+			continue
+		}
+		bundledBytes, err1 := os.ReadFile(ba)
+		flatBytes, err2 := os.ReadFile(flat)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		// R3469: remove only a byte-identical copy.
+		if bytes.Equal(bundledBytes, flatBytes) {
+			if err := os.Remove(flat); err == nil {
+				fmt.Fprintf(os.Stderr, "retired old agent copy: %s\n", flat)
 			}
+		} else {
+			// R3470: a differing file may be the user's edit.
+			fmt.Fprintf(os.Stderr, "left in place (differs from bundled, may be your edit): %s\n", flat)
 		}
 	}
+}
 
-	// R325: Agents: copy every ~/.ark/agents/*.md → ~/.claude/agents/.
-	// Globbed (not a hardcoded ark.md) so install never drifts from what
-	// the build bundles — the ark agent was split into ark-franklin.md /
-	// ark-messenger.md / ark-searcher.md and ark.md no longer exists.
-	// ~/.ark/agents/ holds only ark's own agents, so globbing is safe.
-	agentMatches, _ := filepath.Glob(filepath.Join(arkDir, "agents", "*.md"))
-	if len(agentMatches) > 0 {
-		agentDstDir := filepath.Join(claudeDir, "agents")
-		os.MkdirAll(agentDstDir, 0755)
-		for _, agentSrc := range agentMatches {
-			agentDst := filepath.Join(agentDstDir, filepath.Base(agentSrc))
-			if data, err := os.ReadFile(agentSrc); err == nil {
-				if err := os.WriteFile(agentDst, data, 0644); err == nil {
-					installed = append(installed, agentDst)
-				}
-			}
+// stopServerForInstall gracefully stops a running ark server before setup or
+// update mutate ~/.ark, reusing the graceful `ark stop` path (POST /shutdown,
+// then poll the socket for release). It never starts a server. On Windows a
+// live server holds ~/.ark/lib and loaded apps that cannot be overwritten, so a
+// stop that does not complete is fatal to the install: it returns an error and
+// the caller aborts rather than overwriting files mid-refresh.
+// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3481
+func stopServerForInstall(arkDir string) error {
+	client := serverClient(arkDir)
+	if client == nil {
+		return nil // no server running
+	}
+	fmt.Fprintln(os.Stderr, "stopping running ark server before install/update…")
+	_, _ = proxyRaw(client, "POST", "/shutdown", nil)
+	socketPath := filepath.Join(arkDir, "ark.sock")
+	if !socketReleasedWithin(socketPath, stopGraceTimeout) {
+		return fmt.Errorf("ark server did not stop within the grace period; run `ark stop -f` and retry " +
+			"(setup/update must overwrite files a live server holds)")
+	}
+	return nil
+}
+
+// cmdUpdate refreshes an install. Parses --no-exe. Stops a running server first
+// (R3481). Dispatches to Updater.Update.
+// CRC: crc-CLI.md | Seq: seq-install.md#3 | R3471, R3472, R3477, R3478, R3481
+func cmdUpdate(args []string) {
+	noExe := false
+	for _, a := range args {
+		switch a {
+		case "--help", "-h":
+			fmt.Fprintln(os.Stderr, updateUsage)
+			os.Exit(0)
+		case "--no-exe":
+			noExe = true
 		}
 	}
-
-	return installed
+	// R3481: stop a running server first; never start one. Abort on a stop
+	// that does not complete rather than refreshing around a live server.
+	if err := stopServerForInstall(arkDir); err != nil {
+		fatal(err)
+	}
+	u := &Updater{
+		ArkDir:  arkDir,
+		Version: ark.Version,
+		Fetcher: &githubReleaseFetcher{},
+		Assets:  bundleAssetSource{},
+	}
+	if err := u.Update(noExe); err != nil {
+		fatal(err)
+	}
 }
 
 // runLinkapp creates lua/ and viewdefs/ symlinks for an app.
@@ -667,38 +898,53 @@ func cmdInit(args []string) {
 		}
 	}
 
-	// Remove existing database file before creating fresh
-	os.Remove(filepath.Join(arkDir, ark.IndexFileName))
-
-	// Auto-setup if not bootstrapped (unless --no-setup)
+	// Auto-setup if not bootstrapped (unless --no-setup): extract the bundle
+	// and link ark's skills/agents. The database itself is created below via
+	// setupDatabase, so this never recurses back into setup. R3460
 	if !*noSetup && !isBootstrapped() {
-		if err := runSetup(); err != nil {
+		if err := extractBundleAssets(arkDir); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: setup failed: %v\n", err)
+		} else if claudeDir, err := userClaudeDir(); err == nil {
+			installLinks(claudeDir)
+			retireOldAgentCopies(claudeDir)
+			provisionLlamaLibs(arkDir)
 		}
-	}
-
-	aliases := parseAliases(*aliasStr)
-
-	// Try reading seed files from bundle
-	var tagsSeed []byte
-	if data, err := cli.BundleReadFile("install/tags.md"); err == nil {
-		tagsSeed = data
-	}
-	var configSeed []byte
-	if data, err := cli.BundleReadFile("install/ark.toml"); err == nil {
-		configSeed = data
 	}
 
 	opts := ark.InitOpts{
 		EmbedCmd:        *embedCmd,
 		QueryCmd:        *queryCmd,
 		CaseInsensitive: *caseInsensitive,
-		Aliases:         aliases,
-		TagsSeed:        tagsSeed,
-		ConfigSeed:      configSeed,
+		Aliases:         parseAliases(*aliasStr),
+	}
+	if err := setupDatabase(opts); err != nil {
+		fatal(err)
+	}
+
+	fmt.Printf("initialized ark database at %s\n", arkDir)
+}
+
+// setupDatabase is the database-creation step split out of cmdInit so cmdSetup
+// and cmdRebuild both reach it (via cmdInit for rebuild), ending the
+// init→setup recursion. Creating the database is what leaves the marker. It
+// fills TagsSeed/ConfigSeed from the bundle when the caller left them unset.
+// CRC: crc-CLI.md | Seq: seq-install.md#1.5 | R3460
+func setupDatabase(opts ark.InitOpts) error {
+	// Remove any existing database file before creating fresh.
+	os.Remove(filepath.Join(arkDir, ark.IndexFileName))
+
+	if opts.TagsSeed == nil {
+		if data, err := cli.BundleReadFile("install/tags.md"); err == nil {
+			opts.TagsSeed = data
+		}
+	}
+	if opts.ConfigSeed == nil {
+		if data, err := cli.BundleReadFile("install/ark.toml"); err == nil {
+			opts.ConfigSeed = data
+		}
 	}
 	if err := ark.Init(arkDir, opts); err != nil {
-		fatal(err)
+		return err
 	}
 
 	// R1252: Create ~/.ark/searching/ with default CLAUDE.md
@@ -708,8 +954,7 @@ func cmdInit(args []string) {
 		os.MkdirAll(searchDir, 0755)
 		os.WriteFile(claudeFile, []byte(defaultSearchPrompt), 0644)
 	}
-
-	fmt.Printf("initialized ark database at %s\n", arkDir)
+	return nil
 }
 
 // CRC: crc-CLI.md
@@ -2873,7 +3118,7 @@ func cmdFiles(args []string) {
 				fatal(err)
 			}
 			matched := filterPaths(matchBaseSet(files, ff, ef), patterns)
-			// R3378 is match-then-expand, and only the *space* came back
+			// R3378: is match-then-expand, and only the *space* came back
 			// expanded — so a pattern naming one address would match one and
 			// never expand it, which reads exactly like the default view. The
 			// post-match expansion needs the link table, which this door does
@@ -3772,7 +4017,7 @@ func cmdChunksStatus(patterns []string) {
 }
 
 // CRC: crc-CLI.md, crc-Server.md | R172, R173, R174, R176
-// Stop-command timing (windows-support Part 2). Liveness and release are a
+// Stop-command timing (windows-support Item 2). Liveness and release are a
 // socket dial, never a signal or `ark status`, so the poll cadence and the two
 // bounds are named here rather than sprinkled as literals.
 const (
@@ -3858,7 +4103,7 @@ func readStopPid() int {
 // socketReleasedWithin polls by dialing the unix socket until a dial is refused
 // — the server is down and has released the socket — or the timeout elapses. A
 // successful dial means the server is still up. This is the portable liveness
-// check Part 5 proved on Windows; it replaces the proc.Signal(0) probe. R3443.
+// check windows-support Item 5 proved on Windows; it replaces the proc.Signal(0) probe. R3443.
 func socketReleasedWithin(socketPath string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {

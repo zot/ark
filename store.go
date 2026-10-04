@@ -238,7 +238,7 @@ const (
 	// `ark connections recall --propose`; the Tag Forge writes RJ via
 	// Store.RejectDerived. R2664–R2666
 	prefixDerivedCandidate = "RC" // R3058 — RC + source_tvid varint + target_chunkid varint → varint tally
-	prefixDerivedRejection = "RJ" // R3059, R2874 (Recall Judgment) — RJ + source_tvid varint + target_chunkid varint → signed-varint(score) + 8-byte BE unix nanos
+	prefixDerivedRejection = "RJ" // R3059, R2874: Recall Judgment — RJ + source_tvid varint + target_chunkid varint → signed-varint(score) + 8-byte BE unix nanos
 	prefixDerivedFreshness = "RF" // R2666 — RF + chunkid varint → varint serial
 	// prefixSurfaceCooldown is the per-(session, chunk) surface-cooldown
 	// sibling of RD — keyed by chunk instead of tag-value. R2882

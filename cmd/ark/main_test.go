@@ -350,7 +350,7 @@ func TestComposeDM_SessionSingleRecipient(t *testing.T) {
 	if path != "tmp://sess-A/dm-sess-B" {
 		t.Errorf("path = %q", path)
 	}
-	// R2716 single-recipient @dm shape; R2723 @from for session sender.
+	// R2716: single-recipient @dm shape; R2723 @from for session sender.
 	wantLines := []string{
 		"",
 		"@dm: sess-B",
@@ -372,11 +372,11 @@ func TestComposeDM_ServiceWithSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeDM: %v", err)
 	}
-	// R2724 service identity drives the tmp:// sender segment.
+	// R2724: service identity drives the tmp:// sender segment.
 	if path != "tmp://ARK-RECALL/dm-sess-B" {
 		t.Errorf("path = %q", path)
 	}
-	// R2716 subject form; R2723 @from-service in place of @from.
+	// R2716: subject form; R2723 @from-service in place of @from.
 	if !strings.Contains(payload, "@dm: sess-B: recall\n") {
 		t.Errorf("missing subject form in payload:\n%s", payload)
 	}
@@ -396,11 +396,11 @@ func TestComposeDM_MultiRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeDM: %v", err)
 	}
-	// R2725 recipients joined by single space.
+	// R2725: recipients joined by single space.
 	if !strings.Contains(payload, "@dm: sess-B sess-C sess-D: standup-ping\n") {
 		t.Errorf("multi-recipient @dm shape wrong:\n%s", payload)
 	}
-	// R2724 path uses the first recipient.
+	// R2724: path uses the first recipient.
 	if path != "tmp://sess-A/dm-sess-B" {
 		t.Errorf("path = %q (expected first recipient)", path)
 	}
@@ -419,7 +419,7 @@ func TestComposeDM_RefAppended(t *testing.T) {
 	}
 }
 
-// R2722 mutex.
+// R2722: mutex.
 func TestComposeDM_RejectsBothSenderForms(t *testing.T) {
 	_, _, err := ark.ComposeDM(
 		ark.DMSender{Session: "sess-A", Service: "ARK-RECALL"},
@@ -433,7 +433,7 @@ func TestComposeDM_RejectsBothSenderForms(t *testing.T) {
 	}
 }
 
-// R2722 required.
+// R2722: required.
 func TestComposeDM_RejectsNoSender(t *testing.T) {
 	_, _, err := ark.ComposeDM(
 		ark.DMSender{},
@@ -454,7 +454,7 @@ func TestComposeDM_RejectsEmptyRecipients(t *testing.T) {
 	}
 }
 
-// R2718 single-token recipients.
+// R2718: single-token recipients.
 func TestComposeDM_RejectsWhitespaceRecipient(t *testing.T) {
 	_, _, err := ark.ComposeDM(
 		ark.DMSender{Session: "sess-A"},
@@ -465,7 +465,7 @@ func TestComposeDM_RejectsWhitespaceRecipient(t *testing.T) {
 	}
 }
 
-// R2719 reject trailing-colon "subject" (empty after the colon).
+// R2719: reject trailing-colon "subject" (empty after the colon).
 func TestComposeDM_RejectsEmptySubject(t *testing.T) {
 	_, _, err := ark.ComposeDM(
 		ark.DMSender{Session: "sess-A"},

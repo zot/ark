@@ -558,6 +558,15 @@ type EmbeddingConfig struct {
 	// LlamaVersion pins the llama.cpp release build to provision, within
 	// yzma's tested range, keeping release builds reproducible. R2968
 	LlamaVersion string `toml:"llama_version,omitempty"`
+
+	// ModelURL is the download URL for Model, so setup/update can fetch
+	// the GGUF when it is absent. Model-neutral: whatever model the config
+	// names is fetched from here. R3480
+	ModelURL string `toml:"model_url,omitempty"`
+
+	// ModelSHA256 is the pinned SHA-256 of Model, verified after download.
+	// R3480
+	ModelSHA256 string `toml:"model_sha256,omitempty"`
 }
 
 // ResolveLibDir returns the configured lib_dir or the default <dbPath>/lib,

@@ -485,7 +485,7 @@ func (w *RecallWatcher) rawDestination(id string, req *cliRequest, findings stri
 		return bloodhoundCLIResultPath(id), "@" + bloodhoundCLIResultTag + ": " + id + "\n\n" + findings
 	}
 	if w.db.pubsub != nil && w.db.pubsub.SubscriberCount("ark-bloodhound-result", req.origin) == 0 {
-		// R2808 parity: the consumer dropped mid-hunt, so there is nothing to wake.
+		// R2808: parity; the consumer dropped mid-hunt, so there is nothing to wake.
 		Logv(1, "bloodhound: watermark relay: no subscriber for session=%s", req.origin)
 		return "", ""
 	}

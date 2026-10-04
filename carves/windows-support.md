@@ -31,9 +31,9 @@ on Linux, Luhmann and its managed pty included, with nothing Unix-only by
 design. That rules out the tempting escape hatch of narrowing a feature to Unix
 and no-opping it on Windows; a no-op is a compile stopgap, never a finished
 part. It is also why the server-side parts are in scope at all rather than being
-someone else's Linux problem: the unix-socket *listener* (Part 5), the file
-watcher (Part 8), embedding provisioning (Part 6), and the server's own shutdown
-(Part 2) all have to run on Windows, because on a Windows install the server is
+someone else's Linux problem: the unix-socket *listener* (Item 5), the file
+watcher (Item 8), embedding provisioning (Item 6), and the server's own shutdown
+(Item 2) all have to run on Windows, because on a Windows install the server is
 on Windows.
 
 A corollary worth stating plainly: parity flattens priority. Every part must
@@ -41,14 +41,14 @@ ship for "ark runs on Windows" to be true, so none is optional or low-priority
 as a goal. The only ranking this carve admits is implementation *order*, a
 question of what comes first because something else depends on it, not of
 whether a part gets done. Dependency sets that order more than taste does: the
-socket transport (Part 5) is the gate, since nothing else can even be exercised
+socket transport (Item 5) is the gate, since nothing else can even be exercised
 until it is verified. Read the per-part state markers (OPEN, NOT VERIFIED,
 UNKNOWN) as "where the work stands," never as "whether the work happens."
 
 The cross-OS alternative (a Windows CLI dialing a Linux-hosted server) is set
 aside because no user runs that way. It also cannot use the transport ark has:
 `~/.ark/ark.sock` is an AF_UNIX path local to one machine, so reaching a Linux
-server from Windows would mean TCP and a reworked trust model (Part 5).
+server from Windows would mean TCP and a reworked trust model (Item 5).
 
 The remote-access need that alternative seems to serve is already met, on both
 platforms, by SSH: log in to the box ark runs on and use it there. The CLI and
@@ -56,8 +56,8 @@ server stay co-located, the socket stays local, and SSH owns the network hop and
 its own mature trust model, and forwards the terminal (including window-size
 changes, so resize never arises on that path). This is a reason ark should not
 grow a cross-machine transport, not a reason to relax the native parity work: an
-all-Windows user has no SSH hop and still needs the local socket (Part 5), the
-ConPTY host (Part 4), and Windows resize (Part 1). The one soft spot is
+all-Windows user has no SSH hop and still needs the local socket (Item 5), the
+ConPTY host (Item 4), and Windows resize (Item 1). The one soft spot is
 direction: SSH out of Windows uses the solid built-in client, while SSH into
 Windows (hosting a remotely-reached ark on a Windows box) leans on OpenSSH
 server, a less-trodden path there.
@@ -70,83 +70,99 @@ is keyed by bare number in the sections below, which stay in numeric order. The
 checkbox is authoritative where the three markings disagree. Verification-only
 and unknown items carry the negative marker rather than a false green.
 
-- [x] **Part 5 — the AF_UNIX transport under Windows.** **VERIFIED WORKING,
-      2026-09-20** (dockur Windows VM, `ark.exe` from 09-19). `ark.exe serve`
-      bound `ark.sock`, a second `ui.sock`, and HTTP `:57801`; clients dialed and
-      round-tripped (`luhmann status` → "asleep", `status` → "server: running");
-      and it re-bound cleanly over the stale `ark.sock` left on disk. `sun_path`
-      was 26 bytes, far under the ceiling. The gate is open — the sequence below
-      is unblocked.
-- [x] **Test part 5 on Windows** — 2026-09-20 serve run: listen + dial
-      round-trip verified on the dockur VM.
-- [x] **Part 2 — `ark stop` speaks only Unix signals.** **Was the do-second item: the
-      testing-rate multiplier.** A live server, `ps` shows it, stop reports "not
-      running." The fallback is a manual kill, and kill-then-restart is how the
-      old binary ends up still serving while you believe you restarted, so a
-      broken stop makes every Windows test result untrustworthy, not merely slow.
-      **CONFIRMED on Windows 2026-09-20**: `ark stop` printed `process 3792 not
-      running: not supported by windows` while `tasklist` showed PID 3792 alive;
-      `taskkill /F` was needed. **DESIGN DECIDED 2026-09-22 (A):** graceful
-      `POST /shutdown` on every platform, socket-dial liveness, timeout then
-      Linux-kills / Windows-errors. **IMPLEMENTED 2026-09-22 (R3440–R3445)**,
-      compiles Linux + Windows and stop tests pass; validate failures are
-      pre-existing debt, not Part 2. Committed 8bfea51 (2026-09-22).
-- [x] **Test part 2 on Windows** — 2026-09-22 live on the dockur VM: `ark stop`
-      cleanly stopped a running server (reported "ark server stopped (pid 5220)",
-      process gone, server logged `received POST /shutdown, shutting down`), where
-      the 09-19 binary said "not running." Surfaced a pre-existing shutdown-race
-      (process exits 1 on the closed-listener error, racing gracefulShutdown's
-      exit 0; safe under bbolt). **Fixed by R3446** (atomic shutdown latch, committed 1e4643c); re-verified live
-      2026-09-22: graceful stop now exits 0 with no `error: accept` line.
-- [x] **Part 4 — the managed-pty path assumes a Unix terminal.** **VERIFIED on
-      Windows 2026-09-23. Was the gate before Part 1's test.** Required under parity: Luhmann must host on Windows (ConPTY
-      child, `ResizePseudoConsole`, `TerminateProcess`, VT-mode attach). Proving
-      Part 1 end to end needs a Windows-hosted session to attach to, so this
-      precedes it. **DESIGN DECIDED 2026-09-23 (Bill, after a live Windows spike):
-      (b) — creack/pty on Unix + UserExistsError/conpty on Windows, behind a
-      `ptyMaster`/`ptyChild` seam** (a type substitution for the `*os.File`
-      master, not a three-syscall swap). The spike ruled out both unified
-      libraries: go-pty drags in x/crypto+u-root, and phuslu/pty mis-binds its
-      ConPTY child on Windows 26200. **IMPLEMENTED 2026-09-23 (R3447–R3450):**
-      `pty_backend.go` (the seam), `pty_backend_unix.go` (creack),
-      `pty_backend_windows.go` (conpty), and the `ptyhost.go` rework; compiles
-      Linux + Windows, the 31 Unix PtyHost tests pass, and the Windows path is
-      **VERIFIED live 2026-09-23** (dockur VM, build 26200): ConPTY spawn, hosted
-      session, `stop` then TerminateProcess, and self-exit then finalize all
-      confirmed. See Part 4.
-- [x] **Test part 4 on Windows** — 2026-09-23 live on the dockur VM (build
-      26200). A `[luhmann] command` stand-in launched a ConPTY session (`status`
-      reported awake, the master installed); `luhmann stop` terminated it
-      (TerminateProcess) and status returned to asleep; and a self-exiting
-      stand-in (`ping -n 3`) self-cleared awake→asleep on its own, the watcher
-      closing the master so the read chain EOF'd and finalize fired, with the
-      launch reporting `claude exited during startup`.
-- [x] **Part 1 — SIGWINCH.** Compile break **FIXED** (committed 2026-09-20).
-      **IMPLEMENTED 2026-09-23 (R3451, R3452):** the Windows client polls the
-      console window rect (no `SIGWINCH`) and re-reports its size. A second
-      Windows bug surfaced and was fixed: `term.GetSize` on the stdin console
-      handle returns "the handle is invalid" (measured on the VM), so the client's
-      size reads moved to stdout (R3451). Compiles Linux + Windows; the fd fix is
-      VM-confirmed, and the **interactive attach+resize is VERIFIED live
-      2026-09-23**: a real attach with a window resize showed the child's reported
-      size updating as the window changed, so the whole chain fired (poller →
-      resize frame → host → `ResizePseudoConsole`).
-- [x] **Test part 1 on Windows** — 2026-09-23, interactive attach over ssh: a live
-      window resize showed the size-printing stand-in updating its reported size
-      as the window changed, confirming client detection through to the host
-      resize.
-- [ ] **Part 3 — `os.Symlink` needs privilege on Windows.** **OPEN. Independent
-      track** once the binary runs. Install, linkapp, and bundle extraction all
-      create symlinks.
-- [ ] **Test part 3 on Windows**
-- [ ] **Part 6 — llama.cpp embedding provisioning on Windows.** **UNKNOWN.
-      Independent track.** Whether `ark embed install` has Windows artifacts at
-      all is unexamined.
-- [ ] **Part 8 — filesystem change events under Windows.** **NOT VERIFIED.
-      Independent track.** The mechanism is portable (fsnotify); conduct under
-      Windows' quirks, and recovery from dropped events, are unchecked.
-- [ ] **Part 7 — the audit past the grep seed.** **OPEN. Runs alongside, not
-      last.** Parts 1–6 came from one afternoon's greps, not a sweep.
+- [x] ~~**Item 5 — the AF_UNIX transport under Windows.**~~ **ASSESSED (Bill,
+      2026-09-20.)** Verified working on the dockur Windows VM, `ark.exe` from
+      09-19, and the verification was the whole part, so it carries its own
+      Windows test. `ark.exe serve` bound `ark.sock`, a second `ui.sock`, and
+      HTTP `:57801`; clients dialed and round-tripped (`luhmann status` →
+      "asleep", `status` → "server: running"); and it re-bound cleanly over the
+      stale `ark.sock` left on disk. `sun_path` was 26 bytes, far under the
+      ceiling. The gate is open — the sequence below is unblocked.
+- **Item 2 — `ark stop` speaks only Unix signals.** **SPLIT (Bill, 2026-09-24.)**
+      Was the do-second item: the testing-rate multiplier. A live server, `ps`
+      shows it, stop reports "not running." The fallback is a manual kill, and
+      kill-then-restart is how the old binary ends up still serving while you
+      believe you restarted, so a broken stop makes every Windows test result
+      untrustworthy, not merely slow.
+  - [x] ~~**2.1 — graceful stop over the socket.**~~ **LANDED (2026-09-22 —
+        8bfea51, 1e4643c.)** Confirmed on Windows 2026-09-20: `ark stop` printed
+        `process 3792 not running: not supported by windows` while `tasklist`
+        showed PID 3792 alive; `taskkill /F` was needed. DECIDED 2026-09-22 (A):
+        graceful `POST /shutdown` on every platform, socket-dial liveness,
+        timeout then Linux-kills / Windows-errors. Implemented R3440–R3445;
+        compiles Linux + Windows and stop tests pass; validate failures are
+        pre-existing debt, not this part.
+  - [x] ~~**2.2 — test on Windows.**~~ **ASSESSED (Bill, 2026-09-22.)** Live on
+        the dockur VM: `ark stop` cleanly stopped a running server (reported "ark
+        server stopped (pid 5220)", process gone, server logged `received POST
+        /shutdown, shutting down`), where the 09-19 binary said "not running."
+        Surfaced a pre-existing shutdown-race (process exits 1 on the
+        closed-listener error, racing gracefulShutdown's exit 0; safe under
+        bbolt), fixed by R3446 (atomic shutdown latch, 1e4643c) and re-verified
+        live: graceful stop now exits 0 with no `error: accept` line.
+- **Item 4 — the managed-pty path assumes a Unix terminal.** **SPLIT (Bill,
+      2026-09-24.)** Was the gate before Item 1's test. Required under parity:
+      Luhmann must host on Windows (ConPTY child, `ResizePseudoConsole`,
+      `TerminateProcess`, VT-mode attach). Proving Item 1 end to end needs a
+      Windows-hosted session to attach to, so this precedes it.
+  - [x] ~~**4.1 — the pty backend seam.**~~ **LANDED (2026-09-23 — 5c3681d.)**
+        DECIDED 2026-09-23 (Bill, after a live Windows spike): (b) — creack/pty
+        on Unix + UserExistsError/conpty on Windows, behind a
+        `ptyMaster`/`ptyChild` seam (a type substitution for the `*os.File`
+        master, not a three-syscall swap). The spike ruled out both unified
+        libraries: go-pty drags in x/crypto+u-root, and phuslu/pty mis-binds its
+        ConPTY child on Windows 26200. Implemented R3447–R3450:
+        `pty_backend.go` (the seam), `pty_backend_unix.go` (creack),
+        `pty_backend_windows.go` (conpty), and the `ptyhost.go` rework; compiles
+        Linux + Windows, and the 31 Unix PtyHost tests pass. See Item 4.
+  - [x] ~~**4.2 — test on Windows.**~~ **ASSESSED (Bill, 2026-09-23.)** Live on
+        the dockur VM (build 26200). A `[luhmann] command` stand-in launched a
+        ConPTY session (`status` reported awake, the master installed);
+        `luhmann stop` terminated it (TerminateProcess) and status returned to
+        asleep; and a self-exiting stand-in (`ping -n 3`) self-cleared
+        awake→asleep on its own, the watcher closing the master so the read
+        chain EOF'd and finalize fired, with the launch reporting `claude exited
+        during startup`.
+- **Item 1 — SIGWINCH.** **SPLIT (Bill, 2026-09-24.)**
+  - [x] ~~**1.1 — Windows resize detection.**~~ **LANDED (2026-09-23 —
+        c9311dd.)** The compile break was fixed 2026-09-20. Implemented R3451,
+        R3452: the Windows client polls the console window rect (no `SIGWINCH`)
+        and re-reports its size. A second Windows bug surfaced and was fixed:
+        `term.GetSize` on the stdin console handle returns "the handle is
+        invalid" (measured on the VM), so the client's size reads moved to
+        stdout (R3451). Compiles Linux + Windows.
+  - [x] ~~**1.2 — test on Windows.**~~ **ASSESSED (Bill, 2026-09-23.)**
+        Interactive attach over ssh: a live window resize showed the
+        size-printing stand-in updating its reported size as the window changed,
+        so the whole chain fired (poller → resize frame → host →
+        `ResizePseudoConsole`).
+- **Item 3 — `os.Symlink` needs privilege on Windows.** **SPLIT (Bill,
+      2026-09-24.)** DECIDED 2026-09-24 (Bill): directory links only (symlink
+      on Unix, junction on Windows, one helper shared with app-activation and
+      [setup-and-update.md](setup-and-update.md), no copying).
+      Junction-following by Claude Code and Go's junction semantics measured
+      on the VM. Where the links go moved to setup-and-update; the bundle
+      extraction symlinks are gated on app-activation, and the llama ones on
+      Item 6. See Item 3.
+  - [x] ~~**3.1 — the portable directory-link helper.**~~ **LANDED (2026-10-04, #136.)**
+  - [ ] **3.2 — test on Windows.** **OPEN (not queued.)** Needs a standard
+        (non-admin) account for the unprivileged case.
+- **Item 9 — the install surface on Windows.** **SPLIT (Bill, 2026-09-24.)**
+      Rides on [setup-and-update.md](setup-and-update.md): setup's self-copy
+      into `~/.ark` and `update`'s replacement of a running `ark.exe`; the
+      Windows exe semantics are measured. See Item 9.
+  - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued.)**
+  - [ ] **9.2 — test on Windows.** **OPEN (not queued.)**
+- [ ] **Item 6 — llama.cpp embedding provisioning on Windows.** **OPEN (not
+      queued.)** Unknown, and an independent track: whether `ark embed install`
+      has Windows artifacts at all is unexamined.
+- [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
+      queued.)** Not verified, and an independent track: the mechanism is
+      portable (fsnotify); conduct under Windows' quirks, and recovery from
+      dropped events, are unchecked.
+- [ ] **Item 7 — the audit past the grep seed.** **OPEN (not queued.)** Runs
+      alongside, not last. Items 1–6 came from one afternoon's greps, not a
+      sweep.
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
 `/tmp/remove` strings in `cmd/ark/main.go` and `message_cli.go` are HTTP route
@@ -155,7 +171,7 @@ nothing to the Windows filesystem.
 
 <a id="1"></a>
 
-## Part 1
+## Item 1
 
 `cmd/ark/luhmann_attach.go` referenced `syscall.SIGWINCH`, which the Windows
 `syscall` package does not define, so the whole `cmd/ark` package failed to
@@ -181,12 +197,12 @@ the console input stream and translate `WINDOW_BUFFER_SIZE_EVENT` (the true
 SIGWINCH analog, but it shares the input queue with keystroke reads, so it forces
 a single-reader rewrite of `pipeInput`). Polling is the lean. Note the host-side
 half: on a resize the Windows *host* must call `ResizePseudoConsole` where Unix
-resizes the pty (Part 4), so R3120 is met on both ends of the wire, not only the
+resizes the pty (Item 4), so R3120 is met on both ends of the wire, not only the
 client.
 
 <a id="2"></a>
 
-## Part 2
+## Item 2
 
 **IMPLEMENTED and committed: 8bfea51, 2026-09-22 (R3440–R3445).** The analysis
 below is the record of why; the code is in the tree.
@@ -216,7 +232,7 @@ extracts cleanly into a function an endpoint could also call.
 
 B (the platform-split kill) is rejected: an ungraceful `TerminateProcess` risks
 leaving the socket or the DB lock held, which is the exact clean-release
-guarantee Part 2 exists to give the test loop, so the "small" fix undercuts the
+guarantee Item 2 exists to give the test loop, so the "small" fix undercuts the
 reason the part is a gate at all. Routing the graceful teardown through an
 endpoint on every platform, not Windows-only, is deliberate too: a graceful path
 only Windows exercises is the config-nobody-runs that rots, the same shape as
@@ -229,7 +245,7 @@ The shape:
   `POST /luhmann/stop` (`server.go:557`) already does.
 - Rework `cmdStop` to POST then poll for release, replacing every
   `proc.Signal(...)`. Liveness and the release-poll are both a socket dial now: a
-  response means alive, a refused dial means down. That is portable (Part 5
+  response means alive, a refused dial means down. That is portable (Item 5
   proved it on Windows) and it retires the `proc.Signal(0)` probe that is failure
   point 1.
 - Bound the poll with a timeout, and split the timeout fallback by platform,
@@ -241,7 +257,7 @@ The shape:
     on Windows, so a failed graceful stop surfaces as an error for the user to
     resolve rather than a silent, risky kill.
 
-This fixes Part 2's far end for free: the server stops depending on a `SIGTERM`
+This fixes Item 2's far end for free: the server stops depending on a `SIGTERM`
 that nothing external delivers on Windows, because the endpoint drives the same
 teardown everywhere. The Unix `SIGTERM`/`SIGINT` handlers stay for Ctrl+C but are
 no longer the only graceful path. All Go, so mini-spec: `server.go` (extract plus
@@ -255,7 +271,7 @@ implement.
 
 <a id="3"></a>
 
-## Part 3
+## Item 3
 
 **The `linkapp`/Frictionless-app half of this part is redesigned in
 [app-activation.md](app-activation.md).** That carve replaces the per-file
@@ -277,7 +293,7 @@ client"` otherwise. The shipped paths that call it:
   ~4117/4124/4134): the `app.lua`, app directory, and per-viewdef symlinks under
   `~/.ark/`. This is how new viewdefs become visible to the runtime.
 - **Bundle extraction** (`main.go` ~4737) and **llama lib extraction**
-  (`llamalibs.go:283`), the latter also entangled with Part 6.
+  (`llamalibs.go:283`), the latter also entangled with Item 6.
 
 A second symlink mechanism, missed by the `os.Symlink` grep and found live on
 2026-09-20: bundled Frictionless Lua shells out to the Unix `ln` binary —
@@ -287,7 +303,7 @@ prints `'ln' is not recognized` twice during `serve` startup and is non-fatal, s
 whatever those links wire silently does not. It is worse than the `os.Symlink`
 sites in one respect: `ln` is a Unix executable absent from Windows entirely,
 where `os.Symlink` is at least a portable API gated only on privilege. This is
-Part 7's "os/exec of Unix-only helpers" class caught in the act, and the fix
+Item 7's "os/exec of Unix-only helpers" class caught in the act, and the fix
 belongs to a Frictionless (Lua) pass, not the mini-spec Go side.
 
 The user's own Windows box did not hit the skills-symlink error, only the
@@ -296,23 +312,70 @@ part is invisible to the reporter and real for everyone else. State the negative
 loudly: a repaired agent glob looks like a fixed install, and is not, on an
 unprivileged Windows account.
 
-**The fork (open).** (a) Require Developer Mode and document it — zero code, a
-real adoption wall. (b) Copy instead of symlink on Windows for the install
-skill/agent files, and copy or use a directory junction for the linkapp trees.
-More code and a platform-split, but it works for a normal user. (c) Teach the
-runtime to read from the bundle or a manifest so nothing needs linking — the
-largest, and it reopens decisions Part 5 and the whole `~/.ark` layout depend
-on. The install files (small, static) are the easy case for (b); the linkapp
-viewdef farm is the hard case, because its whole point on the dev box is
-edit-source-see-it-live, and that loop is a Unix dev-box concern that a Windows
-end user does not have.
+**The fork, as it stood.** (a) Require Developer Mode and document it: zero
+code, a real adoption wall. (b) Copy instead of symlink on Windows, or junction
+the directory trees. (c) Teach the runtime to read from the bundle or a manifest
+so nothing needs linking. The per-file agent links were what kept (b) awkward,
+since a junction links only directories, and a hard link to an agent file breaks
+silently when `setup` rewrites it.
+
+**DECIDED (Bill, 2026-09-24): directory links only.**
+
+- **Every install link is a directory link.** Claude Code scans the agents
+  directory recursively and takes an agent's identity from its `name:`
+  frontmatter alone, not from its path, so ark's agents need no per-file links:
+  one link `~/.claude/agents/ark` → `~/.ark/agents` carries the whole bundled
+  set, and a newly bundled agent appears without re-running install (which also
+  retires the drift R432's glob was guarding against). The skills (`ark`, `ui`)
+  were already directories.
+- **One portable primitive.** A symlink on Unix, a junction on Windows. A
+  junction needs no privilege and no Developer Mode. The same helper serves
+  [app-activation.md](app-activation.md)'s one-link-per-app, so it is built once.
+- **Where the links go, and who makes them, moved to
+  [setup-and-update.md](setup-and-update.md).** Once every link was a directory
+  link into `~/.claude/`, the project-level install had nothing left to do, and
+  the whole install surface got redrawn there: `ark setup` as the only install
+  verb, `--local` for a project, no copying, retiring the old copies, and
+  `ark update`. What stays here is the link mechanism and its measurements.
+
+**Measured, not assumed (2026-09-24).** On Linux, a fresh headless session
+listed a probe agent whose only path was a symlinked subdirectory of
+`~/.claude/agents/`, while the running session could not spawn it or a
+real-subdirectory control. So discovery follows symlinks, and it happens at
+session start. On the dockur VM (build 26200, Claude Code 2.1.281), a probe
+junctioned into `~/.claude/agents/` appeared in a fresh session's roster. A Go
+1.26 probe on the same VM showed four more facts:
+
+- `Lstat` reports a junction as `ModeIrregular`, neither a directory nor a
+  symlink.
+- `os.Readlink` returns the junction's absolute target, so the helper can tell
+  "already our link" from someone else's.
+- `os.Remove` and `os.RemoveAll` both remove only the link and leave the target
+  intact.
+- Reading through the junction works.
+
+The helper still uses `os.Remove` on a link and refuses a real directory at the
+destination, since a non-link directory there is someone's data.
+
+**What remains of Item 3 after this.** The **bundle extraction** sites (`setup`'s
+extraction through Frictionless `installFile`, and `ark bundle cp`) create the
+shipped image's own symlinks: `lua/<app>`, `lua/<app>.lua`, the per-viewdef
+links, and `html/mcp`. Those are the aggregation layer app-activation retires,
+so on an unprivileged Windows account `setup` is gated on that carve, not on
+this part. The **llama tar symlinks** (`llamalibs.go:283`) are Linux `.so`
+version links and belong to Item 6.
+
+**Testing caveat.** The VM's ssh session is an elevated Administrator, so
+`os.Symlink` succeeds there even with Developer Mode off. The unprivileged
+failure this part exists to fix can only be reproduced from a standard
+(non-admin) account.
 
 <a id="4"></a>
 
-## Part 4
+## Item 4
 
 The managed-pty feature (`ark luhmann`) assumes a Unix terminal in more than the
-SIGWINCH spot Part 1 touched, and under the parity commitment every one of those
+SIGWINCH spot Item 1 touched, and under the parity commitment every one of those
 assumptions is now in scope: a Windows user hosts a Luhmann session on their own
 box, so this is a required part, not a dev-box luxury. (The earlier draft marked
 it low priority on the reasoning that a Windows user is only a client; parity
@@ -327,15 +390,15 @@ retires that reasoning.) The Unix-only spots, now each confirmed against the cod
 - **Resizing the child.** `setSizeLocked` (`ptyhost.go:727`) calls
   `pty.Setsize(master, …)`, the same Windows stub returning `ErrUnsupported`
   (`winsize_unsupported.go`). Its analog is `ResizePseudoConsole`. This is the
-  host end of Part 1; R3120 is met on both ends of the wire or on neither.
+  host end of Item 1; R3120 is met on both ends of the wire or on neither.
 - **Stopping the child.** `gracefulShutdown` (`ptyhost.go:890`) sends
   `syscall.SIGTERM`. The escalation `child.Process.Kill()` at 896 already maps to
   `TerminateProcess` and is portable, but the graceful first step is not. The
   Windows analog is a console `CTRL_BREAK` to the process group, the platform
-  split Part 2 already settled for the server.
+  split Item 2 already settled for the server.
 - **Raw-mode attach.** The client hijacks the socket into raw terminal mode and
   reads a byte stream. On Windows that means enabling the console's VT
-  input/output modes and settling the single-reader `pipeInput` question Part 1
+  input/output modes and settling the single-reader `pipeInput` question Item 1
   raised.
 
 **What the seam actually is.** The instinct is to read this as three missing
@@ -347,7 +410,7 @@ does three jobs at once: the output stream the reader chain blocks on (`m.Read`,
 `pty.Setsize` resizes (727). A Unix pty master is all three because the kernel
 makes one fd carry them. ConPTY does not. It hands back an input pipe, an output
 pipe, and a separate `HPCON` that `ResizePseudoConsole` acts on. The Unix
-assumption at the center of Part 4 is a *type*, "the master is one file," rather
+assumption at the center of Item 4 is a *type*, "the master is one file," rather
 than a call.
 
 That makes the honest seam a pair of small interfaces, not a `//go:build` swap of
@@ -376,7 +439,7 @@ the choice is a principle question as much as a code one.
 (a) **One cross-platform pty library** (`aymanbagabas/go-pty` or similar): a
 single API wrapping creack/pty on Unix and ConPTY on Windows, so `ptyMaster` and
 `ptyChild` have one implementation each and both platforms run the same
-integration code. This is the shape Part 2 chose deliberately, a unified path
+integration code. This is the shape Item 2 chose deliberately, a unified path
 both platforms exercise, so a bug surfaces on Linux where it is cheap and no
 Windows-only branch is left to rot the way O212 and the `withFTS` dead code did.
 The catch: it reworks the verified Steam Deck path to gain Windows, and it adds a
@@ -387,7 +450,7 @@ dependency in the concurrency-critical spot.
 untouched byte-for-byte and Windows gets its own implementation. This is
 don't-poke-the-bear applied to the path that is load-bearing on the Steam Deck.
 The catch is the mirror of (a)'s virtue: the Windows pty code becomes a config
-only Windows users ever run, the rot-shape Part 2 argued against, kept honest
+only Windows users ever run, the rot-shape Item 2 argued against, kept honest
 only by the Windows test loop.
 
 (c) **A creack/pty fork with ConPTY** (`photostorm/pty` or similar): smallest diff
@@ -400,7 +463,7 @@ honestly carry a resize that is fundamentally an `HPCON` operation.
 transitive, maximum control, most code. The carve's own "a Go ConPTY wrapper
 exists" is the argument against reinventing it.
 
-The tension that decides this is (a) versus (b). Part 2's precedent points at the
+The tension that decides this is (a) versus (b). Item 2's precedent points at the
 unified path (a); the don't-poke-the-bear rule points at the isolated one (b).
 The pull toward (a) is stronger than it first looks, because go-pty wraps creack
 on Unix, so the bear being poked is ark's integration code, not the pty syscalls.
@@ -435,7 +498,7 @@ validated the isolated one:
 Windows, behind the `ptyMaster`/`ptyChild` seam.** The unified-path virtue that
 first favoured (a) turned out to be unreachable: one candidate is too heavy, the
 other mis-binds on the target build. (b)'s cost is the two implementations ark
-maintains, the rot risk Part 2 named, held in check by the Windows test loop this
+maintains, the rot risk Item 2 named, held in check by the Windows test loop this
 spike established.
 
 Implementation notes the seam already absorbs: conpty takes a command-line string
@@ -443,7 +506,7 @@ instead of an `*exec.Cmd`, so the Windows `ptyChild` wraps a `*conpty.ConPty`
 (Pid, Wait, Close) and composes argv into a command line; there is no
 `cmd.Process` on Windows; the child's output EOF arrives from Wait+Close, not from
 the read itself; and the Windows stop is a terminate rather than a graceful
-`CTRL_BREAK`, the same platform asymmetry Part 2 already accepts.
+`CTRL_BREAK`, the same platform asymmetry Item 2 already accepts.
 
 **Landed 2026-09-23.** The seam is `pty_backend.go` (the `ptyMaster`/`ptyChild`
 interfaces plus a `ptyMasterRef` so `masterPtr` stays an `atomic.Pointer` that can
@@ -460,7 +523,7 @@ verb group silently does not, now as work owed rather than work waived.
 
 <a id="5"></a>
 
-## Part 5
+## Item 5
 
 The entire CLI talks to the server over `net.Listen("unix", …)` /
 `net.Dial("unix", …)` on `~/.ark/ark.sock` (`server.go:170–188`,
@@ -477,21 +540,21 @@ edges are environmental.
 
 <a id="6"></a>
 
-## Part 6
+## Item 6
 
 Embedding provisions llama.cpp shared libraries at runtime via
 `ark embed install` (they are deliberately not bundled). On Windows the artefacts
 are `.dll`, the download URLs and archive shapes differ, and `llamalibs.go:283`
-extracts tar symlinks (Part 3). Whether any of this has a Windows path is
+extracts tar symlinks (Item 3). Whether any of this has a Windows path is
 unexamined. Flagged as UNKNOWN rather than worked, so the carve does not imply an
 analysis that has not happened. A Windows binary that builds and serves but
 cannot embed is a real and partial "works," and the release should say which.
 
 <a id="7"></a>
 
-## Part 7
+## Item 7
 
-Parts 1–6 are what a single afternoon of targeted greps surfaced (signals,
+Items 1–6 are what a single afternoon of targeted greps surfaced (signals,
 `os.Symlink`, unix sockets, leading-slash paths). A real sweep should also look
 at file-mode assumptions, `os/exec` of Unix-only helpers, path separators
 crossing the socket as data, case-sensitivity, and CRLF. Named as its own part
@@ -507,9 +570,9 @@ instead.
 
 <a id="8"></a>
 
-## Part 8
+## Item 8
 
-Unlike Parts 1–4, file-change notification is the primitive ark already routed
+Unlike Items 1–4, file-change notification is the primitive ark already routed
 through a portable seam: `github.com/fsnotify/fsnotify v1.9.0`, which carries a
 real Windows backend (`ReadDirectoryChangesW`). It compiles and runs there, and
 `watcher.go` uses it the way that survives the platform. It watches each source
@@ -518,7 +581,7 @@ re-watches a newly created subdirectory on its `Create` event
 (`watchDirRecursive`, ~140), debounces the three-to-seven-event burst one editor
 save fires, and drains the `Errors` channel so it cannot deadlock. So "should it
 work?" is yes at the level of the mechanism, which lands this in the same
-untested-but-mechanically-sound tier Part 5 occupied until it was verified on
+untested-but-mechanically-sound tier Item 5 occupied until it was verified on
 2026-09-20, not the born-broken one.
 
 What is unverified is conduct under Windows' particular quirks:
@@ -548,10 +611,24 @@ What is unverified is conduct under Windows' particular quirks:
 The overflow-to-reconcile repair is the one concrete, cheap win here, and it is
 worth doing whatever the rest of the Windows verdict turns out to be.
 
+<a id="9"></a>
+
+## Item 9
+
+**This part rides on [setup-and-update.md](setup-and-update.md).** That carve
+redraws the install surface for every platform. What is Windows-specific about it
+is the binary itself: setup copies the running executable into `~/.ark`, and
+`update` may have to replace a running `~/.ark/ark.exe`. Measured on build 26200
+(2026-09-24, table in that carve's *Measured* section): a running exe can copy
+itself and rename itself aside, but cannot be overwritten in place, and the
+renamed-aside copy cannot be deleted until its process exits. So the self-copy
+needs nothing special, and `update` needs rename-aside plus a deferred delete.
+The Windows test for this part is those two paths run against the real binary.
+
 ---
 
 When a part lands, its decision goes to `specs/` and `design/` as a requirement
 or a comment at the code, and this carve points at where — the discipline the
-carves directory exists to enforce. Part 1 already did: R3120's Windows
+carves directory exists to enforce. Item 1 already did: R3120's Windows
 narrowing lives in the code comments, and this carve names it rather than
 holding the fact alone.

@@ -1,6 +1,6 @@
 package main
 
-// Tests for ark stop's portable graceful-shutdown path (windows-support Part 2).
+// Tests for ark stop's portable graceful-shutdown path (windows-support Item 2).
 // Test: test-StopCommand.md
 // CRC: crc-CLI.md, crc-Server.md | R3441, R3442, R3443
 

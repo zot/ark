@@ -117,15 +117,19 @@ go build -buildvcs=false -o ~/.ark/ark ./cmd/ark
 The `-buildvcs=false` flag is needed because the repo carries both git
 and fossil history.
 
-Then, in any Claude Code project:
+Then run setup once:
 
 ```
-~/.ark/ark install
+~/.ark/ark setup
 ```
 
-This installs the `/ark` skill and agent. The install command outputs
-instructions -- it's a crank handle (see below), so the model just
-follows the prompts.
+`setup` is the install path. It extracts the bundle, creates the
+database, and links ark's skills and agents into `~/.claude/` at user
+scope, so every project sees them. To add the bootstrap line to a
+specific project's CLAUDE.md, run `~/.ark/ark setup --local` in that
+project -- it prints a crank-handle prompt (see below) the model
+follows. Later, `~/.ark/ark update` refreshes an install to the latest
+release.
 
 ## Usage
 

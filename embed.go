@@ -9,10 +9,10 @@ package ark
 // unchanged by the migration.
 //
 // CRC: crc-Librarian.md | R2961, R2962, R2963, R2973
-// R2961 yzma/purego binding (runtime dlopen, no CGO)
-// R2962 tier context = ContextParams (NCtx/NSeqMax/NBatch/NUbatch, Mean pool, GPU offload)
-// R2963 copy the aliasing GetEmbeddingsSeq result
-// R2973 llama.cpp logging silenced by default; -vvv (verbosity ≥ 3) leaves it on
+// R2961: yzma/purego binding (runtime dlopen, no CGO)
+// R2962: tier context = ContextParams (NCtx/NSeqMax/NBatch/NUbatch, Mean pool, GPU offload)
+// R2963: copy the aliasing GetEmbeddingsSeq result
+// R2973: llama.cpp logging silenced by default; -vvv (verbosity ≥ 3) leaves it on
 
 import (
 	"fmt"

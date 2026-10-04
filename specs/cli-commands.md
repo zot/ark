@@ -93,7 +93,7 @@ so no agent types a routing address either. Canonical:
 | `schedule`         | `schedule SUBCOMMAND ...`                                                                                            | required (search/change) | subcommands below                                    |
 | `search`           | `search [TERM...] [filter-stack] [options]` <br> `search expand ...`                                                 | preferred                | server proxy keeps caches warm                       |
 | `serve`            | `serve [--no-scan] [--force] [--compact]`                                                                            | starts                   |                                                      |
-| `setup`            | `setup`                                                                                                              | none                     | bootstrap `~/.ark/` (extract bundle, install skills) |
+| `setup`            | `setup [--local]`                                                                                                    | none                     | the install path; marker-keyed. `--local` connects the cwd to an existing install (details below) |
 | `sources`          | `sources [check | pair]`                                                                                             | optional                 | `check` reconciles globs; `pair` proposes `logs_for` |
 | `stale`            | `stale [PATTERN...]`                                                                                                 | optional                 |                                                      |
 | `status`           | `status [--db] [--chunks] [--tokenize] [-with\|-without] [-files G]...`                                       | preferred                |                                                      |
@@ -104,6 +104,7 @@ so no agent types a routing address either. Canonical:
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved [--reason KIND]`                                                                                         | optional                 | lists U records with why; `--reason` narrows to one  |
+| `update`           | `update [--no-exe]`                                                                                                  | none                     | refresh install to latest GitHub release; gripes on a symlinked binary; `--no-exe` refreshes assets from the running bundle only (details below) |
 | `version`          | `version`                                                                                                           | none                     | prints `ark <version>` (from README.md)              |
 
 "Server" column:
@@ -1346,16 +1347,60 @@ Exits 0 with a stderr message if a server is already running. The
 process holds the file lock on `~/.ark/`, writes a PID file, and
 listens on `<dir>/ark.sock` (and an HTTP port for browsers).
 
-### `setup` — bootstrap `~/.ark/`
+### `setup` — the install path
 
 ```
 ark setup
+ark setup --local
 ```
 
-Idempotent. Extracts bundled assets (`html/`, `lua/`, `viewdefs/`,
-`apps/`, `skills/`, `agents/`) into `~/.ark/`, runs `linkapp` for the
-`ark` app, and installs global skills + every bundled agent into `~/.claude/`.
-Requires the running binary to be bundled.
+`ark setup` (global) is the one install path. Idempotent on a marker —
+the database file — not on `~/.ark/` existing. When the marker is absent
+it creates `~/.ark/`, copies the running executable in (`ark.exe` on
+Windows; skipped when already running from `~/.ark/`), extracts the
+bundled assets (`html/`, `lua/`, `viewdefs/`, `apps/`, `skills/`,
+`agents/`), creates the database (the marker), links every bundled skill
+directory and the agents directory into `~/.claude/`, provisions llama
+libs, and downloads the configured embedding model if it is missing. It
+copies no skills or agents — the `~/.claude/` entries are directory links
+(symlink on Unix, junction on Windows). It prints that new agents appear
+in the next Claude session. With the marker present the global part does
+nothing. Requires the running binary to be bundled.
+
+`ark setup --local` connects the current directory to an existing
+install: it refuses without the marker, makes the same directory links
+into the cwd's `.claude/`, and prints the CLAUDE.md crank-handle hint
+(`load /ark first`). It never edits CLAUDE.md.
+
+`ark setup` removes a flat `~/.claude/agents/<name>.md` only when it is a
+regular file byte-identical to the bundled agent; a changed file or a
+hand-made link is reported and left, since either may be the user's.
+
+### `update` — refresh an install
+
+```
+ark update
+ark update --no-exe
+```
+
+`ark update` refreshes an install to the running project's latest GitHub
+release. It version-checks first (build-time `ark.Version` against the
+latest tag), does nothing when current, and never downgrades. It is
+two-phase: the running binary downloads the new platform binary, verifies
+it against the release's published checksum, and swaps it into `~/.ark/`
+(rename-aside then deferred delete on Windows); the new binary then
+refreshes the remaining assets from its own bundle. The refresh is
+manifest-aware through `~/.ark/install-manifest.json`, so it never
+clobbers a user-edited file and never replaces a link with a copy, and it
+downloads the model if missing. Any failure leaves the old binary and
+`~/.ark/` intact. On a symlinked `~/.ark/ark` (a developer install), plain
+`update` gripes and tells the user to use `--no-exe`.
+
+`ark update --no-exe` refreshes every asset from the *running* binary's
+own bundle, downloading nothing for the executable and assuming the
+running exe is already current — the developer case where `~/.ark/ark`
+links to a freshly built binary. It stays manifest-aware, never replaces a
+link with a copy, and proceeds normally on a symlinked binary.
 
 ### `sources` — manage source directories
 

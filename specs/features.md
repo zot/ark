@@ -571,16 +571,20 @@ forget. The user runs `ark setup` once and the environment
 unpacks.
 
 **Objective.** `ark bundle` zip-grafts content (HTML assets,
-viewdefs, skill files, the embedding model) onto the binary
-itself; `ark setup` extracts the bundle into `~/.ark/` and
-installs ark's skill and agent files into `~/.claude/` so Claude
-can use them. The runtime then reads from `~/.ark/` as its unified
-home. No `apt install` and no separate service; the only files
-setup writes outside `~/.ark/` are that skill and agent markdown
-in `~/.claude/`.
+viewdefs, skill files) onto the binary itself; `ark setup` is the
+install path, extracting the bundle into `~/.ark/` and wiring ark's
+skills and agents into `~/.claude/` by directory link (symlink on
+Unix, junction on Windows) rather than copy, so a newly bundled skill
+or agent appears with no re-copy and Windows installs without
+privilege. Setup also downloads the configured embedding model when it
+is missing. The runtime then reads from `~/.ark/` as its unified home.
+No `apt install` and no separate service; the only things setup places
+outside `~/.ark/` are the directory links in `~/.claude/`. `ark update`
+keeps an install current, refreshing assets through an install manifest
+so user edits survive.
 
-**Surface.** `ark bundle`, `ark setup`, `ark install`, the
-`~/.ark/` directory layout, the bundle subcommands documented in
+**Surface.** `ark bundle`, `ark setup` (with `--local`), `ark update`,
+the `~/.ark/` directory layout, the bundle subcommands documented in
 `specs/cli-commands.md`.
 
 ## Path identity (symlink aliases)

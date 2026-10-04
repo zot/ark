@@ -77,6 +77,8 @@ above (`ark serve -vvv`) to leave it on — useful for confirming GPU offload.
 | Key             | Type   | Default     | Meaning                                                                                                     | Owner                                          |
 |-----------------|--------|-------------|-------------------------------------------------------------------------------------------------------------|------------------------------------------------|
 | `model`         | string | `""`        | Filename of the GGUF embedding model under the ark dir — embeds chunks, tags, and queries. Empty disables vector-EC. | `chunk-embeddings.md`, `embed-subcommands.md`  |
+| `model_url`     | string | `""`        | Download URL for `model` — `ark setup` / `ark update` fetch it when the file is absent. Keeps model download model-neutral.  | `main.md` (§Setup and Install)                 |
+| `model_sha256`  | string | `""`        | Pinned SHA-256 the downloaded `model` is verified against before use.                                        | `main.md` (§Setup and Install)                 |
 | `lib_dir`       | string | `<dir>/lib` | Directory of llama.cpp shared libs yzma `dlopen`s at runtime.                                                | `llama-libs.md`                                |
 | `backend`       | string | `"auto"`    | llama.cpp backend to provision/load: `auto`, `cpu`, `vulkan`, `cuda`, `metal`, `rocm`.                      | `llama-libs.md`                                |
 | `llama_version` | string | (pinned)    | llama.cpp release build to provision (e.g. `b9592`), within yzma's tested range.                            | `llama-libs.md`                                |

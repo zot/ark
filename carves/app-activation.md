@@ -12,7 +12,7 @@ directory link per app and have the runtime read apps where they sit.
 
 - **Non-portable.** `os.Symlink` needs a privilege on Windows and `ln` does not
   exist there at all, so the shipped Windows binary can neither install nor
-  self-link. This is what [windows-support.md Part 3](windows-support.md#3) is
+  self-link. This is what [windows-support.md Item 3](windows-support.md#3) is
   about; that part now rides on this carve.
 - **Non-deterministic.** Every app's viewdefs land in one flat `~/.ark/viewdefs`,
   so when two apps ship a viewdef of the same name the resolution is
@@ -37,7 +37,7 @@ The runtime discovers apps by enumerating `~/.ark/lua/*`: for each it auto-loads
 `<app>/app.lua` and registers `<app>/viewdefs/*`, reading everything through that
 one dir link. On Windows the junction is unprivileged, survives a bundle
 re-extract, and works across volumes, so the whole per-file copy-or-manifest
-question that Part 3 was circling never arises.
+question that windows-support Item 3 was circling never arises.
 
 <a id="collisions"></a>
 ## Collisions: deterministic and visible
@@ -51,7 +51,9 @@ longer turns on link order.
   repo's `apps/`, which a user may have reconfigured. Setup extracts the built-in
   apps into `~/.ark/apps` so a user can edit or patch them in place through ark's
   own `ls`/`cat`/fs verbs; editing an extracted built-in is the sanctioned way to
-  override one, so no separate override marker is needed.
+  override one, so no separate override marker is needed. `ark update` must
+  therefore preserve such edits, which is why it works from an install manifest
+  of file hashes ([setup-and-update.md](setup-and-update.md)).
 - **Bundling fails** on a viewdef-name collision among built-ins, so the built-in
   set is conflict-free by construction and a live collision can only involve a
   user app.
@@ -104,7 +106,7 @@ The genuine `apps/*` (ui-*) tail is small and measured, not guessed:
 
 Bycatch from grounding, not activation but recorded so it is not lost: the mcp
 app also shells out to `mkdir -p` (`app.lua:86`, `762`) and `base64 -d` (`772`),
-both Unix-only. Those belong to windows-support's Part 7 "os/exec of Unix
+both Unix-only. Those belong to windows-support's Item 7 "os/exec of Unix
 helpers" class and want the same portable-primitive treatment.
 
 <a id="decisions"></a>

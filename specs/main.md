@@ -505,6 +505,20 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   read-only server stays up on the socket, so `ark status` / `ark
   search` from another terminal return live progress instead of
   blocking on bbolt's single-process file lock (rebuild-read-serve.md).
+- `ark setup [--local]`
+  The install path. Global (no flag): create `~/.ark/`, self-copy the
+  binary, extract the bundle, create the database, link every bundled
+  skill and the agents directory into `~/.claude/`, provision llama libs,
+  and download the configured model if missing. Idempotent on the marker
+  (the database file). `--local` connects the current directory to an
+  existing install and prints the CLAUDE.md hint. See Setup and Install.
+- `ark update [--no-exe]`
+  Refresh an install to the running project's latest GitHub release.
+  Version-checked (no-op when current, never downgrades), two-phase,
+  manifest-aware, downloads the model if missing, and leaves everything
+  intact on failure. Gripes on a symlinked `~/.ark/ark`. `--no-exe`
+  refreshes assets from the running binary's own bundle without touching
+  the exe. See Setup and Install.
 - `ark add [--dir <path>] [-strategy <name>] <file-or-dir>...`
   Add files. If directory, walk per config. If file, add directly.
 - `ark remove [--dir <path>] <file-or-pattern>...`
@@ -620,94 +634,189 @@ Notable behaviors documented elsewhere:
 
 ## Setup and Install
 
-Ark embeds Frictionless — there is no separate UI install. One binary
-carries the full stack: search engine, HTTP server, and UI assets.
-Three commands handle the journey from binary to working system.
+Ark embeds Frictionless, so there is no separate UI install. One binary
+carries the full stack: search engine, HTTP server, and UI assets. `ark
+setup` is the install path from binary to working system, and `ark
+update` keeps an install current. Nothing is copied where a directory
+link will do, which is what makes install work without privilege on
+Windows.
 
-### `ark setup` — global bootstrap
+### The portable directory-link helper
 
-`ark setup` prepares `~/.ark/` for use. It is idempotent — safe to
-run after every binary update.
+Skills, agents, and Frictionless apps are wired into the places the
+runtime and Claude Code look by a **directory link**. One helper makes
+that link portably: a symbolic link on Unix and a directory junction on
+Windows (R3453). A junction needs no privilege and no Developer Mode, so
+the shipped Windows binary can install without elevation; it is created
+through `golang.org/x/sys/windows` reparse points, not by shelling out to
+`mklink`.
 
-1. **Extract bundled assets.** UI assets (html/, lua/, viewdefs/,
-   apps/) are extracted from the binary's zip appendix to `~/.ark/`.
-   Existing files are overwritten (they come from the binary, not the
-   user).
+Two properties keep the helper from destroying data. Removing a link uses
+`os.Remove` on the link itself and refuses to delete a real (non-link)
+directory at the destination, since a non-link directory there is
+someone's data (R3454). Re-linking is idempotent: `os.Readlink` reports a
+link's target, so the helper recognizes a link it already owns and leaves
+it in place (R3455).
 
-2. **Install global skills.** Copy the ark skill to
-   `~/.claude/skills/ark/SKILL.md` and the ui skill to
-   `~/.claude/skills/ui/SKILL.md`. These are the lightweight
-   interaction skills — every session gets them.
+### `ark setup` — the install path
 
-3. **Install agents.** Copy each agent doc in `~/.ark/agents/*.md` to
-   `~/.claude/agents/`. Globbed rather than a hardcoded `ark.md`, so
-   install never drifts from the bundled agent set (the ark agent is
-   split into `ark-franklin.md` / `ark-messenger.md` / `ark-searcher.md`).
+`ark setup` takes a machine from a downloaded binary to a working ark. It
+keys idempotency on a **marker** — the database file — rather than on
+`~/.ark/` existing, because the README install places the binary at
+`~/.ark/ark` before running it, so `~/.ark/` is present on every fresh
+install and cannot be the test. With the marker present, the global part
+of setup does nothing (R3456). "Installed" means the index exists, which
+is exactly what the marker records.
 
-4. **Link the ark app.** Run `linkapp add ark` so the Frictionless
-   UI can serve the ark search interface.
+Neither setup nor update starts a server, since installing and running are
+separate acts. Both **stop a running ark server first**, through the same
+graceful path `ark stop` uses, before they change anything (R3481). On Windows
+this is required rather than tidy: a running server holds the llama.cpp
+libraries under `~/.ark/lib` and the apps it loaded, and Windows refuses to
+overwrite a file a live process has loaded. If the graceful stop does not
+complete, setup and update **abort** and tell the user to run `ark stop -f` and
+retry, rather than overwriting files a live server still holds.
 
-5. **Report.** Print what was installed/updated. No crank-handle
-   output — setup is complete in itself.
+When the marker is absent, setup runs the global install in order:
 
-If `~/.ark/` doesn't exist, it is created. If skills or agents
-already exist, they are overwritten with the version from the
-current binary. The bundled assets are the source of truth.
+1. **Create `~/.ark/`** if it does not exist (R3457).
 
-### `ark init` — database creation
+2. **Copy the running executable into `~/.ark/`** (`ark.exe` on Windows),
+   so setup can run from wherever the user downloaded it. When setup is
+   already running from `~/.ark/`, the copy is skipped (R3458). On Windows
+   a running exe can copy itself elsewhere even though it cannot overwrite
+   itself in place.
 
-`ark init` creates a new ark database. Existing behavior is
-unchanged: initializes microfts2 and the ark bucket, writes
-default config (no microvec init step; R1912).
+3. **Extract the bundled assets** (html/, lua/, viewdefs/, apps/, skills/,
+   agents/) from the binary's zip appendix into `~/.ark/` (R3459).
 
-By default, `ark init` runs `ark setup` first if `~/.ark/` has not
-been bootstrapped (no `html/` directory present). This means the
-common case — first install — is a single command. `--no-setup`
-skips the bootstrap for callers who only want the database.
+4. **Create the database.** This is the marker. Setup and `ark rebuild`
+   both create the database through one shared function, so setup no
+   longer runs `ark init` and the old init→setup recursion cannot return
+   (R3460).
 
-When the database already exists, `ark init` removes it first (deletes
-`index.db`) before creating a fresh one. This applies
-regardless of `--no-setup`. Use `ark rebuild` for the common
-"delete and re-scan" workflow — it handles the full cycle.
+5. **Link skills and agents into `~/.claude/`.** One directory link per
+   bundled skill directory, globbing `~/.ark/skills/*` with no hardcoded
+   list, so every bundled skill (the ui-* skills included) reaches
+   `~/.claude/skills/` and a newly bundled skill appears without a code
+   change (R3461). One directory link `~/.claude/agents/ark` →
+   `~/.ark/agents` carries the whole bundled agent set, because Claude
+   Code scans the agents tree recursively and takes each agent's identity
+   from its `name:` frontmatter, not its path (R3462). Both use the
+   directory-link helper. `~/.ark/` is already one install per user, so
+   user-scope links serve every project, and a project definition still
+   overrides a user one when someone needs that.
 
-`--if-needed` skips database creation when a database already exists.
-This is for callers (like `ark ui install`) that want to ensure a
-working system without risking an existing database.
+6. **Provision the llama.cpp libraries** when a model is configured and
+   they are absent (R2969).
 
-### `ark ui install` — per-project setup
+7. **Download the configured embedding model** when the model file is
+   absent, from the configured per-model URL, verifying the download
+   against the configured pinned SHA-256 (R3463). A present file or a link
+   (the dev box links it from a sibling checkout) is left alone. Without
+   this a default install points at a model it never fetched and search
+   silently falls back to trigram-only (R1276).
 
-`ark ui install` is the single entry point for connecting a project
-to ark. It runs in the current working directory and ensures the
-entire system is ready — the user never needs to run `ark setup` or
-`ark init` separately.
+8. **Report, and note the next session.** Setup prints that newly
+   installed agents appear in the *next* Claude session, since agent
+   definitions are read at session start (R3464).
 
-1. **Bootstrap.** Internally runs `ark init --if-needed`, which
-   triggers setup if needed and creates the database if it doesn't
-   exist. If everything is already in place, this is a no-op.
+Setup copies no skills or agents anywhere; the directory links are the
+whole mechanism (R3465).
 
-2. **Symlink skills.** Create symlinks in the project's
-   `.claude/skills/` pointing to `~/.ark/skills/ark/` and
-   `~/.ark/skills/ui/`. Symlinks, not copies — `ark setup` keeps the
-   originals current.
+### `ark setup --local` — connect a project
 
-3. **Crank-handle output.** Print a prompt instructing Claude to add
-   the ark bootstrap line to the project's CLAUDE.md. The binary
-   cannot edit CLAUDE.md intelligently; the crank-handle prompt is
-   designed for any model tier (including Haiku) to follow.
+`ark setup --local` connects the current directory to an existing
+install. It requires the marker and refuses to run without it, because it
+connects a project to an install rather than creating one (R3466). It
+makes the same directory links — one per bundled skill plus
+`agents/ark` — into the current directory's `.claude/` (R3467), and it
+prints the crank-handle hint asking Claude to add `load /ark first` to the
+project's CLAUDE.md. The binary never edits CLAUDE.md; the hint is written
+so any model tier, Haiku included, can follow it (R3468). This is the
+first setup path that reads the working directory, so its help says so.
 
-Per-project setup does NOT install UI building skills (ui-thorough,
-ui-fast). Those are heavyweight design systems loaded by specialist
-agents, never global.
+### Retiring old copies, and duplicate names
+
+Earlier installs left flat `~/.claude/agents/<name>.md` copies where the
+`ark/` directory link now goes. Two files in one agents tree that declare
+the same `name:` make Claude Code load only one, chosen by filesystem read
+order, so a leftover copy can silently shadow the linked set. Setup
+removes a flat `~/.claude/agents/<name>.md` only when it is a regular file
+byte-identical to the bundled agent of that name (R3469). A file that
+differs from the bundle, or a hand-made link, is reported and left in
+place, since either may be the user's own (R3470).
+
+### `ark update` — refresh an install
+
+`ark update` brings an install up to the running project's latest release.
+It checks the version first: it compares the build-time `ark.Version`
+against the latest GitHub release tag, does nothing when already current,
+and never downgrades (R3471).
+
+An update is **two-phase**, because the running binary carries the *old*
+bundle. The running binary downloads the new release binary for the
+current platform, verifies it against the release's published checksum,
+and swaps it into `~/.ark/`; the new binary then refreshes the rest of the
+assets from its own bundle (R3472). On Windows the swap renames the
+running `~/.ark/ark.exe` aside, writes the new binary at the original
+name, and deletes the aside copy on a later run, since a running exe
+cannot delete its own aside copy while alive (R3473).
+
+The asset refresh is **manifest-aware**. Installed-file hashes and a
+per-file collision policy live in `~/.ark/install-manifest.json`, reusing
+the `{hash, onCollision, group}` entry shape rather than living in
+`ark.toml`, whose hand-edited config would otherwise churn on every update
+(R3479). Update reads the manifest so it never clobbers a user-edited file
+and never replaces a link with a copy (R3474). Built-in apps are extracted
+into `~/.ark/apps` precisely so a user can edit them in place, and those
+edits survive an update. Update also downloads the configured embedding
+model when it is missing, the same way setup does (R3475). Any failure — a
+failed download, a bad checksum, a failed swap — leaves the old binary and
+`~/.ark/` intact (R3476).
+
+The download URL and pinned SHA-256 for the model come from `[embedding]`
+config keys (`model_url` and `model_sha256`), so update stays
+model-neutral and fetches whatever model the config names (R3480). The
+bundled reference `install/ark.toml` carries both keys for its default model,
+nomic-embed-text-v1.5 Q8_0, so every fresh install knows where its model comes
+from (R3482). An older `ark.toml` without them gets a message saying the model
+is missing and how to add the keys, not a download (R3483). A new
+ark release must carry one binary asset per platform under a predictable
+name plus a published checksum for update to find and verify; the release
+process owns producing those, and update only consumes them.
+
+**A symlinked `~/.ark/ark` is a developer install.** Where `~/.ark/ark`
+links into a source tree, swapping it would replace the link with a
+downloaded file and break the build-and-run loop. On such a binary, plain
+`ark update` gripes — telling the user to use `--no-exe` — and refreshes
+nothing (R3477).
+
+`ark update --no-exe` refreshes everything except the executable. It
+assumes the running exe is already the new one, the developer case where
+`~/.ark/ark` links to a freshly built binary, so every asset (skills,
+agents, apps, and the model if missing) comes from the *running* binary's
+own bundle and nothing is downloaded for the exe. The refresh stays
+manifest-aware and never replaces a link with a copy, and on a symlinked
+`~/.ark/ark` it proceeds normally rather than griping (R3478). Pairing a
+new release's assets with the old exe is the mismatch the plain-update
+gripe exists to avoid.
+
+### `ark init` and `ark ui install`
+
+`ark init` still creates a database directly for callers that want only
+that (initializes microfts2 and the ark bucket, writes default config; no
+microvec init step, R1912), and `ark ui install` (alias `ark install`)
+still performs the older per-project symlink install. Both remain for now;
+`ark setup` is the path a new install should take.
 
 ### README-driven installation
 
-The user's only action is telling Claude: "use the ark README to
-install it." The README provides:
-
-1. Check if `~/.ark/ark` exists
-2. If not, download the binary and place it at `~/.ark/ark`
-3. Run `~/.ark/ark ui install` in the project directory
-
-One command. The entire chain is self-resolving — setup, database,
-project connection. No separate Frictionless install. No `.ui/`
-prerequisite.
+The user's only action is telling Claude: "use the ark README to install
+it." The README has Claude check whether `~/.ark/ark` exists, download the
+binary to `~/.ark/ark` if not, and run `~/.ark/ark setup`. That one
+command creates `~/.ark/`, extracts the bundle, creates the database, and
+links the skills and agents into `~/.claude/` at user scope, so every
+project sees them. In a specific project, `~/.ark/ark setup --local`
+prints the CLAUDE.md bootstrap hint. No separate Frictionless install and
+no `.ui/` prerequisite.

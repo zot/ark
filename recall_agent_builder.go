@@ -992,7 +992,7 @@ func bloodhoundFindingPath(session string, bid uint64) string {
 // planning). COOKIE is substituted with the task's cookie; the agent fills its
 // own nonce. Step 8 proposes connecting tags along the clue's angle (R3108),
 // suppressed per-hunt by the buildSearchTask "no-tags" directive (R3110).
-// R2938, R3006 (the ## Recall seed lead-in), R3108
+// R2938, R3006, R3108: R3006 is the ## Recall seed lead-in
 const searchCrankHandle = `You are the bloodhound on a directed hunt. The clue is the ## Search task above. Read its fields — clue, scope, depth, want, and any stop condition — then work the trail. Don't plan; do these in order, using ~/.ark/ark.
 
 FIRST read the ## Recall seed above: strong candidates the deluxe combined search already found (it reaches the value→chunk tag axis your own searches can't). READ those hits (step 5) before searching — they often answer the clue outright. Run the steps below only to widen the trail or when the seed is thin (or empty).
@@ -1168,7 +1168,7 @@ func (b *RecallAgentBuilder) closeBloodhound(cookie, session string, bid uint64,
 		found = doc.items
 		if b.db != nil && b.db.pubsub != nil &&
 			b.db.pubsub.SubscriberCount("ark-bloodhound-result", session) == 0 {
-			outcome = "no-subscriber" // R2808 parity
+			outcome = "no-subscriber" // R2808: parity
 		} else {
 			body := []byte(bloodhoundFindingHeader(session, clue) + doc.buf.String())
 			path := bloodhoundFindingPath(session, bid)
