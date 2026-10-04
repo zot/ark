@@ -226,7 +226,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-TagInspect.md → `cmd/ark/main.go`, `inspect.go`, `server.go`, `store.go`, `extmap.go`
 - [x] crc-Curation.md → `curation.go`, `server.go`
 - [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
-- [x] crc-LlamaLibs.md → `llamalibs.go`
+- [x] crc-LlamaLibs.md → `llamalibs.go`, `dllpath_windows.go`, `dllpath_other.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`, `recall_watcher_cli.go`, `recall_routing.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`, `.claude/skills/bloodhound/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
@@ -244,7 +244,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-PtyHost.md → `ptyhost_test.go`
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
 - [x] test-DirLink.md → `dirlink_test.go`
-- [x] test-LlamaLibs.md → `llamalibs_test.go`
+- [x] test-LlamaLibs.md → `llamalibs_test.go`, `dllpath_windows_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`
 

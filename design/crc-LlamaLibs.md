@@ -1,5 +1,5 @@
 # LlamaLibs
-**Requirements:** R2966, R2967, R2968, R2969, R2970
+**Requirements:** R2966-2970, R3485
 
 Provisions the llama.cpp shared libraries the yzma engine `dlopen`s at
 runtime. Selects the backend, downloads the matching prebuilt release into the
@@ -32,12 +32,21 @@ pulled.
 - requireLlamaLibs(libDir) (package-level, embed.go): when a model is configured
   but libDir has no libs, return a clear error naming `ark embed install` —
   never a silent FTS fallback. (R2970)
+- addDllSearchDir(libDir) (package-level, `dllpath_windows.go` /
+  `dllpath_other.go`): on Windows, `SetDllDirectoryW(libDir)` so a DLL loaded
+  by full path from libDir finds its sibling DLLs (`ggml-base.dll`, the MSVC
+  runtime); Windows otherwise searches only the exe's dir, System32 and PATH.
+  Process-wide, so it also covers yzma's later backend load. Called by
+  `ensureLlamaLoaded` before yzma `Load`; a failure aborts the load with an
+  error naming libDir. Never edits PATH. No-op off Windows. (R3485)
 
 ## Collaborators
 - Config: reads the `[embedding]` lib_dir/backend/llama_version keys
 - net/http + archive/tar + archive/zip + compress/gzip (stdlib): the fetch and extract
-- embed engine (embed.go): `ensureLlamaLoaded` calls yzma `Load(LibDir())`; the
+- embed engine (embed.go): `ensureLlamaLoaded` calls `addDllSearchDir` then
+  yzma `Load(LibDir())`; the
   Librarian loads the model only after `requireLlamaLibs` passes
+- golang.org/x/sys/windows: `SetDllDirectory` (Windows only)
 - Setup (`ark setup`) / `ark embed install`: invoke Provision()
 
 ## Sequences

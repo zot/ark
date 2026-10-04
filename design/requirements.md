@@ -4842,6 +4842,7 @@ reason.
 - **R2968:** `[embedding] llama_version` pins the llama.cpp release build to provision (within yzma's tested range), keeping release builds reproducible.
 - **R2969:** Provisioning downloads the libs for `(platform, backend, version)` into `lib_dir`; it runs during `ark setup` and as a standalone command, is idempotent (skipped when present unless an upgrade is requested), and may fetch the GGUF model when absent.
 - **R2970:** When a `model` is configured but `lib_dir` lacks the libs, embedding operations fail with a clear error naming the provisioning command — not a silent drop to FTS-only.
+- **R3485:** On Windows, before the llama.cpp libraries are loaded, `lib_dir` is added to the process DLL search path (`SetDllDirectoryW`) so the libs resolve their sibling DLLs, including the backends loaded later; a failure aborts the load with an error naming `lib_dir`, and `PATH` is never edited. A no-op elsewhere.
 
 ## Feature: Pure-Go build & cross-platform release
 **Source:** specs/migrations/yzma-embedding.md

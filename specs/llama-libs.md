@@ -17,6 +17,14 @@ The user downloads one binary; ark assembles the rest.
 ### Lib directory
 - `[embedding] lib_dir` (default `<dir>/lib`, beside the index) holds the
   llama.cpp shared libs. The engine loads from there at startup.
+- On Windows, a DLL loaded by full path does not get its own folder searched
+  for *its* dependencies (Windows looks in the executable's directory,
+  System32 and `PATH`), so `lib\ggml.dll` could not find `lib\ggml-base.dll`
+  or the MSVC runtime beside it. Before loading, ark therefore adds `lib_dir`
+  to the process DLL search path (`SetDllDirectoryW`). This is process-wide,
+  so it also covers the backend DLLs llama.cpp loads later. If the call
+  fails, loading fails with an error naming `lib_dir`. Ark does not edit
+  `PATH`. Other platforms need no step.
 
 ### Backend selection
 - `[embedding] backend` chooses the llama.cpp build: `cpu`, `vulkan`, `cuda`,

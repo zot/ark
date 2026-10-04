@@ -22,3 +22,12 @@ dir. Found live on Windows 2026-10-04: ggml-org's Windows zips are flat
 **Expected:** `llama.dll` lands directly in dest, with no `llama-b1/` directory created
 **Refs:** crc-LlamaLibs.md
 **Code:** llamalibs_test.go
+
+## Test: the lib dir joins the Windows DLL search path
+**Purpose:** addDllSearchDir makes libDir the process DLL directory, so `lib\ggml.dll` resolves `lib\ggml-base.dll` beside it (R3485). Invisible when violated off the VM: nothing on Linux loads a DLL, and on Windows the failure only reads as "The specified module could not be found" at embed time.
+**Input:** Windows only (`//go:build windows`). A temp dir passed to addDllSearchDir; the default search order is restored afterwards with `SetDllDirectoryW(NULL)`.
+**Expected:** addDllSearchDir returns nil and `GetDllDirectoryW` reports the temp dir
+**Refs:** crc-LlamaLibs.md
+**Code:** dllpath_windows_test.go
+**Fire alarm:** make the Windows addDllSearchDir return nil without calling SetDllDirectory (the pre-fix behavior); the test goes red with GetDllDirectoryW reporting an empty directory instead of the temp dir
+**Inject:** dllpath_windows.go:addDllSearchDir

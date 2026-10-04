@@ -160,24 +160,31 @@ and unknown items carry the negative marker rather than a false green.
 - **Item 6 — llama.cpp embedding provisioning on Windows.** **SPLIT
       (2026-10-04.)** Measured on the VM: provisioning dropped every file of
       ggml-org's flat Windows zips (fixed, 6.1); with the files in place,
-      `ggml.dll` still will not load on a clean Windows, which has no MSVC
-      runtime (6.2); and auto-detection picked Vulkan on a VM with no Vulkan
-      device (6.3). See Item 6.
+      `ggml.dll` will not load until Windows can find its dependencies in
+      `lib\` (6.6) *and* the MSVC runtime is present (6.2). With both supplied
+      by hand, embedding runs end to end on the VM. See Item 6.
   - [x] ~~**6.1 — extract flat Windows zips.**~~ **LANDED (2026-10-04.)**
         `extractZip` strips a release directory only when every entry shares
         one. R2969, `test-LlamaLibs.md`; live on the VM, 30 DLLs in `lib\`.
   - [ ] **6.2 — the MSVC runtime, app-local.** **OPEN (not queued.)** Place
         `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` in
-        `~/.ark\lib` when System32 lacks them. Source undecided: ark's Windows
-        release zip, or extracted from Microsoft's redistributable.
-  - [ ] **6.3 — auto-detection requires a real Vulkan device.** **OPEN (not
-        queued.)** The loader alone is not a device; with none, choose the CPU
-        build.
+        `~/.ark\lib` when System32 lacks them. Confirmed required (removing
+        them alone brings the failure back). Source undecided; options in
+        Item 6.
+  - [x] ~~**6.3 — auto-detection requires a real Vulkan device.**~~
+        **ASSESSED (2026-10-04): harmless.** `auto` does pick the Vulkan build
+        on a GPU-less VM, but that zip also ships the CPU backends and ggml
+        uses whichever finds a device; it embedded on the CPU with no error.
   - [ ] **6.4 — test on Windows, CPU path.** **OPEN (not queued.)** The VM as it
         is: no GPU driver, no MSVC runtime. Embedding must run end to end.
   - [ ] **6.5 — test on Windows, GPU path.** **OPEN (not queued.)** Needs the
         host's NVIDIA card passed through to the VM (Item 6 has the host
         facts).
+  - [x] ~~**6.6 — find dependencies in `lib\`.**~~ **LANDED (2026-10-04,
+        R3485.)** `addDllSearchDir` sets the lib dir as the process DLL
+        directory (`SetDllDirectoryW`) before yzma loads; a DLL loaded by full
+        path does not search its own folder. Live on the VM: the model loads
+        with no `PATH` change, and the Windows test's fire alarm rang.
 - [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
       Windows install path, beside `ark setup`, not replacing it: a portable
       package whose manifest declares the VC++ redistributable as a dependency.
@@ -614,16 +621,44 @@ behind the one before it:
    entry flattened to nothing, the download "completed", and only the post-check
    noticed an empty `lib\`. A zip can be pre-scanned, so flattening is now
    decided per archive; the tar path is unchanged.
-2. **`ggml.dll` will not load (6.2).** With all 30 DLLs present, loading fails
-   with "The specified module could not be found", which on Windows names a
-   missing *dependency*. A clean Windows has no MSVC runtime: `vcruntime140.dll`,
-   `vcruntime140_1.dll` and `msvcp140.dll` are all absent from System32.
-   Diagnosis by elimination, not yet confirmed by supplying them.
-3. **Vulkan chosen with no Vulkan device (6.3).** The VM's only GPU is a VirtIO
-   display adapter with no Vulkan driver, yet `auto` resolved to `vulkan`; the
-   Vulkan loader (`vulkan-1.dll`) is present, and that is likely what the
-   detection saw. A machine with no usable GPU is common on Windows (VMs, office
-   laptops) and should get the CPU build.
+2. **`ggml.dll` will not load (6.6 and 6.2).** With all 30 DLLs present,
+   loading fails with "The specified module could not be found", which on
+   Windows names a missing *dependency*. Two causes, each sufficient alone:
+   - **The search path (6.6).** yzma loads `lib\ggml.dll` by full path through
+     plain `LoadLibrary`, and Windows then looks for that DLL's own imports
+     (`ggml-base.dll`, the runtime) in the *application's* directory, System32
+     and `PATH`, never in the DLL's folder. Even an installed runtime would not
+     have rescued `ggml-base.dll`.
+   - **The MSVC runtime (6.2).** Read from the DLLs' import tables, every
+     llama.cpp DLL imports `msvcp140.dll`, `vcruntime140.dll` and
+     `vcruntime140_1.dll`, and a clean Windows has none of them. (The
+     `api-ms-win-crt-*` imports are the Universal CRT, part of Windows 10+;
+     `libomp140` ships in the zip.)
+
+   Confirmed both ways: with `lib\` on `PATH` and the three runtime DLLs placed
+   in `lib\`, the model loads and 159 chunks embed in about four seconds;
+   removing only the runtime DLLs brings the failure back.
+3. **Vulkan chosen with no Vulkan device (6.3, harmless).** The VM's only GPU is
+   a VirtIO display adapter with no Vulkan driver, yet `auto` resolved to
+   `vulkan`, likely because the Vulkan loader (`vulkan-1.dll`) is present. It
+   does no harm: the Vulkan zip carries the CPU backends too, and ggml falls back
+   to them.
+
+**Where the runtime DLLs could come from (6.2, undecided).** conda-forge's
+`vc14_runtime` package is a pinned, hash-checkable archive of Microsoft's
+redistributable DLLs (version 14.51.36247 carries all three, 870 KB together),
+fetched over plain HTTPS. Three ways to use it, or any other source:
+
+- **Bundled into ark's Windows binary at release time.** The Makefile fetches
+  the package once against a pinned SHA-256 and the three DLLs ride in the
+  Windows bundle; provisioning copies them into `lib\` when System32 lacks them.
+  No download at install time and no new Go dependency; about 870 KB on the
+  Windows binary only.
+- **Downloaded at provision time from conda-forge.** Pinned URL and SHA-256,
+  like the model; but a `.conda` file is a zip of zstd-compressed tars, which
+  needs a zstd decoder ark does not currently import.
+- **Re-hosted as an asset on ark's own GitHub release**, downloaded the same
+  pinned way. No new dependency, but ark's release process must carry it.
 
 **Why app-local for the runtime.** Windows has no apt-style dependency resolution
 for a plain installer: MSI, Inno Setup and WiX bundle their prerequisites and run

@@ -91,6 +91,10 @@ func ensureLlamaLoaded(libDir string) error {
 	if llamaLoaded {
 		return nil
 	}
+	// CRC: crc-LlamaLibs.md | R3485 -- Windows: let the libs find their sibling DLLs in libDir
+	if err := addDllSearchDir(libDir); err != nil {
+		return err
+	}
 	if err := yz.Load(libDir); err != nil {
 		return fmt.Errorf("load llama.cpp libraries from %s: %w", libDir, err)
 	}
