@@ -161,22 +161,28 @@ and unknown items carry the negative marker rather than a false green.
       (2026-10-04.)** Measured on the VM: provisioning dropped every file of
       ggml-org's flat Windows zips (fixed, 6.1); with the files in place,
       `ggml.dll` will not load until Windows can find its dependencies in
-      `lib\` (6.6) *and* the MSVC runtime is present (6.2). With both supplied
-      by hand, embedding runs end to end on the VM. See Item 6.
+      `lib\` (6.6) *and* the MSVC runtime is present (6.2). Both landed, and
+      embedding now runs end to end on a clean Windows (6.4). Only the GPU path
+      (6.5) remains. See Item 6.
   - [x] ~~**6.1 — extract flat Windows zips.**~~ **LANDED (2026-10-04.)**
         `extractZip` strips a release directory only when every entry shares
         one. R2969, `test-LlamaLibs.md`; live on the VM, 30 DLLs in `lib\`.
-  - [ ] **6.2 — the MSVC runtime, app-local.** **OPEN (not queued.)** Place
-        `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` in
-        `~/.ark\lib` when System32 lacks them. Confirmed required (removing
-        them alone brings the failure back). Source undecided; options in
-        Item 6.
+  - [x] ~~**6.2 — the MSVC runtime, app-local.**~~ **LANDED (2026-10-04,
+        R3486.)** Every provisioning run checks System32 and `lib\` for
+        `msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`; when any is in
+        neither, it fetches ark's pinned runtime zip (GitHub release
+        `msvc-runtime-14.51.36247`, Microsoft-signed DLLs) into `lib\`. Runs
+        even when the libs were already present, so existing installs heal.
   - [x] ~~**6.3 — auto-detection requires a real Vulkan device.**~~
         **ASSESSED (2026-10-04): harmless.** `auto` does pick the Vulkan build
         on a GPU-less VM, but that zip also ships the CPU backends and ggml
         uses whichever finds a device; it embedded on the CPU with no error.
-  - [ ] **6.4 — test on Windows, CPU path.** **OPEN (not queued.)** The VM as it
-        is: no GPU driver, no MSVC runtime. Embedding must run end to end.
+  - [x] ~~**6.4 — test on Windows, CPU path.**~~ **ASSESSED (2026-10-04.)** On
+        the clean VM (no GPU driver, no MSVC runtime), a fresh `ark setup`
+        provisioned the libs, fetched the runtime and the model, and `ark serve`
+        embedded 156 chunks on the CPU backend with nothing done by hand. On an
+        install whose libs predate 6.2, `ark embed install` fetched only the
+        runtime, and a second run fetched nothing.
   - [ ] **6.5 — test on Windows, GPU path.** **OPEN (not queued.)** Needs the
         host's NVIDIA card passed through to the VM (Item 6 has the host
         facts).

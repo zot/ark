@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,10 +57,20 @@ func (l *LlamaLibs) LibDir() string { return l.libDir }
 // Provision downloads the (platform, backend, version) llama.cpp release
 // into the lib dir when it is not already present. Idempotent: a populated
 // lib dir is skipped unless force requests a re-download. R2969
+//
+// The MSVC runtime step runs on every call, after the libs step, so an
+// install whose libs are already present still gets its runtime. R3486
 func (l *LlamaLibs) Provision(force bool) error {
-	if !force && llamaLibsInstalled(l.libDir) {
-		return nil
+	if force || !llamaLibsInstalled(l.libDir) {
+		if err := l.provisionLibs(); err != nil {
+			return err
+		}
 	}
+	return ensureMSVCRuntime(l.libDir)
+}
+
+// provisionLibs downloads and extracts the llama.cpp release. R2969
+func (l *LlamaLibs) provisionLibs() error {
 	backend := l.resolveBackend()
 	baseURL, filename, err := llamaAsset(runtime.GOARCH, runtime.GOOS, backend, l.version)
 	if err != nil {
@@ -75,6 +86,85 @@ func (l *LlamaLibs) Provision(force bool) error {
 	}
 	if !llamaLibsInstalled(l.libDir) {
 		return fmt.Errorf("provision completed but %s is missing from %s", llamaLibName(), l.libDir)
+	}
+	return nil
+}
+
+// The MSVC runtime the llama.cpp Windows DLLs import. ark publishes the three
+// Microsoft-signed DLLs as a flat zip; the hash pins exactly that zip. Only an
+// x64 build is published. R3486
+const (
+	msvcRuntimeURL    = "https://github.com/zot/ark/releases/download/msvc-runtime-14.51.36247/msvc-runtime-14.51.36247-win-x64.zip"
+	msvcRuntimeSHA256 = "c8971390451eb8003035d8f0fa44b27e2fec200e96e5e662bd9d1ecd633b9083"
+	msvcRuntimeGOOS   = "windows"
+	msvcRuntimeGOARCH = "amd64"
+	msvcRuntimeRemedy = "retry `ark embed install`, or install the Microsoft Visual C++ Redistributable (x64)"
+)
+
+// msvcRuntimeDLLs are the runtime DLLs every provisioned llama.cpp DLL
+// imports (read from their PE import tables). R3486
+var msvcRuntimeDLLs = []string{"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}
+
+// ensureMSVCRuntime fetches the MSVC runtime into libDir when windows/amd64
+// lacks it. A clean Windows has none of the three DLLs and ggml.dll then
+// fails to load; most machines already have them, so nothing is fetched
+// unless one is missing. A no-op on every other platform.
+// CRC: crc-LlamaLibs.md | R3486
+func ensureMSVCRuntime(libDir string) error {
+	if runtime.GOOS != msvcRuntimeGOOS || runtime.GOARCH != msvcRuntimeGOARCH {
+		return nil
+	}
+	sysDir, err := systemDir()
+	if err != nil {
+		// Without the system dir only libDir counts; an extra fetch is harmless.
+		log.Printf("llamalibs: system directory unknown, checking %s only: %v", libDir, err)
+		sysDir = ""
+	}
+	missing := missingMSVCRuntime(sysDir, libDir)
+	if len(missing) == 0 {
+		return nil
+	}
+	log.Printf("llamalibs: MSVC runtime missing (%s); fetching into %s", strings.Join(missing, ", "), libDir)
+	if err := fetchMSVCRuntime(msvcRuntimeURL, msvcRuntimeSHA256, libDir); err != nil {
+		return err
+	}
+	if still := missingMSVCRuntime(sysDir, libDir); len(still) > 0 {
+		return fmt.Errorf("MSVC runtime fetched but %s still missing from %s; %s", strings.Join(still, ", "), libDir, msvcRuntimeRemedy)
+	}
+	return nil
+}
+
+// missingMSVCRuntime returns the runtime DLLs present in neither sysDir nor
+// libDir. An empty sysDir is not searched. R3486
+func missingMSVCRuntime(sysDir, libDir string) []string {
+	var missing []string
+	for _, name := range msvcRuntimeDLLs {
+		if fileExists(libDir, name) || (sysDir != "" && fileExists(sysDir, name)) {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	return missing
+}
+
+func fileExists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// fetchMSVCRuntime downloads the runtime zip at url, verifies it against
+// wantSHA (SHA-256), and extracts it into libDir. All three DLLs are extracted even when
+// only one was missing, so libDir holds one consistent runtime version. The
+// download goes through a temp file in libDir and a mismatch never reaches
+// the extract, so a bad zip writes no DLL. R3486
+func fetchMSVCRuntime(url, wantSHA, libDir string) error {
+	zipPath := filepath.Join(libDir, path.Base(url))
+	defer os.Remove(zipPath)
+	if err := downloadFileVerified(url, zipPath, wantSHA); err != nil {
+		return fmt.Errorf("fetch MSVC runtime: %w; %s", err, msvcRuntimeRemedy)
+	}
+	if err := extractZip(zipPath, libDir); err != nil {
+		return fmt.Errorf("extract MSVC runtime into %s: %w; %s", libDir, err, msvcRuntimeRemedy)
 	}
 	return nil
 }

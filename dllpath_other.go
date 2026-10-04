@@ -8,3 +8,10 @@ package ark
 func addDllSearchDir(libDir string) error {
 	return nil
 }
+
+// systemDir has no meaning off Windows; ensureMSVCRuntime returns before
+// asking for it.
+// CRC: crc-LlamaLibs.md | R3486
+func systemDir() (string, error) {
+	return "", nil
+}

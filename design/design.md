@@ -1214,3 +1214,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T284: R323 retired by R3461 (2026-09-24 setup-links: setup links skills by directory link, no copy)
 - T285: R324 retired by R3461 (2026-09-24 setup-links: ui skill linked via glob, not copied)
 - T286: R325 retired by R3462 (2026-09-24 setup-links: agents install by one directory link ~/.claude/agents/ark, no copy)
+- [ ] O219: No automated test that LlamaLibs.Provision runs the MSVC runtime step on the libs-already-present path (R3486): ensureMSVCRuntime returns before doing anything off windows/amd64, and the root test binary does not cross-compile to Windows (see O217), so the placement is proven only by construction (Provision has no early return) and by the live dockur-VM run. Close with a windows-tagged Provision test once O217's cross-compile blocker is gone.

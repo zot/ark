@@ -805,7 +805,7 @@ llama.cpp shared libs and needs only the `[embedding]` config.
 | `bench tags`   | `--ctx N` (default 2048), `--parallel N` (default 8) | Embed every (tag,value) compound, compare batch vs single          |
 | `bench chunks` | as above                                             | Sample 200 chunks via file-first sampling, compare batch vs single |
 | `validate`     | `--fix`, `-v`                                        | Cross-check EC/EF records against FTS chunks                       |
-| `install`      | `--force`, `--backend B`, `--version bNNNN`          | Provision the llama.cpp libs into the lib dir (R2969); `--force` re-downloads, flags override `[embedding]` backend/llama_version |
+| `install`      | `--force`, `--backend B`, `--version bNNNN`          | Provision the llama.cpp libs into the lib dir (R2969); `--force` re-downloads, flags override `[embedding]` backend/llama_version. On Windows x64 it also fetches the MSVC runtime DLLs into the lib dir when neither System32 nor the lib dir has them, even when the libs were already present (R3486) |
 
 `embed validate` exits 1 if any problem is found (orphan EC, missing
 EC, orphan EF, dimension inconsistency); `--fix` deletes orphan EC,

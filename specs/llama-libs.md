@@ -26,6 +26,28 @@ The user downloads one binary; ark assembles the rest.
   fails, loading fails with an error naming `lib_dir`. Ark does not edit
   `PATH`. Other platforms need no step.
 
+### MSVC runtime (Windows)
+- Every llama.cpp DLL ark provisions on Windows imports three Microsoft
+  Visual C++ runtime DLLs: `msvcp140.dll`, `vcruntime140.dll` and
+  `vcruntime140_1.dll`. A clean Windows install has none of them, and
+  without them `ggml.dll` fails to load. (The `api-ms-win-crt-*` imports are
+  the Universal CRT, part of Windows 10 and later, and need nothing.)
+- Most machines already have the runtime, so ark fetches it only when it is
+  missing. On every provisioning run, including one where the llama.cpp libs
+  are already present (so an existing install gets repaired), ark checks the
+  system directory (`GetSystemDirectory`, normally `System32`) and `lib_dir`
+  for each of the three. When any one is in neither, ark downloads its own
+  published runtime zip (Microsoft-signed DLLs, a pinned version, checked
+  against a pinned SHA-256) and extracts the three DLLs into `lib_dir`, where
+  the DLL search path above finds them. When all three are present nothing is
+  fetched, `force` included.
+- A failed download or a checksum mismatch aborts provisioning with an error
+  saying what failed and how to fix it: retry `ark embed install`, or install
+  the Microsoft Visual C++ Redistributable (x64). Nothing from a mismatched
+  download is extracted.
+- Only an x64 runtime zip is published. On Windows on ARM64 the step does
+  nothing, and other platforms need no step.
+
 ### Backend selection
 - `[embedding] backend` chooses the llama.cpp build: `cpu`, `vulkan`, `cuda`,
   `metal`, `rocm`, or `auto`.

@@ -21,3 +21,10 @@ func addDllSearchDir(libDir string) error {
 	}
 	return nil
 }
+
+// systemDir is the Windows system directory (normally System32), where an
+// installed MSVC runtime lives.
+// CRC: crc-LlamaLibs.md | R3486
+func systemDir() (string, error) {
+	return windows.GetSystemDirectory()
+}
