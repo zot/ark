@@ -246,6 +246,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DirLink.md → `dirlink_test.go`
 - [x] test-LlamaLibs.md → `llamalibs_test.go`, `dllpath_windows_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
+- [x] crc-WSLBridge.md → `cmd/ark/wsl.go`, `cmd/ark/wsl_windows.go`, `cmd/ark/wsl_other.go`
+- [x] test-WSLBridge.md → `cmd/ark/wsl_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`
 
 ### Sequences
@@ -260,6 +262,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
 - [ ] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`
+- [x] seq-wsl.md → `cmd/ark/wsl.go`, `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`, `db.go`
 - [x] seq-parallel-refresh.md → `indexer.go`
 - [x] seq-file-change.md → `server.go`, `watcher.go`, `indexer.go`, `search.go`, `store.go`
@@ -1217,3 +1220,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O219: No automated test that LlamaLibs.Provision runs the MSVC runtime step on the libs-already-present path (R3486): ensureMSVCRuntime returns before doing anything off windows/amd64, and the root test binary does not cross-compile to Windows (see O217), so the placement is proven only by construction (Provision has no early return) and by the live dockur-VM run. Close with a windows-tagged Provision test once O217's cross-compile blocker is gone.
 - T287: R2967 retired by R3487 (2026-10-04 windows-cuda: Windows auto prefers Vulkan and never picks CUDA)
 - [ ] O220: downloadAndExtract caps each archive at a 10-minute http.Client timeout. The Windows CUDA archives are large (b9592: llama 12.4 zip 248 MB, cudart 12.4 zip 373 MB), so explicit backend = "cuda" on Windows fails on links slower than about 0.6 MB/s with a timeout rather than a size-aware message. Not changed in the windows-cuda pass (R3489) because no live measurement says the cap bites; revisit if a Windows CUDA install times out. Vulkan (~38 MB) is unaffected.
+- [ ] O221: The WSL bridge's Windows-only wiring has no automated test: parentExeName (toolhelp snapshot, R3495), wslPrepare's environment scrub and child marker (R3497), and the re-exec of the real ark.exe under WSL interop (R3505) need a Windows process launched from WSL2. The pure decision (wslModeOn), the translators, the filter, runWSLFiltered (driven with /bin/sh as the child) and the wsl-init script (run under sh in a temp HOME) are tested on Linux; the rest is proven by a live run on the windows-gpu VM with WSL2. Also unmeasured there: how Ctrl-C reaches an interop-launched ark.exe and its child, and whether passing os.Stdin through keeps luhmann attach's console usable. Disproportionate to automate: needs Windows plus WSL2. R3495, R3497, R3505.
+- [ ] O222: WSL mode does not check the working directory. When Claude's cwd is on the Linux filesystem (not under a drive mount), WSL hands ark.exe a \\wsl.localhost\<distro>\... UNC cwd, and relative path arguments then name files the server indexes under that UNC path, if at all. specs/wsl.md says projects belong under /mnt/c and refuses absolute WSL-native paths (R3500) but says nothing about the cwd. Enhancement: refuse or warn in WSL mode when the cwd is a \\wsl.localhost or \\wsl$ path. Needs the live VM to confirm the cwd shape first.

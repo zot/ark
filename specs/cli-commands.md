@@ -105,6 +105,7 @@ so no agent types a routing address either. Canonical:
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved [--reason KIND]`                                                                                         | optional                 | lists U records with why; `--reason` narrows to one  |
 | `update`           | `update [--no-exe]`                                                                                                  | none                     | refresh install to latest GitHub release; gripes on a symlinked binary; `--no-exe` refreshes assets from the running bundle only (details below) |
+| `wsl-init`         | `wsl-init`                                                                                                           | none                     | Windows `ark.exe` only; prints a `sh` script to `eval` inside WSL2 (details below) |
 | `version`          | `version`                                                                                                           | none                     | prints `ark <version>` (from README.md)              |
 
 "Server" column:
@@ -1401,6 +1402,33 @@ own bundle, downloading nothing for the executable and assuming the
 running exe is already current — the developer case where `~/.ark/ark`
 links to a freshly built binary. It stays manifest-aware, never replaces a
 link with a copy, and proceeds normally on a symlinked binary.
+
+### `wsl-init` — set ark up inside WSL2
+
+```
+eval "$(/mnt/c/Users/<you>/.ark/ark.exe wsl-init)"
+```
+
+Run inside WSL2 against the Windows install. `wsl-init` **prints** a POSIX
+`sh` script and creates nothing itself (a Windows process cannot make Linux
+symlinks). The script, safe to re-run, makes `~/.ark/` a real directory,
+writes `~/.ark/ark` as a shim that runs the Windows `ark.exe` (passing the
+drive mounts it reads from `/proc/mounts` as `ARK_WSL_MOUNTS`, and
+`ARK_WSL=1`, through `WSLENV`), symlinks every other entry of the Windows
+`.ark` into `~/.ark/` except `ark.exe`, and links `~/.claude/skills/<name>`
+and `~/.claude/agents/ark` to the Windows install's skill and agent
+directories, the same link set `ark setup` makes. It never overwrites a real
+file or directory; it skips it with a warning. On a non-Windows build it
+fails. Canonical: [wsl.md](wsl.md).
+
+**Every command, from WSL.** When the Windows `ark.exe` is launched from WSL
+(its parent is `wsl.exe`, or `ARK_WSL=1`), it translates `/mnt/c/...`
+arguments (and `--flag=/mnt/c/...` values) to `C:\...`, refuses a
+WSL-native path such as `/home/you/proj`, and rewrites `C:\...` paths in its
+stdout and stderr, JSON-escaped ones included, to their `/mnt/c/...` form.
+`luhmann attach`, `nano`, `serve` and `wsl-init` run with translated
+arguments but unfiltered output. `ARK_WSL=0` turns all of this off. Details
+and limits: [wsl.md](wsl.md).
 
 ### `sources` — manage source directories
 

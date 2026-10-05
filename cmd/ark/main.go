@@ -70,7 +70,9 @@ func main() {
 	// flag accumulates them. The root then parses --dir/-v as global flags
 	// before the subcommand and routes to the matching node's Action.
 	// CRC: crc-CLITree.md | Seq: seq-cli-urfave.md#1.4 | R2916, R2923
-	args := cli.ExpandVerbosityFlags(os.Args[1:])
+	// R3505, R3506: from WSL, translate arguments and filter output (specs/wsl.md).
+	// CRC: crc-WSLBridge.md | Seq: seq-wsl.md
+	args := cli.ExpandVerbosityFlags(wslPrepare(os.Args[1:]))
 	root := buildArkCommand()
 	// R2953: order every subcommand list alphabetically so help is easy to
 	// scan. urfave renders commands in slice order; dispatch matches by name,
@@ -720,29 +722,44 @@ func provisionModelForInstall(arkDir string) {
 	}
 }
 
-// installLinks makes one directory link per bundled skill directory into
-// claudeDir/skills/ (globbed, no hardcoded list) and one link
-// claudeDir/agents/ark → ~/.ark/agents, via ark.MakeDirLink. Shared by
-// runGlobalSetup (~/.claude) and cmdSetupLocal (cwd/.claude).
-// CRC: crc-CLI.md | Seq: seq-install.md#1.6 | R3461, R3462, R3465
-func installLinks(claudeDir string) error {
+// installLink is one directory link setup makes under a .claude directory:
+// Rel is the link's slash-separated path relative to that directory, Target the
+// real directory under the ark directory it points at.
+type installLink struct {
+	Rel    string
+	Target string
+}
+
+// installLinkSet lists the links installLinks makes: one per bundled skill
+// directory (globbed, no hardcoded list) and agents/ark → <arkDir>/agents.
+// `ark wsl-init` prints links from the same list, so the two cannot drift.
+// CRC: crc-CLI.md | Seq: seq-install.md#1.6 | R3461, R3462, R3512
+func installLinkSet(arkDir string) []installLink {
+	var links []installLink
 	// R3461: one link per bundled skill directory.
 	skillDirs, _ := filepath.Glob(filepath.Join(arkDir, "skills", "*"))
 	for _, sd := range skillDirs {
-		if fi, err := os.Stat(sd); err != nil || !fi.IsDir() {
-			continue
-		}
-		link := filepath.Join(claudeDir, "skills", filepath.Base(sd))
-		if err := ark.MakeDirLink(link, sd); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: link skill %s: %v\n", filepath.Base(sd), err)
+		if fi, err := os.Stat(sd); err == nil && fi.IsDir() {
+			links = append(links, installLink{Rel: "skills/" + filepath.Base(sd), Target: sd})
 		}
 	}
 	// R3462: one link carrying the whole bundled agent set.
 	agentsSrc := filepath.Join(arkDir, "agents")
 	if fi, err := os.Stat(agentsSrc); err == nil && fi.IsDir() {
-		link := filepath.Join(claudeDir, "agents", "ark")
-		if err := ark.MakeDirLink(link, agentsSrc); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: link agents: %v\n", err)
+		links = append(links, installLink{Rel: "agents/ark", Target: agentsSrc})
+	}
+	return links
+}
+
+// installLinks makes every link installLinkSet lists into claudeDir, via
+// ark.MakeDirLink. Shared by runGlobalSetup (~/.claude) and cmdSetupLocal
+// (cwd/.claude).
+// CRC: crc-CLI.md | Seq: seq-install.md#1.6 | R3461, R3462, R3465
+func installLinks(claudeDir string) error {
+	for _, l := range installLinkSet(arkDir) {
+		link := filepath.Join(claudeDir, filepath.FromSlash(l.Rel))
+		if err := ark.MakeDirLink(link, l.Target); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: link %s: %v\n", l.Rel, err)
 		}
 	}
 	return nil

@@ -46,6 +46,7 @@ Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 | Sidecar agents (spectral, curation, recall) | spectral shipping; others growing          | `spectral-search.md`, `find-connections-substrate.md`                         |
 | Frictionless UI                             | shipping                                   | `ACCESSING-FRICTIONLESS.md`, `lua-api.md`                                     |
 | Bundle distribution                         | shipping                                   | `cli-commands.md` (bundle/setup commands)                                     |
+| Claude Code in WSL2 with ark on Windows     | verified 2026-10-05 on WSL2 (WSL 3.0.1, Ubuntu): `ark.exe` translates paths both ways when called from WSL; `ark wsl-init` sets up the Linux side | `wsl.md` |
 | Self-provisioned in-process inference | engine landed (gollama→yzma): llama.cpp via yzma purego/`dlopen`, runtime-provisioned libs (`ark embed install`), no GPU-native compile-time dep | `yzma-embedding.md`, `llama-libs.md` |
 | Cross-platform `CGO_ENABLED=0` binaries | shipping: `lmdb-go`→bbolt (store) and gollama→yzma (embedding) removed the last C dependencies; the Makefile builds CGO-free and the `release` target cross-compiles the supported `GOOS/GOARCH` targets, grafting bundled assets via `ark bundle -src` (R2971/R2972). v0.5.0 shipped (linux-amd64) | `llama-libs.md`, `record-formats.md` |
 
@@ -586,6 +587,26 @@ so user edits survive.
 **Surface.** `ark bundle`, `ark setup` (with `--local`), `ark update`,
 the `~/.ark/` directory layout, the bundle subcommands documented in
 `specs/cli-commands.md`.
+
+## Claude Code in WSL2 with ark on Windows
+
+**Motivation.** Windows users often run Claude Code inside WSL2 while
+keeping their projects on the Windows drive, since the Linux image is
+close to disposable. The ark server belongs on Windows beside those
+projects, yet Claude, on the Linux side, still needs the ark CLI, and
+the two sides spell the same file differently (`/mnt/c/...` against
+`C:\...`).
+
+**Objective.** One binary serves both sides. Claude runs the Windows
+`ark.exe` through WSL interop; `ark.exe` notices it was launched from WSL
+and translates path arguments to Windows and the paths in its output back
+to Linux, so neither Claude nor the server has to know. `ark wsl-init`
+prints a script that gives the Linux home an `~/.ark/ark` shim and links
+ark's skills and agents to the Windows install, so there are no
+WSL-specific skills to maintain.
+
+**Surface.** `ark wsl-init`, the `~/.ark/ark` shim it writes,
+`ARK_WSL` / `ARK_WSL_MOUNTS`, and `specs/wsl.md`.
 
 ## Path identity (symlink aliases)
 

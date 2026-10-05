@@ -45,6 +45,17 @@ func flatCommands() []*ucli.Command {
 			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "local", Usage: "connect the current directory to an existing install"}},
 			Action: flatSetupAction,
 		},
+		{
+			Name:  "wsl-init",
+			Usage: "print a sh script that sets ark up inside WSL2 (eval it there)",
+			Description: "Run inside WSL, with the Windows install's ark.exe:\n" +
+				"     eval \"$(/mnt/c/Users/<you>/.ark/ark.exe wsl-init)\"\n" +
+				"   The script makes ~/.ark/ark a shim that runs ark.exe, links the rest\n" +
+				"   of ~/.ark and ark's ~/.claude skills and agents to the Windows install,\n" +
+				"   and never overwrites a real file. wsl-init itself creates nothing.\n" +
+				"   Windows builds only.",
+			Action: flatDelegate(cmdWSLInit), // CRC: crc-WSLBridge.md | R3507
+		},
 		{Name: "rebuild", Usage: "drop and rebuild the entire index", Action: flatDelegate(cmdRebuild)},
 		{Name: "scan", Usage: "walk source directories, index new files", Action: flatDelegate(cmdScan)},
 		{Name: "refresh", Usage: "re-index stale files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdRefresh)},

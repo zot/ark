@@ -214,15 +214,15 @@ and unknown items carry the negative marker rather than a false green.
 - [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
       Windows install path, beside `ark setup`, not replacing it: a portable
       package whose manifest declares the VC++ redistributable as a dependency.
-- [ ] **Item 11 — Claude in WSL2, ark on Windows.** **OPEN (not queued.)**
-      The expected setup (Bill, 2026-10-05): projects on NTFS, the ark server
-      native on Windows, Claude Code inside WSL2 driving it through the ark
-      CLI. Open: how the CLI reaches the server, paths across the boundary,
-      and skills inside WSL's own `~/.claude`. WSL2 now runs on `windows-gpu`
-      (nested Hyper-V needed a named CPU model), and `ark.exe` called from
-      WSL2 reaches the Windows server; a WSL2 caller is detectable by its
-      `wsl.exe` parent. Left: path translation, the WSL `~/.claude` symlinks.
-      See Item 11.
+- [x] ~~**Item 11 — Claude in WSL2, ark on Windows.**~~ **LANDED
+      (2026-10-05, R3494-R3514.)** Projects on NTFS, the ark server native on
+      Windows, Claude Code inside WSL2 using the CLI. `ark.exe` called from
+      WSL2 detects its `wsl.exe` parent and translates paths both ways; `eval
+      "$(…/ark.exe wsl-init)"` builds the Linux side (a `~/.ark/ark` shim that
+      reads the drvfs mounts, links into the Windows install). Verified live on
+      `windows-gpu` (WSL2 needed a named CPU model there). Open: gaps O221
+      (Ctrl-C and `luhmann attach` through interop) and O222 (a working
+      directory on the Linux filesystem). See Item 11.
 - [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
       queued.)** Not verified, and an independent track: the mechanism is
       portable (fsnotify); conduct under Windows' quirks, and recovery from
@@ -872,8 +872,37 @@ inside WSL2. Three questions, none answered yet:
   tab, WSL or not, so those variables are no WSL signal either.
 - **The working directory is translated for free:** `/mnt/c/Users/zot` arrives
   as `C:\Users\zot`. Arguments and output paths are what ark must translate.
+- **DECIDED (Bill, 2026-10-05), the design:**
+  1. **Translation lives in the client only.** The `ark.exe` that WSL
+     launches detects its `wsl.exe` parent and translates; the server is
+     untouched. Arguments matching `/mnt/<letter>/…` become `<LETTER>:\…`.
+     Output is translated generically: stdout and stderr pass through a filter
+     that turns `X:\…`, including JSON's escaped `X:\\…`, into `/mnt/x/…`,
+     rather than each command converting its own paths.
+  2. **WSL-native paths are an error for now.** `/home/…` would need the
+     distro name, which does not reach the Windows process; projects belong
+     under `/mnt/c`, and the error says so.
+  3. **The WSL side is created from inside WSL**, by
+     `eval "$(/mnt/c/Users/<you>/.ark/ark.exe wsl-init)"`. `wsl-init` prints a
+     script that makes `~/.ark/ark` a shim running `ark.exe`, links the rest
+     of `~/.ark` into the Windows install, and links `~/.claude`'s ark skills
+     and agents the same way. A Windows process cannot make Linux symlinks,
+     and `wsl.exe` from Windows reaches only the default distro, which may not
+     be the user's.
 - **The WSL2 VM has no network** here (`eth0` has an address, pings fail),
   likely WSL's NAT under nesting. Interop needs none; `apt` inside will.
+
+**Verified live (2026-10-05, `windows-gpu`, WSL 3.0.1, Ubuntu).** As the WSL
+user, `eval "$(/mnt/c/Users/zot/.ark/ark.exe wsl-init)"` returned 0 and left
+`~/.ark` a real directory of links into `/mnt/c/Users/zot/.ark` plus the marked
+`ark` shim, and `~/.claude/agents/ark` and each skill linked to the Windows
+install's real directories. Then, against `ark serve` running natively:
+`~/.ark/ark status` reported the server; `files` printed `/mnt/c/Users/zot/…`
+paths (translated from `C:\…`); `fetch /mnt/c/Users/zot/.ark/tags.md`
+returned the file; `fetch /home/zot/notes.md` was refused with the message
+pointing at `/mnt/c`; and a bare `ark.exe files`, no shim, still translated,
+so the `wsl.exe` parent check works on its own. Not exercised: Ctrl-C,
+`luhmann attach`, a custom automount root (gaps O221, O222).
 
 **Getting WSL2 onto a test VM.** The test VMs are Windows guests of QEMU, which dockur runs inside a podman
 container with KVM acceleration. WSL2 runs its Linux kernel in a lightweight
