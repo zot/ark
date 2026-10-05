@@ -72,7 +72,7 @@ func embedCommand() *ucli.Command {
 // embedInstallAction provisions the llama.cpp shared libs the yzma engine
 // dlopens at runtime — the standalone half of R2969 (the other being
 // `ark setup`). Backend/version flags override the [embedding] config.
-// CRC: crc-LlamaLibs.md | R2967, R2968, R2969
+// CRC: crc-LlamaLibs.md | R3487, R2968, R2969
 func embedInstallAction(_ context.Context, c *ucli.Command) error {
 	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
 	if err != nil {

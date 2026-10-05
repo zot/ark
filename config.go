@@ -535,7 +535,7 @@ var defaultChimeTags = []string{
 // EmbeddingConfig collects the [embedding] section of ark.toml — the GGUF
 // model, the adaptive tiers, and the runtime-provisioned llama.cpp shared
 // libraries the yzma engine dlopens.
-// CRC: crc-Config.md, crc-LlamaLibs.md | R2964, R2965, R2966, R2967, R2968
+// CRC: crc-Config.md, crc-LlamaLibs.md | R2964, R2965, R2966, R3487, R2968
 type EmbeddingConfig struct {
 	// Model is the GGUF embedding model filename under the ark dir, used
 	// for chunk, tag, and query embeddings. Empty disables vector-EC.
@@ -552,7 +552,7 @@ type EmbeddingConfig struct {
 	LibDir string `toml:"lib_dir,omitempty"`
 
 	// Backend selects the llama.cpp build: auto|cpu|vulkan|cuda|metal|
-	// rocm. auto detects the platform GPU. R2967
+	// rocm. auto detects the platform GPU. R3487
 	Backend string `toml:"backend,omitempty"`
 
 	// LlamaVersion pins the llama.cpp release build to provision, within

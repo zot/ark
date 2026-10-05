@@ -7,7 +7,7 @@ package ark
 // HTTPS fetch + stdlib archive extraction, not yzma's pkg/download (which
 // drags in go-getter + the AWS/GCP SDKs for a single tarball fetch).
 //
-// CRC: crc-LlamaLibs.md | R2966, R2967, R2968, R2969, R2970
+// CRC: crc-LlamaLibs.md | R2966, R3487, R2968, R2969, R2970
 
 import (
 	"archive/tar"
@@ -21,7 +21,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,10 +33,27 @@ import (
 // Deck/Vulkan. Keeps provisioning reproducible (R2968).
 const defaultLlamaVersion = "b9592"
 
-// LlamaLibs is the lib provisioner. R2966, R2967, R2968
+// Backend names accepted by [embedding] backend. R3487
+const (
+	backendAuto   = "auto"
+	backendCPU    = "cpu"
+	backendVulkan = "vulkan"
+	backendCUDA   = "cuda"
+	backendMetal  = "metal"
+	backendROCm   = "rocm"
+)
+
+// GOOS values the backend and asset choices branch on.
+const (
+	goosWindows = "windows"
+	goosLinux   = "linux"
+	goosDarwin  = "darwin"
+)
+
+// LlamaLibs is the lib provisioner. R2966, R3487, R2968
 type LlamaLibs struct {
 	libDir  string // resolved lib_dir (R2966)
-	backend string // configured backend, "" or "auto" → resolveBackend (R2967)
+	backend string // configured backend, "" or "auto" → resolveBackend (R3487)
 	version string // pinned llama.cpp build (R2968)
 }
 
@@ -61,7 +80,7 @@ func (l *LlamaLibs) LibDir() string { return l.libDir }
 // The MSVC runtime step runs on every call, after the libs step, so an
 // install whose libs are already present still gets its runtime. R3486
 func (l *LlamaLibs) Provision(force bool) error {
-	if force || !llamaLibsInstalled(l.libDir) {
+	if force || !l.installed() {
 		if err := l.provisionLibs(); err != nil {
 			return err
 		}
@@ -69,23 +88,65 @@ func (l *LlamaLibs) Provision(force bool) error {
 	return ensureMSVCRuntime(l.libDir)
 }
 
-// provisionLibs downloads and extracts the llama.cpp release. R2969
+// installed reports whether libDir holds a complete install for the
+// configured backend.
+// CRC: crc-LlamaLibs.md | R2969, R3493
+func (l *LlamaLibs) installed() bool {
+	return l.installedOn(runtime.GOOS, runtime.GOARCH, cudaDriverVersion)
+}
+
+// installedOn is installed for a given platform and driver probe. The llama
+// lib is always required; on Windows an explicit cuda backend also needs the
+// CUDA runtime of the build the driver selects, so a lib dir holding the
+// llama.cpp DLLs without it is provisioned again. A selection error counts as
+// not installed, so provisionLibs reports it.
+// CRC: crc-LlamaLibs.md | R2969, R3493
+func (l *LlamaLibs) installedOn(goos, arch string, driver func() (cudaVersion, bool)) bool {
+	if !llamaLibsInstalled(l.libDir) {
+		return false
+	}
+	if goos != goosWindows || l.backend != backendCUDA {
+		return true
+	}
+	rel, err := llamaAsset(arch, goos, backendCUDA, l.version, driver)
+	if err != nil {
+		return false
+	}
+	return rel.marker == "" || fileExists(l.libDir, rel.marker)
+}
+
+// provisionLibs downloads and extracts every archive of the llama.cpp
+// release.
+// CRC: crc-LlamaLibs.md | R2969, R3489
 func (l *LlamaLibs) provisionLibs() error {
 	backend := l.resolveBackend()
-	baseURL, filename, err := llamaAsset(runtime.GOARCH, runtime.GOOS, backend, l.version)
+	rel, err := llamaAsset(runtime.GOARCH, runtime.GOOS, backend, l.version, cudaDriverVersion)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(l.libDir, 0o755); err != nil {
 		return fmt.Errorf("create lib dir %s: %w", l.libDir, err)
 	}
-	url := baseURL + "/" + filename
-	log.Printf("llamalibs: provisioning %s/%s (%s) → %s", l.version, backend, runtime.GOOS+"/"+runtime.GOARCH, l.libDir)
-	if err := downloadAndExtract(url, l.libDir); err != nil {
-		return fmt.Errorf("provision llama.cpp libs from %s: %w", url, err)
+	log.Printf("llamalibs: provisioning %s/%s (%s) → %s: %s", l.version, backend, runtime.GOOS+"/"+runtime.GOARCH, l.libDir, strings.Join(rel.archives, ", "))
+	return fetchRelease(rel, l.libDir)
+}
+
+// fetchRelease downloads and extracts every archive of rel into libDir, then
+// checks that the llama lib and rel's marker landed.
+// CRC: crc-LlamaLibs.md | R2969, R3489
+func fetchRelease(rel llamaRelease, libDir string) error {
+	for _, name := range rel.archives {
+		// R3492: a name the release does not publish fails here, naming the URL
+		url := rel.baseURL + "/" + name
+		if err := downloadAndExtract(url, libDir); err != nil {
+			return fmt.Errorf("provision llama.cpp libs from %s: %w", url, err)
+		}
 	}
-	if !llamaLibsInstalled(l.libDir) {
-		return fmt.Errorf("provision completed but %s is missing from %s", llamaLibName(), l.libDir)
+	if !llamaLibsInstalled(libDir) {
+		return fmt.Errorf("provision completed but %s is missing from %s", llamaLibName(), libDir)
+	}
+	if rel.marker != "" && !fileExists(libDir, rel.marker) {
+		return fmt.Errorf("provision completed but %s is missing from %s", rel.marker, libDir)
 	}
 	return nil
 }
@@ -169,34 +230,155 @@ func fetchMSVCRuntime(url, wantSHA, libDir string) error {
 	return nil
 }
 
-// resolveBackend maps "auto"/"" to a concrete backend by detecting the
-// platform GPU: CUDA, else ROCm, else Metal on darwin, else Vulkan when a
-// GPU device exists, else CPU. R2967
+// resolveBackend maps "auto"/"" to a concrete backend for this host;
+// an explicit backend passes through. R3487
 func (l *LlamaLibs) resolveBackend() string {
 	switch l.backend {
-	case "", "auto":
-		switch {
-		case hasCUDA():
-			return "cuda"
-		case hasROCm():
-			return "rocm"
-		case runtime.GOOS == "darwin":
-			return "metal"
-		case hasVulkanDevice():
-			return "vulkan"
-		default:
-			return "cpu"
-		}
+	case "", backendAuto:
+		return autoBackend(runtime.GOOS, hostGPU)
 	default:
 		return l.backend
 	}
 }
 
+// gpuProbe is the set of GPU detectors autoBackend consults, injectable
+// for tests.
+type gpuProbe struct {
+	cuda, rocm, vulkan func() bool
+}
+
+// hostGPU probes the real machine.
+var hostGPU = gpuProbe{cuda: hasCUDA, rocm: hasROCm, vulkan: hasVulkanDevice}
+
+// autoBackend picks the backend "auto" means on goos. Windows prefers Vulkan
+// whenever a Vulkan device exists, NVIDIA included, and never picks CUDA: the
+// embedding model is small, so CUDA's gain is modest at ~16x the download.
+// Elsewhere: CUDA, else ROCm, else Metal on darwin, else Vulkan when a GPU
+// device exists, else CPU.
+// CRC: crc-LlamaLibs.md | R3487
+func autoBackend(goos string, p gpuProbe) string {
+	if goos == goosWindows {
+		if p.vulkan() {
+			return backendVulkan
+		}
+		return backendCPU
+	}
+	switch {
+	case p.cuda():
+		return backendCUDA
+	case p.rocm():
+		return backendROCm
+	case goos == goosDarwin:
+		return backendMetal
+	case p.vulkan():
+		return backendVulkan
+	default:
+		return backendCPU
+	}
+}
+
+// nvidiaSMI is the NVIDIA driver's status tool; it reports the driver's
+// maximum CUDA version. R3488
+const nvidiaSMI = "nvidia-smi"
+
 func hasCUDA() bool {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == goosDarwin {
 		return false
 	}
-	return commandSucceeds("nvidia-smi")
+	return commandSucceeds(nvidiaSMI)
+}
+
+// cudaVersion is a CUDA major.minor version.
+type cudaVersion struct{ major, minor int }
+
+// atLeast reports whether v is min or newer.
+func (v cudaVersion) atLeast(min cudaVersion) bool {
+	return v.major > min.major || (v.major == min.major && v.minor >= min.minor)
+}
+
+func (v cudaVersion) String() string { return fmt.Sprintf("%d.%d", v.major, v.minor) }
+
+// cudaVersionRE matches the driver's maximum CUDA version in plain nvidia-smi
+// output, e.g. "CUDA Version: 12.5". R3488
+var cudaVersionRE = regexp.MustCompile(`CUDA Version:\s*([0-9]+)(?:\.([0-9]+))?`)
+
+// parseCUDAVersion extracts the driver's maximum CUDA version from nvidia-smi
+// output; false when the field is absent.
+// CRC: crc-LlamaLibs.md | R3488
+func parseCUDAVersion(out string) (cudaVersion, bool) {
+	m := cudaVersionRE.FindStringSubmatch(out)
+	if m == nil {
+		return cudaVersion{}, false
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2]) // "" (no minor) reads as 0
+	return cudaVersion{major, minor}, true
+}
+
+// cudaDriverVersion runs plain nvidia-smi and returns the driver's maximum
+// CUDA version; false when nvidia-smi is absent, fails, or prints none.
+// CRC: crc-LlamaLibs.md | R3488
+func cudaDriverVersion() (cudaVersion, bool) {
+	if runtime.GOOS == goosDarwin {
+		return cudaVersion{}, false
+	}
+	if _, err := exec.LookPath(nvidiaSMI); err != nil {
+		return cudaVersion{}, false
+	}
+	out, err := exec.Command(nvidiaSMI).Output()
+	if err != nil {
+		return cudaVersion{}, false
+	}
+	return parseCUDAVersion(string(out))
+}
+
+// cudaBuild is one published CUDA build of the pinned llama.cpp release.
+type cudaBuild struct {
+	min cudaVersion // oldest driver CUDA version the build loads on
+	tag string      // the fragment the build's asset names carry
+}
+
+// The CUDA builds of defaultLlamaVersion, newest first. Another
+// llama_version reuses these names; if its release publishes different ones
+// the download fails naming the URL. R3489, R3490, R3492
+var (
+	winCUDABuilds   = []cudaBuild{{cudaVersion{13, 3}, "13.3"}, {cudaVersion{12, 4}, "12.4"}}
+	linuxCUDABuilds = []cudaBuild{{cudaVersion{13, 0}, "cuda-13"}, {cudaVersion{12, 0}, "cuda"}}
+)
+
+// CUDA asset names. The Windows CUDA runtime ships as its own zip, named
+// without the build tag, and carries cudart64_<major>.dll. R3489, R3490
+const (
+	winCUDALlamaAsset  = "llama-%s-bin-win-cuda-%s-x64.zip"     // version, cuda
+	winCUDARTAsset     = "cudart-llama-bin-win-cuda-%s-x64.zip" // cuda
+	winCUDARTMarker    = "cudart64_%d.dll"                      // cuda major
+	linuxCUDALlamaFile = "llama-%s-bin-ubuntu-%s-%s.tar.gz"     // version, tag, arch
+	cudaAlternative    = "set `[embedding] backend = \"vulkan\"` (or update the NVIDIA driver)"
+)
+
+// chooseCUDABuild picks the newest build the driver probe supports (a nil
+// probe reads as no version). When none fits, or the driver reported no
+// version, the error names the driver's version, the minimum a build needs,
+// and the Vulkan alternative.
+// CRC: crc-LlamaLibs.md | R3489, R3490, R3491
+func chooseCUDABuild(builds []cudaBuild, probe func() (cudaVersion, bool)) (cudaBuild, error) {
+	var driver cudaVersion
+	ok := false
+	if probe != nil {
+		driver, ok = probe()
+	}
+	if ok {
+		for _, b := range builds {
+			if driver.atLeast(b.min) {
+				return b, nil
+			}
+		}
+	}
+	oldest := builds[len(builds)-1].min
+	if !ok {
+		return cudaBuild{}, fmt.Errorf("backend %q: %s reported no CUDA version, and the llama.cpp CUDA builds need CUDA %s or newer; %s", backendCUDA, nvidiaSMI, oldest, cudaAlternative)
+	}
+	return cudaBuild{}, fmt.Errorf("backend %q: the NVIDIA driver supports CUDA %s, but the llama.cpp CUDA builds need CUDA %s or newer; %s", backendCUDA, driver, oldest, cudaAlternative)
 }
 
 func hasROCm() bool {
@@ -227,77 +409,100 @@ func commandSucceeds(name string, args ...string) bool {
 	return exec.Command(name, args...).Run() == nil
 }
 
+// llamaRelease is what provisioning fetches for one (platform, backend,
+// version): archives under baseURL, the llama.cpp build first, and an
+// optional marker file whose presence proves the install complete.
+type llamaRelease struct {
+	baseURL  string
+	archives []string
+	marker   string
+}
+
 // llamaAsset maps (arch, os, backend, version) to the ggml-org (or
-// hybridgroup builder, for arch/backend combos ggml-org lacks) release
-// base URL and asset filename. Ported from yzma's download package so the
-// slim fetcher pulls the same archives. R2969
-func llamaAsset(arch, goos, backend, version string) (baseURL, filename string, err error) {
+// hybridgroup builder, for arch/backend combos ggml-org lacks) release.
+// Ported from yzma's download package so the slim fetcher pulls the same
+// archives. cudaDriver is consulted only for the cuda backend. R2969
+// CRC: crc-LlamaLibs.md | R3489, R3490, R3491, R3492
+func llamaAsset(arch, goos, backend, version string, cudaDriver func() (cudaVersion, bool)) (llamaRelease, error) {
 	const ggml = "https://github.com/ggml-org/llama.cpp/releases/download"
 	const builder = "https://github.com/hybridgroup/llama-cpp-builder/releases/download"
-	baseURL = ggml + "/" + version
-
-	bad := func(reason string) (string, string, error) {
-		return "", "", fmt.Errorf("no prebuilt llama.cpp libs for %s/%s/%s: %s", goos, arch, backend, reason)
+	rel := llamaRelease{baseURL: ggml + "/" + version}
+	one := func(base, filename string) (llamaRelease, error) {
+		return llamaRelease{baseURL: base, archives: []string{filename}}, nil
+	}
+	bad := func(reason string) (llamaRelease, error) {
+		return llamaRelease{}, fmt.Errorf("no prebuilt llama.cpp libs for %s/%s/%s: %s", goos, arch, backend, reason)
 	}
 
 	switch goos {
-	case "linux":
+	case goosLinux:
 		switch backend {
-		case "cpu":
+		case backendCPU:
 			if arch == "arm64" {
-				return builder + "/" + version, fmt.Sprintf("llama-%s-bin-ubuntu-cpu-arm64.tar.gz", version), nil
+				return one(builder+"/"+version, fmt.Sprintf("llama-%s-bin-ubuntu-cpu-arm64.tar.gz", version))
 			}
-			filename = fmt.Sprintf("llama-%s-bin-ubuntu-x64.tar.gz", version)
-		case "cuda":
-			baseURL = builder + "/" + version
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-ubuntu-x64.tar.gz", version))
+		case backendCUDA:
+			b, err := chooseCUDABuild(linuxCUDABuilds, cudaDriver)
+			if err != nil {
+				return llamaRelease{}, err
+			}
+			archName := "x64"
 			if arch == "arm64" {
-				filename = fmt.Sprintf("llama-%s-bin-ubuntu-cuda-arm64.tar.gz", version)
-			} else {
-				filename = fmt.Sprintf("llama-%s-bin-ubuntu-cuda-13-x64.tar.gz", version)
+				archName = "arm64"
 			}
-		case "vulkan":
+			return one(builder+"/"+version, fmt.Sprintf(linuxCUDALlamaFile, version, b.tag, archName))
+		case backendVulkan:
 			if arch == "arm64" {
-				return builder + "/" + version, fmt.Sprintf("llama-%s-bin-ubuntu-vulkan-arm64.tar.gz", version), nil
+				return one(builder+"/"+version, fmt.Sprintf("llama-%s-bin-ubuntu-vulkan-arm64.tar.gz", version))
 			}
-			filename = fmt.Sprintf("llama-%s-bin-ubuntu-vulkan-x64.tar.gz", version)
-		case "rocm":
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-ubuntu-vulkan-x64.tar.gz", version))
+		case backendROCm:
 			if arch != "amd64" {
 				return bad("linux arm64 rocm unavailable")
 			}
-			filename = fmt.Sprintf("llama-%s-bin-ubuntu-rocm-7.2-x64.tar.gz", version)
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-ubuntu-rocm-7.2-x64.tar.gz", version))
 		default:
 			return bad("unknown backend")
 		}
-	case "darwin":
+	case goosDarwin:
 		switch backend {
-		case "metal", "cpu":
+		case backendMetal, backendCPU:
 			if arch != "arm64" {
 				return bad("macOS x64 metal unavailable")
 			}
-			filename = fmt.Sprintf("llama-%s-bin-macos-arm64.tar.gz", version)
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-macos-arm64.tar.gz", version))
 		default:
 			return bad("unknown backend")
 		}
-	case "windows":
-		switch backend {
-		case "cpu":
-			filename = fmt.Sprintf("llama-%s-bin-win-cpu-x64.zip", version)
-		case "vulkan":
-			filename = fmt.Sprintf("llama-%s-bin-win-vulkan-x64.zip", version)
-		case "cuda":
-			filename = fmt.Sprintf("llama-%s-bin-win-cuda-13.1-x64.zip", version)
-		case "rocm":
-			filename = fmt.Sprintf("llama-%s-bin-win-hip-radeon-x64.zip", version)
-		default:
-			return bad("unknown backend")
-		}
+	case goosWindows:
 		if arch != "amd64" {
 			return bad("windows arm64 unavailable")
+		}
+		switch backend {
+		case backendCPU:
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-win-cpu-x64.zip", version))
+		case backendVulkan:
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-win-vulkan-x64.zip", version))
+		case backendCUDA:
+			b, err := chooseCUDABuild(winCUDABuilds, cudaDriver)
+			if err != nil {
+				return llamaRelease{}, err
+			}
+			rel.archives = []string{
+				fmt.Sprintf(winCUDALlamaAsset, version, b.tag),
+				fmt.Sprintf(winCUDARTAsset, b.tag),
+			}
+			rel.marker = fmt.Sprintf(winCUDARTMarker, b.min.major)
+			return rel, nil
+		case backendROCm:
+			return one(rel.baseURL, fmt.Sprintf("llama-%s-bin-win-hip-radeon-x64.zip", version))
+		default:
+			return bad("unknown backend")
 		}
 	default:
 		return bad("unknown OS")
 	}
-	return baseURL, filename, nil
 }
 
 // downloadAndExtract fetches the archive at url and unpacks its shared

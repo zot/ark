@@ -51,9 +51,37 @@ The user downloads one binary; ark assembles the rest.
 ### Backend selection
 - `[embedding] backend` chooses the llama.cpp build: `cpu`, `vulkan`, `cuda`,
   `metal`, `rocm`, or `auto`.
-- `auto` detects the best available: CUDA if present, else ROCm, else Metal on
-  macOS, else Vulkan when a Vulkan device exists, else CPU. The Steam Deck
-  pins `vulkan` explicitly.
+- `auto` detects the best available. On Linux and macOS: CUDA if present,
+  else ROCm, else Metal on macOS, else Vulkan when a Vulkan device exists,
+  else CPU. The Steam Deck pins `vulkan` explicitly.
+- On Windows, `auto` picks Vulkan whenever a Vulkan device is present, NVIDIA
+  GPUs included, and CPU otherwise. It never picks CUDA there: ark's embedding
+  model is small, so CUDA's speedup over Vulkan is modest, while the CUDA
+  build plus its runtime is roughly sixteen times the download (hundreds of
+  MB against tens). Windows gets CUDA only from an explicit `backend = "cuda"`.
+
+### CUDA builds
+- A CUDA build only loads when the NVIDIA driver supports its CUDA version.
+  The driver's maximum is the `CUDA Version: X.Y` field of plain
+  `nvidia-smi` output, and ark reads it before choosing a CUDA build.
+- On Windows, ggml-org publishes several CUDA builds per release. For the
+  pinned release (`b9592`) these are CUDA 13.3 and CUDA 12.4. Ark picks the
+  newest one the driver supports (driver 13.3 or newer gets 13.3, 12.4 or
+  newer gets 12.4) and downloads two archives into `lib_dir`: the llama.cpp
+  build (`llama-<build>-bin-win-cuda-<cuda>-x64.zip`) and the matching CUDA
+  runtime (`cudart-llama-bin-win-cuda-<cuda>-x64.zip`, which carries
+  `cudart64_<major>.dll` and the cuBLAS DLLs). The CUDA build does not load
+  without that runtime.
+- On Linux, CUDA builds come from the hybridgroup builder. A driver whose
+  CUDA major version is 13 or newer gets the `cuda-13` build; major 12 gets
+  the unnumbered `cuda` build (CUDA 12). Both exist for x64 and arm64.
+- When the driver supports none of the builds, or `nvidia-smi` reports no
+  CUDA version, provisioning fails with an error naming the driver's CUDA
+  version (or its absence), the minimum CUDA version a build needs, and the
+  alternative: set `backend = "vulkan"`.
+- The CUDA build table is written for the pinned release. A `llama_version`
+  set to another build uses the same asset names; when that build publishes
+  different ones, the download fails with an error naming the URL it tried.
 
 ### Version pin
 - `[embedding] llama_version` names the llama.cpp release build to provision
@@ -66,6 +94,11 @@ The user downloads one binary; ark assembles the rest.
   standalone command for re-provisioning or switching backends.
 - Provisioning is idempotent: if `lib_dir` already holds the libs it is
   skipped, unless an upgrade is requested.
+- On Windows with `backend = "cuda"`, the libs count as present only when
+  `lib_dir` also holds the CUDA runtime of the build the driver selects
+  (`cudart64_12.dll` for the 12.4 build, `cudart64_13.dll` for 13.3). A lib
+  dir with the llama.cpp libs but no runtime, or a runtime for a different
+  CUDA major, is provisioned again.
 - Provisioning may also fetch the GGUF embedding model when absent.
 
 ### Missing-libs behavior

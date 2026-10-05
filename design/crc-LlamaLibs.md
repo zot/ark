@@ -1,5 +1,5 @@
 # LlamaLibs
-**Requirements:** R2966-2970, R3485, R3486
+**Requirements:** R2966, R2968-2970, R3485-3493
 
 Provisions the llama.cpp shared libraries the yzma engine `dlopen`s at
 runtime. Selects the backend, downloads the matching prebuilt release into the
@@ -7,11 +7,17 @@ lib directory beside the database, and reports clearly when libs are missing.
 
 ## Knows
 - libDir: string — `[embedding] lib_dir`, default `<dir>/lib` (R2966)
-- backend: string — `[embedding] backend`: auto|cpu|vulkan|cuda|metal|rocm (R2967)
+- backend: string — `[embedding] backend`: auto|cpu|vulkan|cuda|metal|rocm (R3487)
 - version: string — `[embedding] llama_version`, pinned llama.cpp build (R2968)
 - msvcRuntimeURL / msvcRuntimeSHA256 / msvcRuntimeDLLs (package constants): ark's
   published Windows x64 MSVC runtime zip (14.51.36247), its pinned hash, and the
   three DLL names the llama.cpp DLLs import (R3486)
+- winCUDABuilds / linuxCUDABuilds (package tables, newest first): the CUDA
+  builds of the pinned release, each with the minimum driver CUDA version it
+  needs and the fragment its asset names carry. Windows: 13.3, 12.4. Linux
+  (hybridgroup builder): `cuda-13` (13.0), `cuda` (12.0). Written for
+  `defaultLlamaVersion`; another `llama_version` reuses the names (R3489,
+  R3490, R3492)
 
 Implemented with a **slim, dependency-free downloader** (a plain `net/http`
 fetch + stdlib `archive/tar`/`archive/zip` extraction), **not** yzma's
@@ -21,9 +27,9 @@ release-asset URL/filename map is ported from yzma so the same archives are
 pulled.
 
 ## Does
-- Provision(force): if libDir lacks the libs (`llamaLibsInstalled`), resolve the
-  (platform, backend, version) ggml-org release via `llamaAsset`, download and
-  extract it into libDir (`downloadAndExtract` → tar.gz or zip); idempotent —
+- Provision(force): if libDir lacks the libs (`installed`), resolve the
+  (platform, backend, version) release via `llamaAsset` and `fetchRelease`
+  it into libDir (`downloadAndExtract` → tar.gz or zip); idempotent —
   skipped when libs are present unless `force` requests a re-download. Runs
   during `ark setup` (best-effort) and as `ark embed install`. (Model auto-fetch
   is permitted by R2969 but not implemented — the model is configured
@@ -47,9 +53,37 @@ pulled.
   lib dir holds one consistent runtime version rather than a mix. (R3486)
 - systemDir() (package-level, `dllpath_windows.go` / `dllpath_other.go`):
   `windows.GetSystemDirectory()` on Windows; "" elsewhere. (R3486)
-- resolveBackend(): when backend is `auto`/empty, detect CUDA (`nvidia-smi`),
-  else ROCm (`rocminfo`), else Metal on darwin, else Vulkan when a GPU render
-  node exists, else CPU. (R2967)
+- fetchRelease(rel, libDir) (package-level): download and extract every
+  archive of `rel` in order via `downloadAndExtract`, then require the llama
+  lib and `rel.marker`; a failed download names its URL. (R2969, R3489, R3492)
+- installed() → installedOn(goos, arch, driver probe), the injectable form:
+  `llamaLibsInstalled(libDir)`, and on Windows with an explicit
+  `cuda` backend also the marker of the build `llamaAsset` selects for the
+  driver (`cudart64_<major>.dll`); a selection error counts as not installed
+  so `provisionLibs` reports it. Other backends and platforms check the
+  llama lib only. (R2969, R3493)
+- resolveBackend(): explicit backends pass through; `auto`/empty goes to
+  `autoBackend(runtime.GOOS, hostGPU)`. (R3487)
+- autoBackend(goos, gpuProbe) (pure; probes injected): Windows → Vulkan when
+  the probe reports a Vulkan device, else CPU, never CUDA. Elsewhere → CUDA
+  (`nvidia-smi` runs), else ROCm (`rocminfo`), else Metal on darwin, else
+  Vulkan when a GPU render node exists, else CPU. `hasVulkanDevice` assumes a
+  GPU on Windows, so Windows `auto` resolves to Vulkan in practice. (R3487)
+- cudaDriverVersion() (package var, injectable): runs plain `nvidia-smi` and
+  parses it with `parseCUDAVersion`; false when it is absent or fails. (R3488)
+- parseCUDAVersion(out) (pure): the `CUDA Version: X.Y` field as a
+  cudaVersion; false when the field is missing. (R3488)
+- chooseCUDABuild(builds, driver) (pure): the first (newest) build whose
+  minimum the driver meets; otherwise an error naming the driver's CUDA
+  version or its absence, the oldest build's minimum, and
+  `backend = "vulkan"`. (R3489, R3490, R3491)
+- llamaAsset(arch, goos, backend, version, cudaDriver) → llamaRelease (pure;
+  the driver probe is called only for `cuda`): the base URL, the archives to
+  fetch (llama.cpp build first), and an optional marker file. Windows `cuda`
+  → the chosen build's llama zip plus `cudart-llama-bin-win-cuda-<cuda>-x64.zip`,
+  marker `cudart64_<major>.dll`; Linux `cuda` → the builder's `cuda-13` or
+  `cuda` tarball, no marker. A wrong asset name for a non-default version
+  surfaces as the download's HTTP error naming the URL. (R2969, R3489-3492)
 - LibDir() string: the directory yzma's `Load()` points at. (R2966)
 - requireLlamaLibs(libDir) (package-level, embed.go): when a model is configured
   but libDir has no libs, return a clear error naming `ark embed install` —

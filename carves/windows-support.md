@@ -162,8 +162,9 @@ and unknown items carry the negative marker rather than a false green.
       ggml-org's flat Windows zips (fixed, 6.1); with the files in place,
       `ggml.dll` will not load until Windows can find its dependencies in
       `lib\` (6.6) *and* the MSVC runtime is present (6.2). Both landed, and
-      embedding now runs end to end on a clean Windows (6.4). Only the GPU path
-      (6.5) remains. See Item 6.
+      embedding now runs end to end on a clean Windows (6.4), and on an NVIDIA
+      GPU through Vulkan (6.5) and, when asked for, CUDA (6.7).
+      See Item 6.
   - [x] ~~**6.1 — extract flat Windows zips.**~~ **LANDED (2026-10-04.)**
         `extractZip` strips a release directory only when every entry shares
         one. R2969, `test-LlamaLibs.md`; live on the VM, 30 DLLs in `lib\`.
@@ -183,9 +184,28 @@ and unknown items carry the negative marker rather than a false green.
         embedded 156 chunks on the CPU backend with nothing done by hand. On an
         install whose libs predate 6.2, `ark embed install` fetched only the
         runtime, and a second run fetched nothing.
-  - [ ] **6.5 — test on Windows, GPU path.** **OPEN (not queued.)** Needs the
-        host's NVIDIA card passed through to the VM (Item 6 has the host
-        facts).
+  - [x] ~~**6.5 — test on Windows, GPU path.**~~ **ASSESSED (2026-10-04),
+        Vulkan only.** On a second VM with the host's RTX 2060 Max-Q passed
+        through, ark with `backend = "vulkan"` offloaded all 13 layers to the
+        GPU and embedded 162 chunks. `auto` picks CUDA there, and that fails
+        (6.7).
+  - [x] ~~**6.7 — the CUDA asset map.**~~ **LANDED (2026-10-05, R3487-R3493;
+        R2967 retired.)** On Windows with an NVIDIA GPU, `auto` resolved to
+        `cuda` and provisioning 404'd: ark asked for `win-cuda-13.1`, while
+        llama.cpp b9592 publishes `cuda-12.4` and `cuda-13.3`, each with a
+        separate `cudart` zip ark never fetched, and a CUDA build loads only
+        if the driver supports its version. **DECIDED (Bill, 2026-10-04):** on
+        Windows `auto` picks Vulkan (or CPU) and never CUDA, since Vulkan ran
+        the whole model on the GPU for about 38 MB against roughly 620 MB for
+        CUDA. An explicit `backend = "cuda"` reads the driver's CUDA version
+        from `nvidia-smi`, takes the newest build it supports, and fetches its
+        `cudart` too; Linux picks the builder's `cuda-13` or `cuda` (12) the
+        same way. Live on the GPU VM: `auto` provisioned Vulkan; explicit
+        `cuda` with driver CUDA 12.5 took the 12.4 build and runtime, and
+        embedding ran on `CUDA0` (13/13 layers). That first CUDA run took
+        about 35 s against Vulkan's 4 s, likely one-time CUDA start-up, not
+        measured further. Leftover Vulkan DLLs are harmless: llama.cpp skips
+        the second view of the same card by PCI id.
   - [x] ~~**6.6 — find dependencies in `lib\`.**~~ **LANDED (2026-10-04,
         R3485.)** `addDllSearchDir` sets the lib dir as the process DLL
         directory (`SetDllDirectoryW`) before yzma loads; a DLL loaded by full
@@ -194,6 +214,15 @@ and unknown items carry the negative marker rather than a false green.
 - [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
       Windows install path, beside `ark setup`, not replacing it: a portable
       package whose manifest declares the VC++ redistributable as a dependency.
+- [ ] **Item 11 — Claude in WSL2, ark on Windows.** **OPEN (not queued.)**
+      The expected setup (Bill, 2026-10-05): projects on NTFS, the ark server
+      native on Windows, Claude Code inside WSL2 driving it through the ark
+      CLI. Open: how the CLI reaches the server, paths across the boundary,
+      and skills inside WSL's own `~/.claude`. WSL2 now runs on `windows-gpu`
+      (nested Hyper-V needed a named CPU model), and `ark.exe` called from
+      WSL2 reaches the Windows server; a WSL2 caller is detectable by its
+      `wsl.exe` parent. Left: path translation, the WSL `~/.claude` symlinks.
+      See Item 11.
 - [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
       queued.)** Not verified, and an independent track: the mechanism is
       portable (fsnotify); conduct under Windows' quirks, and recovery from
@@ -688,6 +717,15 @@ card and has to be supplied to QEMU, and dockur's support for passthrough to a
 Windows guest is unverified. The GPU-less VM is the more valuable test bed
 first, because 6.3's fallback is what a VM or office machine gets.
 
+**What passthrough took (2026-10-04).** It works, with four laptop-specific
+fixes found in order. Waking the card from D3cold under `vfio-pci` hung the
+host, so the card is held in D0 (`vfio-pci disable_idle_d3=1`). The VBIOS read
+cleanly once the card was awake (61,952 bytes). The mobile NVIDIA driver
+refused to start without a battery, cured by a fake-battery ACPI table. And it
+still reported error 43 until the card sat behind a PCIe root port rather than
+directly on the guest's root bus; that was the decisive change. The guest then
+ran driver 556.12 with `nvidia-smi` reporting the card on a PCIe gen 3 x8 link.
+
 <a id="7"></a>
 
 ## Item 7
@@ -778,6 +816,120 @@ the manifest details, the review process for the public winget repository, and
 whether the redistributable's admin prompt is acceptable on that path. The
 dependency support was described from memory and wants checking against
 winget's documentation before this part is queued.
+
+<a id="11"></a>
+
+## Item 11
+
+**The scenario (Bill, 2026-10-05).** Windows users who run Claude Code in WSL2
+will mostly keep their projects on NTFS, since the Ubuntu image is close to
+disposable. So ark has to launch on Windows, beside the projects, while Claude,
+inside WSL2, still uses the ark CLI. That CLI path is what needs testing from
+inside WSL2. Three questions, none answered yet:
+
+1. **How the CLI reaches the server.** WSL2 can run Windows executables
+   directly (interop), so Claude could call `ark.exe`, which then dials the
+   AF_UNIX socket under `C:\Users\…\.ark` as any Windows process does. A Linux
+   `ark` inside WSL2 would have to cross the VM boundary instead; AF_UNIX
+   interop between Windows and WSL2 is believed unsupported (WSL1 had it), which
+   would leave TCP, a transport ark's CLI does not have. To verify.
+2. **Paths, both directions.** Claude works in `/mnt/c/Users/…`; ark records
+   `C:\Users\…`. Arguments reach `ark.exe` untranslated, and the Windows paths
+   in ark's output are not paths Claude's tools can open. Something translates
+   (`wslpath` does the mapping): a wrapper, or ark itself.
+3. **Skills and agents.** Claude Code inside WSL2 reads the `~/.claude` in its
+   Linux home, not the Windows one `ark setup` links into, so the WSL side needs
+   its own install of the ark skills and agents.
+
+**DECIDED (Bill, 2026-10-05):**
+
+1. **`ark.exe` through interop**, because it keeps ark a single binary. No Linux
+   build and no TCP transport for the CLI.
+2. **Paths are translated by ark, told it was called from WSL2.** Ideally
+   `ark.exe` detects the WSL2 caller by itself (how is to be measured: what a
+   process launched through interop can see in its environment or its parent).
+   Failing that, a Linux shim script that runs `ark.exe` adds an argument such
+   as `--wsl2` or sets an environment variable.
+3. **No WSL-specific skills or agents.** WSL's `~/.claude` entries are symlinks
+   into the Windows install under `/mnt/c`, and the shim from 2 covers what
+   differs.
+
+**Measured 2026-10-05 on `windows-gpu` (WSL 3.0.1, kernel
+6.18.40.1-microsoft-standard-WSL2, Ubuntu 26.04.1):**
+
+- **Question 1 is answered: the interop route works.** With `ark serve`
+  running natively under `zot`'s Windows home, `/mnt/c/…/ark.exe status` run
+  from a Linux shell inside WSL2 reached it (`server: running`, index and
+  chunks reported).
+- **Detection (decision 2) has a signal: the parent process.** A Windows
+  process launched from a Linux shell through interop has `wsl.exe` as its
+  parent. The Linux side's `WSL_DISTRO_NAME`, `WSL_INTEROP` and
+  `WSL2_GUI_APPS_ENABLED` do not reach it, because `WSLENV` is empty, so the
+  environment is no signal without a shim. It holds both for a session started
+  as `wsl.exe -e …` (non-interactive, as Claude Code's Bash tool runs) and for
+  an interactive WSL terminal in Windows Terminal (checked by Bill). The latter
+  adds `WSLENV=WT_SESSION:WT_PROFILE_ID:`, which Windows Terminal sets in any
+  tab, WSL or not, so those variables are no WSL signal either.
+- **The working directory is translated for free:** `/mnt/c/Users/zot` arrives
+  as `C:\Users\zot`. Arguments and output paths are what ark must translate.
+- **The WSL2 VM has no network** here (`eth0` has an address, pings fail),
+  likely WSL's NAT under nesting. Interop needs none; `apt` inside will.
+
+**Getting WSL2 onto a test VM.** The test VMs are Windows guests of QEMU, which dockur runs inside a podman
+container with KVM acceleration. WSL2 runs its Linux kernel in a lightweight
+Hyper-V VM, so WSL2 inside these guests is nested virtualization: Hyper-V
+inside a KVM guest. That needs the host's KVM to allow nesting and QEMU to
+pass the CPU's VT-x (`vmx`) through to the guest.
+
+**Measured 2026-10-04, on `windows-gpu`.**
+
+- The host allows it: `kvm_intel` reports `nested = Y`, and the CPU has `vmx`.
+- dockur withholds it: QEMU runs with `-cpu host,kvm=on,…,-vmx,hv_passthrough`,
+  so the guest sees no VT-x (`VMMonitorModeExtensions=False`, `SLAT=False`).
+  `VirtualMachinePlatform`, `Microsoft-Windows-Subsystem-Linux` and
+  `Microsoft-Hyper-V-All` are all disabled.
+- The switch is dockur's `VMX` environment variable, read by its base image
+  (qemus/qemu `src/proc.sh`). Unset, it defaults to `Y`, except for a Windows
+  guest, where it becomes `N` with the comment "Turn off nested virtualization
+  by default to prevent a crash caused by a recent Windows update". The
+  comment names neither the update nor the crash.
+
+**The plan.** Add `-e VMX=Y` to the chosen VM's creation script and re-create
+the container; the Windows disk lives in the storage directory and survives,
+so the experiment is cheap to try and to undo. Confirm the guest now reports
+`VMMonitorModeExtensions=True`, enable `VirtualMachinePlatform` and
+`Microsoft-Windows-Subsystem-Linux`, reboot, and run `wsl --install`. The crash
+dockur warns about is the risk to watch for on first boot.
+
+**DECIDED (Bill, 2026-10-05): `windows-gpu` is the only test VM.** A first
+attempt on the CPU-only `windows` VM got VT-x into the guest
+(`VMMonitorModeExtensions=True`, a clean boot), but after enabling the two
+features and rebooting, its sshd never answered within about 20 minutes; it was
+stopped without a look at its screen, so whether that was dockur's crash or a
+slow feature install is unknown. That VM is back on its original settings, with
+the two features still enabled on its disk. (Exit code 143 from `podman stop`
+proves nothing: a healthy dockur VM stops with it too.) Before repeating the
+step on `windows-gpu`, its storage directory was copied, sparse, while QEMU was
+stopped (22 GB on disk; `~/windows-gpu/storage.bak-20261005` on the host), so a
+bad outcome restores the working passthrough VM.
+
+**What nested Hyper-V took (2026-10-05).** Three CPU configurations, with the
+WSL features enabled each time:
+
+| QEMU `-cpu` | result |
+|---|---|
+| `host,…,+hypervisor,…,hv_passthrough` (dockur's default plus `VMX=Y`) | hangs at the firmware logo, one vCPU at 100% |
+| `host,…` with `HV=N`, then also `VM=N` | boots, Windows' own Hyper-V runs, but starting a WSL2 VM resets the guest (Kernel-Power 41, no dump) |
+| `Skylake-Client-noTSX-IBRS,kvm=on,l3-cache=on,vmx=on,mpx=off` (`CPU_MODEL`, `CPU_FLAGS`, with `VMX=Y HV=N VM=N`) | **works**: WSL2 starts, no reset |
+
+The decisive change was a named CPU model instead of `host`: `host` hands the
+guest every VMX capability of the real CPU, and KVM's nested support evidently
+cannot back all of them for a nested Hyper-V. The recipe came from
+dockur/windows#1191 (`Broadwell-noTSX-IBRS,hypervisor=off,vmx=on,…`); the model
+here is the nearest to the host's i9-10885H (Comet Lake: Skylake core, no TSX).
+Installing WSL itself needed the MSI from microsoft/WSL's GitHub releases:
+Windows' inbox `wsl.exe` is a stub, and `wsl --install` fetched nothing from an
+ssh session.
 
 ---
 
