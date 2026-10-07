@@ -511,6 +511,8 @@
 - **R271:** On SIGTERM/SIGINT, the ui-engine server shuts down before the ark DB closes
 - **R272:** (inferred) The ui-engine server is started in a goroutine so it doesn't block the ark API server
 - **R3515:** Every ui-engine start passes the names of the apps ark's bundle ships (the top-level directories under the bundle's `apps/`) as `flib.Config.BuiltinApps`, so those apps rank first when viewdef names collide; an unbundled binary passes none
+- **R3521:** `ark ui linkapp add APP` activates an app by making the one directory link `~/.ark/lua/APP` → `~/.ark/apps/APP` with the directory-link helper; `remove APP` deletes that link; nothing else is linked
+- **R3522:** Before starting the ui-engine, `ark serve` repairs activation links: an entry under `~/.ark/lua/` that is a link no longer resolving is re-made to `~/.ark/apps/<entry>` when that directory exists, and left with a log line when it does not; the repair never creates an absent entry
 
 ### ark ui Command
 - **R273:** `ark ui` (no subcommand) opens the default browser to the ui-engine's HTTP URL
@@ -530,7 +532,7 @@
 - **R276:** UI assets are embedded in the binary via zip-graft (ui-engine's bundle system), not `//go:embed`
 - **R277:** The bundle contains the full UI stack: ui-engine static site (html/), frictionless assets, and ark's own app (apps/ark/)
 - **R278:** `ark setup` extracts bundled UI assets to `~/.ark/` (html/, lua/, viewdefs/, apps/) using `bundle.ExtractBundle`
-- **R279:** `ark setup` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
+- **~~R279:~~** (Retired T288 — see R3516) `ark setup` runs linkapp to create lua/ and viewdefs/ symlinks for the ark app
 - **R280:** `ark setup` is idempotent — safe to run after every binary update, overwrites assets from the binary
 - **R281:** `ark setup` creates `~/.ark/` if it doesn't exist
 - **~~R323:~~** (Retired T284 — see R3461) `ark setup` installs the ark skill to `~/.claude/skills/ark/SKILL.md` from bundled assets
@@ -592,6 +594,9 @@
 - **R313:** Creates destination directories as needed
 - **R314:** Preserves file permissions from the bundle
 - **R315:** Recreates symlinks as symlinks (not copies)
+- **R3518:** `ark bundle` refuses a source directory that contains a symlink, naming it; the bundle ships no symlinks
+- **R3519:** `ark bundle` refuses a source directory where two apps under `apps/` ship a viewdef of the same file name, naming the viewdef and both apps
+- **R3520:** The Makefile asset pipeline deletes every symlink from the cache after layering, before bundling
 - **R316:** Removes existing files/symlinks before writing (allows overwrite)
 - **R317:** Reports each copied file to stdout
 - **R318:** If no files match the pattern, print an error and exit 1
@@ -5194,6 +5199,8 @@ reason.
 - **R3457:** When the marker is absent, `ark setup` creates `~/.ark/` if it does not exist.
 - **R3458:** `ark setup` copies the running executable into `~/.ark/` (`ark.exe` on Windows); the copy is skipped when setup is already running from `~/.ark/`.
 - **R3459:** `ark setup` extracts the bundled assets (html/, lua/, viewdefs/, apps/, skills/, agents/) into `~/.ark/`.
+- **R3516:** After extracting the bundle, `ark setup` activates every bundled app: one directory link `~/.ark/lua/<app>` → `~/.ark/apps/<app>` for each top-level directory under the bundle's `apps/`, made with the directory-link helper (symlink on Unix, junction on Windows); library apps with no `app.lua` are activated the same way
+- **R3517:** `ark update` (with or without `--no-exe`) activates an app it extracts for the first time, as setup does, and leaves every app that already existed with the activation the user left it
 - **R3460:** `ark setup` creates the database through a DB-setup function shared with `ark rebuild`, so setup does not run `ark init` and the old init→setup recursion cannot return; creating the database is what leaves the marker.
 - **R3461:** `ark setup` makes one directory link per bundled skill directory into `~/.claude/skills/`, globbing `~/.ark/skills/*` with no hardcoded list, via the directory-link helper (R3453).
 - **R3462:** `ark setup` makes one directory link `~/.claude/agents/ark` → `~/.ark/agents`, carrying the whole bundled agent set, via the directory-link helper (R3453).

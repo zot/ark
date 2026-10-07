@@ -30,6 +30,13 @@ Graft a directory onto a binary as a zip appendix.
 
 This is a build-time command used by the Makefile, not by end users.
 
+The bundle ships **no symlinks**: apps are activated at install time by
+links ark makes itself (a junction on Windows, where a standard user
+cannot create a symlink). `ark bundle` refuses a directory that contains a
+symlink, naming it, and refuses one where two apps under `apps/` ship a
+viewdef of the same file name, naming the viewdef and both apps, so the
+built-in app set is collision-free by construction.
+
 ### `ark ls`
 
 List embedded assets in the running binary.
@@ -76,7 +83,9 @@ The build pipeline layers assets from three sources:
 
 1. Build frictionless (which already bundles ui-engine assets)
 2. Use frictionless's `cp` command to extract its assets into a cache
-3. Layer ark's own assets (apps/ark/) on top
+3. Layer ark's own assets (apps/ark/) on top, then delete every symlink
+   from the cache (the frictionless image ships activation links; ark makes
+   its own at install time)
 4. Build the ark Go binary
 5. Use `ark bundle` to graft the cache onto the binary
 

@@ -222,3 +222,27 @@ func TestSymlinkedBinaryGripesAndRefreshesNothing(t *testing.T) {
 		t.Fatal("--no-exe replaced the symlinked binary")
 	}
 }
+
+// TestRefreshActivatesOnlyNewApps: a refresh activates an app it extracts for
+// the first time and leaves an existing, deactivated app deactivated. R3517
+func TestRefreshActivatesOnlyNewApps(t *testing.T) {
+	arkRoot := t.TempDir()
+	// "old" is installed but the user deactivated it (no lua/old).
+	if err := os.MkdirAll(filepath.Join(arkRoot, "apps", "old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	src := fakeAssets{files: map[string][]byte{
+		"apps/old/app.lua": []byte("-- old"),
+		"apps/new/app.lua": []byte("-- new"),
+	}}
+	u := &Updater{ArkDir: arkRoot, Out: &bytes.Buffer{}}
+	if err := u.RefreshAssets(src); err != nil {
+		t.Fatal(err)
+	}
+	if !ark.IsOurLink(filepath.Join(arkRoot, "lua", "new"), filepath.Join(arkRoot, "apps", "new")) {
+		t.Error("newly extracted app was not activated")
+	}
+	if _, err := os.Lstat(filepath.Join(arkRoot, "lua", "old")); err == nil {
+		t.Error("refresh re-activated an app the user had deactivated")
+	}
+}

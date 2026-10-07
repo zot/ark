@@ -212,7 +212,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
-- [ ] crc-CLI.md → `cmd/ark/main.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/bundlecheck.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
 - [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/session_identity.go`, `cmd/ark/link_view.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`, `cmd/ark/patterns_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
@@ -239,6 +239,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PtyAttach.md → `cmd/ark/luhmann_attach.go`, `cmd/ark/luhmann_winch_unix.go`, `cmd/ark/luhmann_winch_windows.go`
 - [x] crc-PtyBrowser.md → `pty_browser.go`
 - [x] crc-DirLink.md → `dirlink.go`, `dirlink_unix.go`, `dirlink_windows.go`
+- [x] crc-AppActivation.md → `appactivation.go`
 - [x] crc-Updater.md → `cmd/ark/update.go`, `cmd/ark/update_windows.go`, `cmd/ark/update_unix.go`, `install_manifest.go`, `modelprovision.go`
 - [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
@@ -261,7 +262,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-cli-urfave.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
-- [ ] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`
+- [x] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`
 - [x] seq-wsl.md → `cmd/ark/wsl.go`, `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`, `db.go`
 - [x] seq-parallel-refresh.md → `indexer.go`
@@ -377,6 +378,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 ### Test Designs
 - [x] test-FileScanActor.md → `filescan_test.go`
 - [x] test-BuiltinApps.md → `builtinapps_test.go`
+- [x] test-AppActivation.md → `appactivation_test.go`, `cmd/ark/bundlecheck_test.go`, `cmd/ark/update_test.go`
 - [x] test-EmbedOffSlot.md → `embed_offslot_test.go`
 - [x] test-Patterns.md → `patterns_test.go`, `cmd/ark/patterns_cli_test.go`
 - [x] test-checkpoint.md → `cmd/ark/checkpoint_test.go`
@@ -1223,3 +1225,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O220: downloadAndExtract caps each archive at a 10-minute http.Client timeout. The Windows CUDA archives are large (b9592: llama 12.4 zip 248 MB, cudart 12.4 zip 373 MB), so explicit backend = "cuda" on Windows fails on links slower than about 0.6 MB/s with a timeout rather than a size-aware message. Not changed in the windows-cuda pass (R3489) because no live measurement says the cap bites; revisit if a Windows CUDA install times out. Vulkan (~38 MB) is unaffected.
 - [ ] O221: The WSL bridge's Windows-only wiring has no automated test: parentExeName (toolhelp snapshot, R3495), wslPrepare's environment scrub and child marker (R3497), and the re-exec of the real ark.exe under WSL interop (R3505) need a Windows process launched from WSL2. The pure decision (wslModeOn), the translators, the filter, runWSLFiltered (driven with /bin/sh as the child) and the wsl-init script (run under sh in a temp HOME) are tested on Linux; the rest is proven by a live run on the windows-gpu VM with WSL2. Also unmeasured there: how Ctrl-C reaches an interop-launched ark.exe and its child, and whether passing os.Stdin through keeps luhmann attach's console usable. Disproportionate to automate: needs Windows plus WSL2. R3495, R3497, R3505.
 - [ ] O222: WSL mode does not check the working directory. When Claude's cwd is on the Linux filesystem (not under a drive mount), WSL hands ark.exe a \\wsl.localhost\<distro>\... UNC cwd, and relative path arguments then name files the server indexes under that UNC path, if at all. specs/wsl.md says projects belong under /mnt/c and refuses absolute WSL-native paths (R3500) but says nothing about the cwd. Enhancement: refuse or warn in WSL mode when the cwd is a \\wsl.localhost or \\wsl$ path. Needs the live VM to confirm the cwd shape first.
+- T288: R279 retired by R3516 (2026-10-07 app activation Items 3/4: setup activates each bundled app with one directory link; no per-file lua/ or viewdefs/ links)
+- [ ] I7: R3520 (the Makefile strips the cache's symlinks) is implemented in the Makefile, which minispec cannot read (no extension; see the filename-language request to mini-spec). ark bundle's refusal (R3518) enforces the outcome.
+- [ ] O223: R3516 (setup activates every bundled app) has no unit test: extractBundleAssets needs a bundled binary. Verified by a live ark setup run (the Windows standard-user run for #138).

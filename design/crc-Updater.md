@@ -1,5 +1,5 @@
 # Updater
-**Requirements:** R3463, R3471, R3472, R3473, R3474, R3475, R3476, R3477, R3478, R3479, R3480, R3481, R3482, R3483, R3484
+**Requirements:** R3463, R3471-3484, R3517
 
 `ark update` and the shared refresh machinery it lends to `ark setup`. Brings
 an install up to the running project's latest GitHub release, or (with
@@ -46,6 +46,7 @@ install manifest and the model provisioner, both reused by setup.
   rewritten, so an install predating the manifest is seeded by one refresh
   (R3484). Built-in apps extracted to `~/.ark/apps` keep their in-place
   edits across a refresh.
+- RefreshAssets also activates every bundled app whose `~/.ark/apps/<app>` did not exist before the refresh (AppActivation.ActivateApp); an app that existed keeps the user's activation (R3517)
 - SeedManifest(arkDir, bundle): setup's manifest step. Records the hash of
   every refreshable bundled asset into `~/.ark/install-manifest.json` (same
   Record/Save path and defaults RefreshAssets uses), so the first `ark update`

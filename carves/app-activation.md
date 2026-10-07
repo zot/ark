@@ -9,10 +9,10 @@ directory link per app and have the runtime read apps where they sit.
 
 ## Status
 
-- [ ] **Item 1 — runtime discovers apps per directory.** **OPEN (#138.)**
-- [ ] **Item 2 — per-app static serving.** **OPEN (not queued.)**
-- [ ] **Item 3 — the bundle ships no symlinks.** **OPEN (not queued.)**
-- [ ] **Item 4 — one-link `linkapp`, startup reconcile, stale-scheme detector.** **OPEN (not queued.)**
+- [x] ~~**Item 1 — runtime discovers apps per directory.**~~ **LANDED (2026-10-07 — `#138`.)**
+- [x] ~~**Item 2 — per-app static serving.**~~ **LANDED (2026-10-07 — `#138`.)**
+- [x] ~~**Item 3 — the bundle ships no symlinks.**~~ **LANDED (2026-10-07 — `#138`.)**
+- [x] ~~**Item 4 — one-link `linkapp` and startup repair.**~~ **LANDED (2026-10-07 — `#138`.)**
 - [ ] **Item 5 — conflict surfaces.** **OPEN (not queued.)**
 - [ ] **Item 6 — the mcp app tail.** **OPEN (not queued.)**
 
@@ -87,8 +87,8 @@ rather than trusting persisted ones. On startup it scans `~/.ark/lua/*`, verifie
 each resolves, and repairs what it can, so a moved `~/.ark` self-heals instead of
 leaving dead links. At run time it watches the lua directory and re-scans on
 change, and that watch is the trigger for re-detecting conflicts and
-re-registering. Stale old-scheme `lua/<app>.lua` files are detected here too and
-griped about in the log and UI.
+re-registering. (Old-scheme `lua/<app>.lua` links were to be detected and
+griped about here; superseded by Item 4's decisions: converted by hand.)
 
 <a id="static"></a>
 ## Static files: a fourth link
@@ -185,7 +185,18 @@ built-in-then-alphabetical rule, and the hotloaders watch per app. Discovery rea
 
 **Item 3.** Setup creates `lua/<app>` with the portable directory-link helper (a
 junction on Windows), and bundling fails on a built-in viewdef-name collision.
-ark plus Frictionless `installFile`.
+ark plus Frictionless `installFile`. The Makefile strips the cache's symlinks
+and `ark bundle` refuses any it is handed.
+
+*Measured 2026-10-07, after Items 1-4:* on the Windows test VM a standard user
+(`arktest`, fresh `USERPROFILE=C:\t1`, from a scheduled task) ran `ark setup`
+to completion; `lua/` held six junctions (`viewlist` included), `html/` and
+`viewdefs/` held no links, and `ark serve` loaded 48 viewdefs from 6 apps with
+no collisions and served `/mcp/css/panel.css` from the app directory. Found on
+the way: Frictionless's `viewlist` library app had no activation link, so its
+ViewList viewdefs reached the runtime only through the per-viewdef links being
+retired (fixed in Frictionless `f13e227`; setup now activates every bundled
+app regardless).
 
 *Measured 2026-10-07 on the Windows test VM (build 26200):* a standard user
 creates a junction without privilege and reads through it from a scheduled task,
@@ -196,8 +207,19 @@ checks, and a standard user cannot make a junction an ssh session will trust;
 see [windows-support.md Item 3](windows-support.md#3) for the mitigation.
 
 **Item 4.** `linkapp add`/`remove` makes or removes the one dir link; startup
-reconciles and repairs ([reconcile](#reconcile)) and gripes about old-scheme
-`lua/<app>.lua` files.
+repairs dangling activation links ([reconcile](#reconcile)) and never creates
+an absent one.
+
+### Item 4's decisions
+
+- DECIDED (Bill, 2026-10-07): no upgrade path and no stale-scheme detector.
+  There are no users but us, so old-scheme links are converted by hand (after
+  a Fossil backup) rather than detected or cleaned at startup. This
+  supersedes the "gripes about old-scheme `lua/<app>.lua` files" above and in
+  [reconcile](#reconcile). Bill's own `~/.ark` was converted 2026-10-07
+  (fossil checkin `3b2b60b1` in `ark.fossil`).
+- DECIDED (Bill, 2026-10-07): setup and update activate built-in apps;
+  startup only repairs, so a deactivated app stays deactivated.
 
 **Item 5.** One resolver feeding the logs, an `ark` verb, and a UI Lua method
 ([collisions](#collisions)).

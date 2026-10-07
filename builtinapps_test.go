@@ -1,4 +1,4 @@
-// CRC: crc-Server.md | Test: test-BuiltinApps.md
+// CRC: crc-AppActivation.md | Test: test-BuiltinApps.md
 package ark
 
 import (

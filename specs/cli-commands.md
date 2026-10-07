@@ -380,7 +380,8 @@ ark bundle -o OUT [-src SRC] DIR
 | `-src PATH` | current executable | Source binary to bundle            |
 
 Build-time. Zip-grafts `DIR` onto `SRC` so a single binary contains
-its UI assets.
+its UI assets. Refuses a `DIR` holding a symlink, or one where two apps
+under `apps/` ship a viewdef of the same name (see bundle-assets.md).
 
 ### `cat`, `cp`, `ls` — bundled-asset access
 
@@ -1360,7 +1361,8 @@ the database file — not on `~/.ark/` existing. When the marker is absent
 it creates `~/.ark/`, copies the running executable in (`ark.exe` on
 Windows; skipped when already running from `~/.ark/`), extracts the
 bundled assets (`html/`, `lua/`, `viewdefs/`, `apps/`, `skills/`,
-`agents/`), creates the database (the marker), links every bundled skill
+`agents/`), activates each bundled app with one directory link
+`~/.ark/lua/<app>`, creates the database (the marker), links every bundled skill
 directory and the agents directory into `~/.claude/`, provisions llama
 libs, and downloads the configured embedding model if it is missing. It
 copies no skills or agents — the `~/.claude/` entries are directory links
@@ -1402,6 +1404,10 @@ own bundle, downloading nothing for the executable and assuming the
 running exe is already current — the developer case where `~/.ark/ark`
 links to a freshly built binary. It stays manifest-aware, never replaces a
 link with a copy, and proceeds normally on a symlinked binary.
+
+Either form activates an app it extracts for the first time (one
+`~/.ark/lua/<app>` link, as setup does) and leaves every existing app's
+activation as the user left it.
 
 ### `wsl-init` — set ark up inside WSL2
 
@@ -1642,7 +1648,7 @@ opens a socket.
 | `display APP` | `POST /api/ui_display` — show app in browser |
 | `event` | `GET /wait?timeout=120` — block until next UI event; retries on transient. Errors (409, exit 1) while a Luhmann orchestrator owns event routing (`ark luhmann events`), which reroutes these events onto its own tube — not retryable, since only that owner releases it. Unaffected when no orchestrator has asked. |
 | `install` | Per-project setup (alias `ark install`): runs `init --if-needed`, starts server if down, symlinks `~/.ark/skills/{ark,ui}` and every `~/.ark/agents/*.md` into `.claude/`, prints crank-handle prompt |
-| `linkapp add APP` / `remove APP` | Manage `~/.ark/lua/<app>` and `~/.ark/viewdefs/` symlinks |
+| `linkapp add APP` / `remove APP` | Activate or deactivate an app: make or remove the one directory link `~/.ark/lua/<app>` (a junction on Windows) |
 | `patterns` | List `~/.ark/patterns/*.md` with frontmatter description |
 | `progress APP PCT STAGE` | `mcp:appProgress` + agent-thinking line |
 | `reload` | `POST /ui/reload` — fresh Lua VM |

@@ -21,7 +21,8 @@ global part does nothing.
    1.11. stop a running server first, via the graceful `ark stop` path (never start one); runs before 1.2 (R3481)
    1.2. create ~/.ark if absent
    1.3. copy the running exe into ~/.ark (ark.exe on Windows); skip if already running from ~/.ark
-   1.4. Bundle.ExtractBundle → ~/.ark (html/, lua/, viewdefs/, apps/, skills/, agents/)
+   1.4. Bundle.ExtractBundle → ~/.ark (html/, lua/, viewdefs/, apps/, skills/, agents/); the bundle holds no symlinks
+      1.4.1. AppActivation.ActivateApp for each AppActivation.BundledAppNames() → one ~/.ark/lua/<app> directory link each (R3516)
    1.12. Updater.SeedManifest — record each extracted refreshable asset's hash into install-manifest.json (R3484)
    1.5. setupDatabase() — shared with cmdRebuild; creating the DB leaves the marker (no init→setup recursion)
    1.6. installLinks(~/.claude)

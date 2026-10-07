@@ -162,6 +162,9 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@if [ -d tag-overview/dist ]; then cp tag-overview/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d luhmann-terminal/dist ]; then cp luhmann-terminal/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
+	@# R3520: the bundle ships no symlinks; setup activates apps itself
+	@# (crc-CLI.md, specs/bundle-assets.md). ark bundle refuses any left.
+	@find $(CACHE_DIR) -type l -delete
 	@touch $(CACHE_DIR)/.cached
 	@echo "Cached assets in $(CACHE_DIR)/"
 

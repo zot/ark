@@ -429,7 +429,9 @@ extraction through Frictionless `installFile`, and `ark bundle cp`) create the
 shipped image's own symlinks: `lua/<app>`, `lua/<app>.lua`, the per-viewdef
 links, and `html/mcp`. Those are the aggregation layer app-activation retires,
 so on an unprivileged Windows account `setup` is gated on that carve, not on
-this part. The **llama tar symlinks** (`llamalibs.go:283`) are Linux `.so`
+this part. *Resolved 2026-10-07:* with app-activation Items 1-4 the bundle
+ships no symlinks and setup activates apps with junctions; a standard user's
+`ark setup` completes (measured on the test VM, see app-activation Item 3). The **llama tar symlinks** (`llamalibs.go:283`) are Linux `.so`
 version links and belong to Item 6.
 
 **Copying is almost as good as linking (Bill, 2026-10-05).** If a link into

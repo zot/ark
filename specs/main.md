@@ -688,7 +688,17 @@ When the marker is absent, setup runs the global install in order:
    itself in place.
 
 3. **Extract the bundled assets** (html/, lua/, viewdefs/, apps/, skills/,
-   agents/) from the binary's zip appendix into `~/.ark/` (R3459).
+   agents/) from the binary's zip appendix into `~/.ark/` (R3459). The
+   bundle holds no symlinks, so extraction needs no link privilege on
+   Windows.
+
+   Then **activate every bundled app**: one directory link
+   `~/.ark/lua/<app>` → `~/.ark/apps/<app>` for each top-level directory
+   under the bundle's `apps/`, made with the directory-link helper (a
+   symlink on Unix, a junction on Windows). Activation is that one link;
+   the runtime reads the app's entry file, modules, viewdefs and static
+   files through it (see ui-engine's app-discovery spec). Library apps
+   with no `app.lua`, like `viewlist`, are activated the same way.
 
 4. **Create the database.** This is the marker. Setup and `ark rebuild`
    both create the database through one shared function, so setup no
@@ -770,7 +780,10 @@ the `{hash, onCollision, group}` entry shape rather than living in
 (R3479). Update reads the manifest so it never clobbers a user-edited file
 and never replaces a link with a copy (R3474). Built-in apps are extracted
 into `~/.ark/apps` precisely so a user can edit them in place, and those
-edits survive an update. Update also downloads the configured embedding
+edits survive an update. An app that this update extracts for the first
+time (no `~/.ark/apps/<app>` before the refresh) is activated as setup
+activates it; an app already present keeps whatever activation the user
+left it with, so update never re-activates an app the user deactivated. Update also downloads the configured embedding
 model when it is missing, the same way setup does (R3475). Any failure — a
 failed download, a bad checksum, a failed swap — leaves the old binary and
 `~/.ark/` intact (R3476).

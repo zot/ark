@@ -193,6 +193,7 @@ func (u *Updater) RefreshAssets(src AssetSource) error {
 	if err != nil {
 		return err
 	}
+	newApps := u.appsNotYetInstalled(files)
 	for _, f := range files {
 		if f.IsSymlink || !isRefreshableAsset(f.Name) {
 			continue
@@ -230,7 +231,34 @@ func (u *Updater) RefreshAssets(src AssetSource) error {
 		}
 		m.Record(f.Name, newContent)
 	}
-	return m.Save(manifestPath)
+	if err := m.Save(manifestPath); err != nil {
+		return err
+	}
+	// R3517: activate apps this refresh extracted for the first time; apps
+	// that already existed keep the activation the user left them with.
+	for _, app := range newApps {
+		if err := ark.ActivateApp(u.ArkDir, app); err != nil {
+			return fmt.Errorf("activate app %s: %w", app, err)
+		}
+		fmt.Fprintf(u.out(), "activated new app %s\n", app)
+	}
+	return nil
+}
+
+// appsNotYetInstalled names the bundled apps with no ~/.ark/apps/<app> yet.
+// CRC: crc-Updater.md | R3517
+func (u *Updater) appsNotYetInstalled(files []BundleAsset) []string {
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, f.Name)
+	}
+	var fresh []string
+	for _, app := range ark.AppNamesInListing(names) {
+		if _, err := os.Stat(filepath.Join(u.ArkDir, "apps", app)); os.IsNotExist(err) {
+			fresh = append(fresh, app)
+		}
+	}
+	return fresh
 }
 
 // SeedManifest records the hash of every refreshable bundled asset into

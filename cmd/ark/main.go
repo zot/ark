@@ -670,8 +670,9 @@ func copyRunningExe(arkDir string) error {
 }
 
 // extractBundleAssets extracts the grafted bundle (html/, lua/, viewdefs/,
-// apps/, skills/, agents/) into ~/.ark and links the ark app's viewdefs/lua.
-// CRC: crc-CLI.md | Seq: seq-install.md#1.4 | R3459
+// apps/, skills/, agents/) into ~/.ark and activates every bundled app with
+// one lua/<app> directory link.
+// CRC: crc-CLI.md | Seq: seq-install.md#1.4, seq-install.md#1.4.1 | R3459, R3516
 func extractBundleAssets(arkDir string) error {
 	bundled, err := cli.IsBundled()
 	if err != nil || !bundled {
@@ -681,8 +682,10 @@ func extractBundleAssets(arkDir string) error {
 		return fmt.Errorf("extract bundle: %w", err)
 	}
 	fmt.Println("Extracted bundled assets to", arkDir)
-	if _, err := os.Stat(filepath.Join(arkDir, "apps", "ark")); err == nil {
-		runLinkapp(arkDir, "ark")
+	for _, app := range ark.BundledAppNames() {
+		if err := ark.ActivateApp(arkDir, app); err != nil {
+			return fmt.Errorf("activate app %s: %w", app, err)
+		}
 	}
 	return nil
 }
@@ -852,42 +855,6 @@ func cmdUpdate(args []string) {
 	}
 	if err := u.Update(noExe); err != nil {
 		fatal(err)
-	}
-}
-
-// runLinkapp creates lua/ and viewdefs/ symlinks for an app.
-func runLinkapp(baseDir, app string) {
-	appsDir := filepath.Join(baseDir, "apps")
-	luaDir := filepath.Join(baseDir, "lua")
-	viewdefsDir := filepath.Join(baseDir, "viewdefs")
-	appDir := filepath.Join(appsDir, app)
-
-	os.MkdirAll(luaDir, 0755)
-	os.MkdirAll(viewdefsDir, 0755)
-
-	// Link lua file: lua/app.lua -> ../apps/app/app.lua
-	appLua := filepath.Join(appDir, "app.lua")
-	if _, err := os.Stat(appLua); err == nil {
-		target := filepath.Join(luaDir, app+".lua")
-		os.Remove(target)
-		os.Symlink(filepath.Join("../apps", app, "app.lua"), target)
-	}
-
-	// Link app directory: lua/app -> ../apps/app
-	appLink := filepath.Join(luaDir, app)
-	os.Remove(appLink)
-	os.Symlink(filepath.Join("../apps", app), appLink)
-
-	// Link viewdefs
-	vdDir := filepath.Join(appDir, "viewdefs")
-	if entries, err := os.ReadDir(vdDir); err == nil {
-		for _, e := range entries {
-			if filepath.Ext(e.Name()) == ".html" {
-				target := filepath.Join(viewdefsDir, e.Name())
-				os.Remove(target)
-				os.Symlink(filepath.Join("../apps", app, "viewdefs", e.Name()), target)
-			}
-		}
 	}
 }
 
@@ -4407,82 +4374,30 @@ func cmdUIOpen(args []string) {
 
 // CRC: crc-CLI.md
 func cmdUILinkapp(args []string) {
+	// CRC: crc-CLI.md | R3521
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: ark ui linkapp add|remove <app>")
 		os.Exit(1)
 	}
-	action := args[0]
-	app := args[1]
-	appsDir := filepath.Join(arkDir, "apps")
-	luaDir := filepath.Join(arkDir, "lua")
-	viewdefsDir := filepath.Join(arkDir, "viewdefs")
-
+	action, app := args[0], args[1]
 	switch action {
 	case "add":
-		appDir := filepath.Join(appsDir, app)
-		if _, err := os.Stat(appDir); os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "Error: app '%s' not found in %s/\n", app, appsDir)
+		appDir := filepath.Join(arkDir, "apps", app)
+		if info, err := os.Stat(appDir); err != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: app '%s' not found in %s/\n", app, filepath.Dir(appDir))
 			os.Exit(1)
 		}
-		os.MkdirAll(luaDir, 0755)
-		os.MkdirAll(viewdefsDir, 0755)
-
-		// Link lua file: lua/app.lua -> ../apps/app/app.lua
-		appLua := filepath.Join(appDir, "app.lua")
-		if _, err := os.Stat(appLua); err == nil {
-			target := filepath.Join(luaDir, app+".lua")
-			os.Remove(target)
-			os.Symlink(filepath.Join("../apps", app, "app.lua"), target)
-			fmt.Printf("Linked: %s\n", target)
+		if err := ark.ActivateApp(arkDir, app); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
-
-		// Link app directory: lua/app -> ../apps/app
-		appLink := filepath.Join(luaDir, app)
-		os.Remove(appLink)
-		os.Symlink(filepath.Join("../apps", app), appLink)
-		fmt.Printf("Linked: %s\n", appLink)
-
-		// Link viewdefs
-		vdDir := filepath.Join(appDir, "viewdefs")
-		if entries, err := os.ReadDir(vdDir); err == nil {
-			for _, e := range entries {
-				if filepath.Ext(e.Name()) == ".html" {
-					target := filepath.Join(viewdefsDir, e.Name())
-					os.Remove(target)
-					os.Symlink(filepath.Join("../apps", app, "viewdefs", e.Name()), target)
-					fmt.Printf("Linked: %s\n", target)
-				}
-			}
-		}
-		fmt.Printf("Done: %s linked\n", app)
-
+		fmt.Printf("Activated: %s\n", app)
 	case "remove":
-		// Remove lua file symlink
-		luaFile := filepath.Join(luaDir, app+".lua")
-		if fi, err := os.Lstat(luaFile); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			os.Remove(luaFile)
-			fmt.Printf("Removed: %s\n", luaFile)
+		if err := ark.DeactivateApp(arkDir, app); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
 		}
-		// Remove app directory symlink
-		appLink := filepath.Join(luaDir, app)
-		if fi, err := os.Lstat(appLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			os.Remove(appLink)
-			fmt.Printf("Removed: %s\n", appLink)
-		}
-		// Remove viewdefs that point to this app
-		if entries, err := os.ReadDir(viewdefsDir); err == nil {
-			for _, e := range entries {
-				link := filepath.Join(viewdefsDir, e.Name())
-				if target, err := os.Readlink(link); err == nil {
-					if strings.Contains(target, "/apps/"+app+"/viewdefs/") {
-						os.Remove(link)
-						fmt.Printf("Removed: %s\n", link)
-					}
-				}
-			}
-		}
-		fmt.Printf("Done: %s unlinked\n", app)
-
+		fmt.Printf("Deactivated: %s\n", app)
 	default:
 		fmt.Fprintln(os.Stderr, "Usage: ark ui linkapp add|remove <app>")
 		os.Exit(1)
@@ -4935,6 +4850,10 @@ func cmdBundle(args []string) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Error: directory %s does not exist\n", dir)
 		os.Exit(1)
+	}
+	// CRC: crc-CLI.md | R3518, R3519
+	if err := checkBundleSource(dir); err != nil {
+		fatal(err)
 	}
 
 	src := *source

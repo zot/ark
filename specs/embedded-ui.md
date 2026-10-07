@@ -118,9 +118,22 @@ existing `ark install` bootstrap — the UI assets are one more thing
 it sets up.
 
 The ark app (apps/ark/) and all Frictionless assets ship embedded in
-the binary via zip-graft (see specs/bundle-assets.md). `ark init`
-extracts them to `~/.ark/` and runs linkapp to wire up lua/ and
-viewdefs/ symlinks. Updates to the ark binary bring new UI assets —
+the binary via zip-graft (see specs/bundle-assets.md). Setup extracts
+them to `~/.ark/` and activates each bundled app with one directory link
+`lua/<app>` (see `ark setup` in main.md).
+
+## App activation links
+
+`ark ui linkapp add APP` activates an app by making the directory link
+`~/.ark/lua/APP` → `~/.ark/apps/APP` (a symlink on Unix, a junction on
+Windows); `remove` deletes that link. Nothing else is linked.
+
+Before starting the ui-engine, `ark serve` repairs activation links: an
+entry under `~/.ark/lua/` that is a link no longer resolving is re-made to
+`~/.ark/apps/<entry>` when that directory exists, and left (with a log
+line) when it does not. A junction stores an absolute target, so this is
+what lets a moved `~/.ark` heal. The repair never creates an entry that
+is absent: deactivating an app survives a restart. Updates to the ark binary bring new UI assets —
 `ark init` refreshes them.
 
 ## No MCP server for ark
