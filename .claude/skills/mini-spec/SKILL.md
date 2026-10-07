@@ -13,7 +13,7 @@ description: "**MANDATORY: Invoke BEFORE writing or modifying any code.** Withou
 
 **First**, run `~/.claude/bin/minispec check-version` to verify the tool is installed and matches this skill's version. If it fails, warn the user: the tool and skill must be the same version or there will be compatibility issues.
 
-**Then**, run `~/.claude/bin/minispec query comment-patterns` to learn the recognized comment patterns for traceability comments in code files.
+**Then**, run `~/.claude/bin/minispec query comment-patterns` to learn how to write a traceability comment in each extension, closers included.
 
 ## MANDATORY: Create Tasks First
 
@@ -406,46 +406,41 @@ add(data): Item {
 
 The third `| Rn, Rn` section is optional but recommended — it links specific code locations directly to requirements, enabling implementation coverage validation.
 
-**What counts as an inline `Rn` ref (v2.10.0+).** `minispec validate`
-harvests implementation refs from two comment shapes:
+**What counts as an inline `Rn` ref.** `minispec validate` reads every
+code file in the Artifacts manifest through its **language table** and counts the refs of
+every **traceability comment**: a comment whose whole interior is `|`-separated fields —
+`CRC:`, `Seq:`, `Test:` and a requirement list, each at most once, in any order — then an
+optional description after `--`, `—`, `:`, or a `.` directly after the requirement list.
+So all of these count:
 
-1. **The tail of a `// CRC:` line** — `// CRC: <card> | Seq: <seq> | R5, R12`.
-   The parser is `<comment-prefix>CRC:\s*<card>(\| Seq: <seq>)?<rest>`
-   and pulls every `Rn` from `<rest>`.
-2. **A bare annotation that *leads* with the ref(s)** right after the
-   comment leader: `// R5: desc`, `// R5, R6`, or a trailing
-   `foo() // R7`. The leading comma-separated refs count. This credits
-   the deliberate field/line annotations that sit beside a type's or
-   function's `// CRC:` header.
+- `// CRC: crc-Store.md | Seq: seq-crud.md#1.4 | R4, R5` — the governing header
+- `// Seq: seq-crud.md#2.2 | R6` — a step pin with its refs
+- `// R7: why this line exists` and `// R8. Why this line exists` — a bare annotation
+- `foo() // R9` — trailing, after code
 
-**Ranges (v2.11.0+).** Both shapes expand `Rn-Rm` **range** syntax into
-every member, so `// R5-R8` counts R5, R6, R7, and R8 — no need to spell
-out a long contiguous span. The second `R` is optional (`R5-8`), ranges
-and comma lists mix freely (`// R5-R7, R10`), and a reversed range
-(`R8-R5`) contributes only the low ref.
+**Ranges** expand into every member: `// R5-R8` counts R5 through R8, the second `R` is
+optional (`R5-8`), and ranges mix with comma lists (`// R5-R7, R10`).
 
-The `<comment-prefix>` is the file's line-comment leader and is
-**language-dependent**: `//` for Go/JS/TS/C, `--` for Lua, `#` for
-shell/Python, `<!--` for Markdown/HTML, `/*` for CSS. Run `minispec
-query comment-patterns` for the per-extension list (and the
-block-comment closers below). The examples here are Go. A
-`comment_patterns` entry may be an **alternation** (v2.11.0+) — e.g.
-`.html: "<!--\s*|//\s*"` so an HTML file's embedded-JS `// Rn`
-annotations harvest alongside its `<!-- CRC: … -->` comments.
+What does **not** count, because the comment is not wholly fields — it reads as prose:
 
-What still does **not** count, because the ref does not lead the
-comment and so reads as prose rather than intent:
+- `// computed lazily (R5)` and `// see R5 for the rationale` — the ref does not lead
+- `// R5 handles the retry` — a ref followed by prose **with no separator**. Write
+  `// R5: handles the retry`. (The regex reader this replaced counted that form.)
 
-- `// computed lazily (R5)` (parenthetical mid-prose)
-- `// see R5 for the rationale` (ref after words)
-- `// Seq: seq-foo.md | R5` (no `CRC:`; a `Seq:`-only line does not trigger)
+A requirement annotated only in prose form reads as "missing impl coverage." Lead with the
+ref and a separator, or fold it onto the governing `// CRC:` header (with the card that owns
+the `Rn`, per its `**Requirements:**` field), to anchor the code location.
 
-A requirement annotated only in prose form reads as "missing impl
-coverage." Lead with the ref, or fold it onto the governing `// CRC:`
-header (with the card that owns the `Rn`, per its `**Requirements:**`
-field), to anchor the code location.
+**The comment leader is the language's**, and `minispec query comment-patterns` lists it
+per extension: the form to write, and every form read. The examples here are Go. HTML reads
+its page comments, the `//` and `/* */` comments inside its `<script>`, and the `/* */`
+comments inside its `<style>`, each only where it is live. A file whose extension has no
+table is reported as not read, never passed over; a project can define more languages in
+its configuration (see `config-reference.md` in this skill directory).
 
-**Block-comment languages:** The `minispec query comment-patterns` output lists any `comment_closers`. If a closer exists for the file extension, you MUST append it to every traceability comment. An unclosed block comment silently swallows all subsequent code. See `config-reference.md` (in this skill directory) if you need to configure closers for a new language.
+**Block-comment languages:** where `comment-patterns` shows a closer (` -->`, ` */`,
+` *)`), you MUST append it to every traceability comment. An unclosed block comment
+silently swallows all subsequent code.
 
 Mark implemented using minispec:
 ```bash
@@ -519,6 +514,8 @@ of counting it as a proof.
 
 5. Simplification Phase
 Invoke the `code-simplifier` agent on the recently modified code. This refines code for clarity, consistency, and maintainability while preserving functionality.
+
+`code-simplifier` is a standard Anthropic plugin. If it is not available, skip the simplification pass and tell the user they can install it with `claude plugin install code-simplifier`. The alarm pulls below still run.
 
 **CRITICAL: Preserve all traceability comments.** The `// CRC:`, `// Seq:`, and requirement references (`R123`) in code comments are load-bearing — they connect code to the design artifacts that justify its existence. Removing or reformatting them breaks the traceability chain that `minispec validate` checks. Simplification means cleaner *logic*, not fewer comments.
 
@@ -1163,8 +1160,17 @@ thing standing between a delegated loop and confident fiction.
 (`/home/deck/work/go.work` listing `./mini-spec/tool`) routes `go test` inside a worktree at the
 **main checkout**, not the worktree. Three pullers hit it and worked around it with `GOWORK=off`;
 one reported a green baseline for a file its own worktree does not contain. Go refused loudly
-here rather than silently testing the wrong tree, but a delegate whose commands can reach the
-live checkout is a delegate whose isolation is nominal.
+that day; **measured again 2026-09-27, it did not** — `go list -m` in a worktree under the
+workspace named the main checkout's module and nothing objected. A delegate whose commands can
+reach the live checkout is a delegate whose isolation is nominal.
+
+**The fix is a workspace of the worktree's own, not `GOWORK=off`.** A pull proves the alarm rings
+on the code *as it is built*, so it runs in the development environment, local dependencies
+included, and `GOWORK=off` swaps those for published versions, testing a program nobody ships.
+Write a `go.work` at the worktree root naming the worktree's module and each local dependency;
+Go takes the nearest workspace file, so it wins over the one above. Write it by hand: `go work
+init` inside a directory an outer workspace already governs refuses, since the outer file
+already exists. Then check `go list -m` names the worktree's module before trusting a baseline.
 
 **A second environment hazard, measured 2026-08-23, and this one fails silently.** Go's test
 cache keys on source and build inputs and does **not** track files a test reads at run time. So
@@ -1381,6 +1387,7 @@ The `minispec` CLI tool (at `~/.claude/bin/minispec`) performs structural operat
 
 # Queries
 ~/.claude/bin/minispec query artifacts       # Show all artifacts with checkbox states
+~/.claude/bin/minispec query coverage R5-8   # Design files covering each Rn (ranges honored; no args = all)
 ~/.claude/bin/minispec query uncovered       # List Rn without design refs
 ~/.claude/bin/minispec query gaps            # List gap items
 ~/.claude/bin/minispec query requirements    # List all requirements
@@ -1390,6 +1397,8 @@ The `minispec` CLI tool (at `~/.claude/bin/minispec`) performs structural operat
 ~/.claude/bin/minispec query alarms --unverified --brief  # One spawn prompt per alarm, for a delegated re-pull
 ~/.claude/bin/minispec query carves          # Open, landed and stateless parts per carve, from the status block only
 ~/.claude/bin/minispec query carves --open   # …and the open parts and stateless lines themselves
+~/.claude/bin/minispec query implementation R5-R8   # Where each Rn is implemented, file:line and comment
+~/.claude/bin/minispec query implementation '@status'  # …or by a regexp over requirement text
 ~/.claude/bin/minispec query next-id req     # Next free Rn (counts retired ones too)
 ~/.claude/bin/minispec query next-id gap     # Next free number for every gap type
 ~/.claude/bin/minispec query next-id item    # Next free queue ID (pending + done files)

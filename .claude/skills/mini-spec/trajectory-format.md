@@ -60,9 +60,9 @@ name on the queue puts it in the title (`# Pending: Ark State`), which nothing p
 2026-08-04. Files found there are legacy and want moving; the directory still holds
 in-flight migration specs, which are a different artifact.
 
-**Privacy is declared in `.gitignore`, recorded as `track` in `.minispec/config.yaml`,
-and verified on every run.** `track: private-trajectory` requires the three queue files to
-be ignored; `track: all` requires them not to be; `.carves/` is required ignored under
+**Privacy is declared in `.gitignore`, recorded as `track` in `.minispec/config.toml`,
+and verified on every run.** `track = "private-trajectory"` requires the three queue files to
+be ignored; `track = "all"` requires them not to be; `.carves/` is required ignored under
 either, because a directory whose whole purpose is privacy does not become public because
 the queue did. See `config-reference.md`.
 
@@ -78,17 +78,20 @@ the queue did. See `config-reference.md`.
 ---
 
 ## 8. **<title>** (<skill that runs it — or omit>). <one-line status>.
-   Source: [<doc>](<path>), part `#<key>`.
-   Next: <next action>.
+Source: [<doc>](<path>), part `#<key>`.
+Next: <next action>.
 
 ## 12. **<title>** …
-   Source: [<design root>/design.md](<path>), gap `<gap ID>`.
+Source: [<design root>/design.md](<path>), gap `<gap ID>`.
 ```
 
 - **Ordered by intent — the top item is active.** Position is the priority; the number is
   only the identifier, so the numbers run out of sequence and that is expected.
 - **Each item is a `##` heading.** That is what lets a paused item's context nest beneath
   it as a sub-item.
+- **Everything under the heading sits at column zero.** No hanging indent: it looked like
+  one only until a line wrapped, and the tool never needed it. Files written under the older
+  three-space stencil still read; the tool writes flush left.
 - **An entry is a pointer, not the design.** Subject, the skill that runs it (or nothing),
   a one-line status, and one doc link. Rationale, findings and open questions live in the
   linked document. No instructions in entries.

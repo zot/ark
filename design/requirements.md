@@ -510,6 +510,7 @@
 - **R270:** The failure is logged but does not cause `ark serve` to exit
 - **R271:** On SIGTERM/SIGINT, the ui-engine server shuts down before the ark DB closes
 - **R272:** (inferred) The ui-engine server is started in a goroutine so it doesn't block the ark API server
+- **R3515:** Every ui-engine start passes the names of the apps ark's bundle ships (the top-level directories under the bundle's `apps/`) as `flib.Config.BuiltinApps`, so those apps rank first when viewdef names collide; an unbundled binary passes none
 
 ### ark ui Command
 - **R273:** `ark ui` (no subcommand) opens the default browser to the ui-engine's HTTP URL

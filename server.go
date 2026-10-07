@@ -745,6 +745,43 @@ func (srv *Server) runRebuildScan(listener net.Listener) error {
 	return srv.db.Close()
 }
 
+// bundledAppNames lists the apps ark's bundle ships: the top-level
+// directories under the bundle's apps/. Empty for an unbundled binary.
+// CRC: crc-Server.md | R3515
+func bundledAppNames() []string {
+	files, err := cli.BundleListFilesRecursive(bundleAppsDir)
+	if err != nil {
+		return nil
+	}
+	return builtinAppNames(files)
+}
+
+// bundleAppsDir is the bundle directory whose children are apps.
+const bundleAppsDir = "apps"
+
+// builtinAppNames returns the distinct top-level directory names under
+// apps/ in a bundle listing, sorted.
+// CRC: crc-Server.md | R3515
+func builtinAppNames(files []string) []string {
+	prefix := bundleAppsDir + "/"
+	seen := map[string]bool{}
+	var names []string
+	for _, f := range files {
+		rest, ok := strings.CutPrefix(f, prefix)
+		if !ok {
+			continue
+		}
+		name, _, isNested := strings.Cut(rest, "/")
+		if !isNested || name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // startUIEngine configures and starts the embedded Frictionless runtime.
 // If the UI assets aren't present or the server fails to start, it logs
 // a warning and continues — the UI is optional.
@@ -758,6 +795,8 @@ func (srv *Server) startUIEngine(dbPath string) {
 		Dir:     dbPath,
 		Host:    "127.0.0.1",
 		Project: stagingDir,
+		// CRC: crc-Server.md | R3515
+		BuiltinApps: bundledAppNames(),
 	})
 	if err != nil {
 		log.Printf("ui: failed to create runtime: %v", err)
@@ -825,7 +864,9 @@ func (srv *Server) ReloadUIEngine() error {
 		Dir:     dbPath,
 		Host:    "127.0.0.1",
 		Project: stagingDir,
-		Port:    savedPort,
+		// CRC: crc-Server.md | R3515
+		BuiltinApps: bundledAppNames(),
+		Port:        savedPort,
 	})
 	if err != nil {
 		return fmt.Errorf("ui reload: create runtime: %w", err)

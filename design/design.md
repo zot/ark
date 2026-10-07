@@ -376,6 +376,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 
 ### Test Designs
 - [x] test-FileScanActor.md → `filescan_test.go`
+- [x] test-BuiltinApps.md → `builtinapps_test.go`
 - [x] test-EmbedOffSlot.md → `embed_offslot_test.go`
 - [x] test-Patterns.md → `patterns_test.go`, `cmd/ark/patterns_cli_test.go`
 - [x] test-checkpoint.md → `cmd/ark/checkpoint_test.go`

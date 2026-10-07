@@ -432,6 +432,16 @@ so on an unprivileged Windows account `setup` is gated on that carve, not on
 this part. The **llama tar symlinks** (`llamalibs.go:283`) are Linux `.so`
 version links and belong to Item 6.
 
+**Copying is almost as good as linking (Bill, 2026-10-05).** If a link into
+`~/.claude` is ever unavailable, copying the skills and agents from `~/.ark`
+into `~/.claude` keeps nearly all the value, because `~/.claude` is per-user
+and global: a copy still serves every project, as the link does. What copying
+gives up is freshness: a copy goes stale when the install changes, so it must
+be refreshed by `ark update` (whose manifest can tell an untouched copy from
+a user's edit) rather than following the install automatically. Directory
+links stay the decision; this is the fallback, and the reason it is a mild
+one.
+
 **Measured on Windows (2026-10-04, build 26200, part 3.2).** Run as a standard
 user with no symlink privilege, from a scheduled task:
 

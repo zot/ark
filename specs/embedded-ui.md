@@ -27,14 +27,18 @@ assets side by side:
 ├── logs/                   # server logs
 ├── tags.md                 # tag vocabulary
 ├── html/                   # ui-engine static assets
-├── lua/                    # ui-engine lua (symlinks to apps)
-├── viewdefs/               # ui-engine viewdefs (symlinks to apps)
+├── lua/                    # main.lua + one activation link per app
 ├── apps/                   # frictionless apps
 │   └── ark/                # the ark management app
 └── ui-port                 # ui-engine HTTP port
 ```
 
-The ui-engine's `Server.Dir` points to `~/.ark/`. The ui-engine
+The ui-engine's `Server.Dir` points to `~/.ark/`. How the runtime
+finds, loads and hot-reloads apps under it is specified by the
+ui-engine and Frictionless repos (app discovery, and the `mcp` app
+loader); ark passes the names of the apps its bundle ships as
+`flib.Config.BuiltinApps`, so those rank first when viewdef names
+collide. The ui-engine
 creates and manages `ui-port` and the standard Frictionless directory
 structure. Ark's own files (index.db, ark.toml, ark.sock, logs/)
 coexist without collision.
