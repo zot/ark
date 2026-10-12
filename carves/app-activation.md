@@ -14,7 +14,7 @@ directory link per app and have the runtime read apps where they sit.
 - [x] ~~**Item 3 — the bundle ships no symlinks.**~~ **LANDED (2026-10-07 — `#138`.)**
 - [x] ~~**Item 4 — one-link `linkapp` and startup repair.**~~ **LANDED (2026-10-07 — `#138`.)**
 - [ ] **Item 5 — conflict surfaces.** **OPEN (not queued.)**
-- [ ] **Item 6 — the mcp app tail.** **OPEN (not queued.)**
+- [x] ~~**Item 6 — the mcp app tail.**~~ **LANDED (2026-10-12 — `#138`.)**
 
 <a id="problems"></a>
 ## The three problems
