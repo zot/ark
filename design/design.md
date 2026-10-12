@@ -1228,3 +1228,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T288: R279 retired by R3516 (2026-10-07 app activation Items 3/4: setup activates each bundled app with one directory link; no per-file lua/ or viewdefs/ links)
 - [ ] I7: R3520 (the Makefile strips the cache's symlinks) is implemented in the Makefile, which minispec cannot read (no extension; see the filename-language request to mini-spec). ark bundle's refusal (R3518) enforces the outcome.
 - [ ] O223: R3516 (setup activates every bundled app) has no unit test: extractBundleAssets needs a bundled binary. Verified by a live ark setup run (the Windows standard-user run for #138).
+- [ ] O224: Something outside a test sandbox wrote ~/.claude/skills links into a temp ark db (14 links into /tmp/.../db/skills, stamped 2026-10-08 13:47, target deleted), so Claude Code silently lost the ark and ui-* skills. Writer not yet identified; likely a temp --db with a real HOME (arkHomeDir ignores --db).
