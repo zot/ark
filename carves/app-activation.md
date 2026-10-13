@@ -13,7 +13,7 @@ directory link per app and have the runtime read apps where they sit.
 - [x] ~~**Item 2 — per-app static serving.**~~ **LANDED (2026-10-07 — `#138`.)**
 - [x] ~~**Item 3 — the bundle ships no symlinks.**~~ **LANDED (2026-10-07 — `#138`.)**
 - [x] ~~**Item 4 — one-link `linkapp` and startup repair.**~~ **LANDED (2026-10-07 — `#138`.)**
-- [ ] **Item 5 — conflict surfaces.** **OPEN (not queued.)**
+- [x] ~~**Item 5 — conflict surfaces.**~~ **LANDED (2026-10-13 — `#140`.)**
 - [x] ~~**Item 6 — the mcp app tail.**~~ **LANDED (2026-10-12 — `#138`.)**
 
 <a id="problems"></a>
@@ -223,6 +223,18 @@ an absent one.
 
 **Item 5.** One resolver feeding the logs, an `ark` verb, and a UI Lua method
 ([collisions](#collisions)).
+
+- DECIDED (Bill, 2026-10-13): the verb is `ark ui conflicts`; with no server it
+  computes from disk rather than refusing; the Lua method sits on `ui`; scope is
+  viewdefs only (modules are namespaced by app).
+- One resolver, literally: ui-engine's `ViewdefManager` keeps a live collision set
+  rebuilt on every load (the old log-dedupe map was never cleared, so it could not
+  serve), and `cli.ResolveViewdefCollisions` runs that same registration on a fresh
+  manager for the no-server case. Since `ui` is ui-engine's global and the runtime
+  already holds the manager, `ui.viewdefCollisions()` lives in ui-engine, not ark.
+  Behavior now lives in ui-engine `specs/app-discovery.md` (R141-R145), frictionless
+  `specs/mcp.md` (R191, the flib passthrough) and ark `specs/embedded-ui.md`
+  ([Viewdef conflicts](../specs/embedded-ui.md#viewdef-conflicts), R3523-R3525).
 
 **Item 6.** `ui-*` work in `apps/mcp`: delete `ensureSymlink`. The `mkdir -p` and
 `base64 -d` bycatch goes to windows-support Item 7.

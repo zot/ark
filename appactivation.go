@@ -79,6 +79,13 @@ func BundledAppNames() []string {
 	return builtinAppNames(files)
 }
 
+// ViewdefConflicts computes the live viewdef-name conflicts from disk with
+// the ui-engine's own resolver, ranking ark's bundled apps as built-ins.
+// CRC: crc-AppActivation.md | R3525
+func ViewdefConflicts(arkDir string) []cli.ViewdefCollision {
+	return cli.ResolveViewdefCollisions(arkDir, BundledAppNames())
+}
+
 // AppNamesInListing is builtinAppNames for callers outside the package that
 // already hold a bundle listing (the updater).
 // CRC: crc-AppActivation.md | R3517

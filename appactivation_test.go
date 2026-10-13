@@ -2,7 +2,10 @@
 package ark
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,5 +81,47 @@ func TestRepairActivationLinks(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(luaDir, "off")); err == nil {
 		t.Error("repair activated an app that had no entry")
+	}
+}
+
+// mkCollidingApps makes active apps aa and zz under arkDir, both shipping
+// T.DEFAULT.html.
+func mkCollidingApps(t *testing.T, arkDir string) {
+	t.Helper()
+	for _, name := range []string{"aa", "zz"} {
+		vd := filepath.Join(arkDir, "apps", name, "viewdefs")
+		if err := os.MkdirAll(vd, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(filepath.Join(vd, "T.DEFAULT.html"), []byte("<template>"+name+"</template>"), 0o644)
+		if err := ActivateApp(arkDir, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Test: conflicts computed from disk name the viewdef, winner and loser (R3525)
+func TestViewdefConflictsFromDisk(t *testing.T) {
+	arkDir := t.TempDir()
+	mkCollidingApps(t, arkDir)
+	got := ViewdefConflicts(arkDir)
+	if len(got) != 1 || got[0].Key != "T.DEFAULT" || got[0].Winner != "aa" || got[0].Loser != "zz" {
+		t.Errorf("ViewdefConflicts = %+v, want T.DEFAULT, aa over zz", got)
+	}
+}
+
+// Test: the server answers /ui/conflicts from disk when its UI is not running (R3524)
+func TestUIConflictsRouteWithoutUI(t *testing.T) {
+	_, db := setupRecall(t)
+	mkCollidingApps(t, db.Path())
+	srv := &Server{db: db}
+	rec := httptest.NewRecorder()
+	srv.handleUIConflicts(rec, httptest.NewRequest(http.MethodGet, "/ui/conflicts", nil))
+	var got []struct{ Key, Winner, Loser string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response %q: %v", rec.Body.String(), err)
+	}
+	if len(got) != 1 || got[0].Winner != "aa" || got[0].Loser != "zz" {
+		t.Errorf("GET /ui/conflicts = %+v, want T.DEFAULT, aa over zz", got)
 	}
 }

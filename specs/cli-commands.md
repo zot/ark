@@ -1619,6 +1619,7 @@ normalization (see "Filter stack").
 ark ui                          # open browser
 ark ui audit APP
 ark ui checkpoint CMD APP [MSG]
+ark ui conflicts
 ark ui display APP
 ark ui event
 ark ui install
@@ -1636,15 +1637,17 @@ ark ui variables
 
 Most UI subcommands require the server: they send HTTP requests
 through `<dir>/ark.sock`, and most are thin wrappers over Lua API
-endpoints. Two do not — `open` (the no-args default), and `patterns`,
-which is a plain directory walk over `~/.ark/patterns/` and never
-opens a socket.
+endpoints. Three do not need one: `open` (the no-args default);
+`patterns`, which is a plain directory walk over `~/.ark/patterns/` and
+never opens a socket; and `conflicts`, which asks the server when one is
+up and otherwise computes from disk.
 
 | Subcommand | Behavior |
 |------------|----------|
 | (none) | Read `<dir>/ui-port`, open browser via `xdg-open`/`open` |
 | `audit APP` | `POST /api/ui_audit` — code quality audit |
 | `checkpoint CMD APP [MSG]` | Fossil-backed checkpoints (see below) |
+| `conflicts` | List viewdef-name conflicts between active apps: per losing copy, the viewdef, winning app and file, losing app and file; `no viewdef conflicts` when none. `GET /ui/conflicts` when a server is up, else computed from `~/.ark` with the same ui-engine resolver ([embedded-ui.md](embedded-ui.md#viewdef-conflicts)) |
 | `display APP` | `POST /api/ui_display` — show app in browser |
 | `event` | `GET /wait?timeout=120` — block until next UI event; retries on transient. Errors (409, exit 1) while a Luhmann orchestrator owns event routing (`ark luhmann events`), which reroutes these events onto its own tube — not retryable, since only that owner releases it. Unaffected when no orchestrator has asked. |
 | `install` | Per-project setup (alias `ark install`): runs `init --if-needed`, starts server if down, symlinks `~/.ark/skills/{ark,ui}` and every `~/.ark/agents/*.md` into `.claude/`, prints crank-handle prompt |

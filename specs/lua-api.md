@@ -256,6 +256,7 @@ host owns.
 | `ui.log([level,] message)`                   | Log through the runtime's log channel; level defaults to 0               |
 | `ui.json_encode(value)`                      | Encode a Lua value to a JSON string                                     |
 | `ui.json_decode(text)`                       | Decode a JSON string to a Lua value                                     |
+| `ui.viewdefCollisions()`                     | The live viewdef-name conflicts: array of `{key, winner, winnerPath, loser, loserPath}` (same list as `ark ui conflicts`) |
 
 ## Cross-cutting concerns
 

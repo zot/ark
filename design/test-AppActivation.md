@@ -57,3 +57,33 @@
 **Fire alarm:** treat every bundled app as new. Red: `refresh re-activated an app the user had deactivated`.
 **Inject:** cmd/ark/update.go:appsNotYetInstalled
 **Pulled:** 2026-10-07 — rang: `refresh re-activated an app the user had deactivated`
+
+## Test: conflicts computed from disk name the viewdef, winner and loser
+**Purpose:** `ViewdefConflicts` runs the ui-engine resolver over `~/.ark` (R3525)
+**Input:** arkDir with active apps `aa` and `zz`, both shipping `viewdefs/T.DEFAULT.html`
+**Expected:** one conflict: `T.DEFAULT`, `aa` over `zz`
+**Refs:** crc-AppActivation.md
+**Code:** appactivation_test.go
+**Fire alarm:** return no conflicts from ViewdefConflicts. Red: `ViewdefConflicts = [], want T.DEFAULT, aa over zz`.
+**Inject:** appactivation.go:ViewdefConflicts
+**Pulled:** 2026-10-13 — rang: `ViewdefConflicts = [], want T.DEFAULT, aa over zz`
+
+## Test: the server answers /ui/conflicts from disk when its UI is not running
+**Purpose:** with no ui-engine, the route still gives the same list (R3524)
+**Input:** a test DB whose directory holds the `aa`/`zz` collision; `Server{db}` with no uiRuntime
+**Expected:** the JSON array names `aa` over `zz`
+**Refs:** crc-Server.md
+**Code:** appactivation_test.go
+**Fire alarm:** answer an empty list when uiRuntime is nil. Red: `GET /ui/conflicts = [], want T.DEFAULT, aa over zz`.
+**Inject:** server.go:handleUIConflicts
+**Pulled:** 2026-10-13 — rang: `GET /ui/conflicts = [], want T.DEFAULT, aa over zz`
+
+## Test: conflicts print one entry per losing copy, or a none line
+**Purpose:** the CLI output shape (R3523)
+**Input:** an empty list; one `T.DEFAULT` conflict
+**Expected:** `no viewdef conflicts`; `T.DEFAULT: aa wins over zz` then the two files indented
+**Refs:** crc-CLI.md
+**Code:** cmd/ark/conflicts_test.go
+**Fire alarm:** print the loser before the winner. Red: `printed "T.DEFAULT: zz wins over aa…"`.
+**Inject:** cmd/ark/main.go:printViewdefConflicts
+**Pulled:** 2026-10-13 — rang: `printed "T.DEFAULT: zz wins over aa…"`

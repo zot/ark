@@ -52,6 +52,7 @@ func uiCommand() *ucli.Command {
 		Commands: []*ucli.Command{
 			{Name: "open", Usage: "open browser to the current UI session", Action: uiDelegate(cmdUIOpen)},
 			{Name: "run", Usage: "execute Lua code in the UI session", ArgsUsage: "'<lua>'", Action: uiDelegate(cmdUIRun)},
+			{Name: "conflicts", Usage: "list viewdef-name conflicts between active apps", Action: uiDelegate(cmdUIConflicts)},
 			{Name: "display", Usage: "display an app in the browser", ArgsUsage: "APP", Action: uiDelegate(cmdUIDisplay)},
 			{Name: "event", Usage: "wait for the next UI event (120s timeout)", Action: uiDelegate(cmdUIEvent)},
 			{Name: "audit", Usage: "run code quality audit on an app", ArgsUsage: "APP", Action: uiDelegate(cmdUIAudit)},

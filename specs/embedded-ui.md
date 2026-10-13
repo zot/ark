@@ -136,6 +136,22 @@ what lets a moved `~/.ark` heal. The repair never creates an entry that
 is absent: deactivating an app survives a restart. Updates to the ark binary bring new UI assets —
 `ark init` refreshes them.
 
+## Viewdef conflicts
+
+When two active apps ship a viewdef of the same name, the ui-engine
+registers only one of them. Built-in apps (the ones ark's bundle ships) rank
+first, then user apps alphabetically, and the first source wins. The
+ui-engine logs each conflict. `ark ui conflicts` lists the conflicts that
+exist now, one per losing copy, naming the viewdef, the winning app and its
+file, and the losing app and its file. When there are none it says so.
+
+The list comes from the ui-engine's own resolver, whichever way it is
+reached, so the CLI, the log, and Lua's `ui.viewdefCollisions()` always
+agree. With a server running, the CLI asks the server, and the server
+answers from its running ui-engine (or computes it from disk when its UI is
+not running). With no server, the CLI computes it from `~/.ark` with ark's
+built-in app list and needs no server.
+
 ## No MCP server for ark
 
 Ark is accessed via the CLI. Ark itself does not register as an MCP

@@ -1,5 +1,5 @@
 # AppActivation
-**Requirements:** R3515, R3516, R3517, R3521, R3522
+**Requirements:** R3515-3517, R3521, R3522, R3525
 
 An app is active when `~/.ark/lua/<app>` is a directory link to
 `~/.ark/apps/<app>`; that one link is the whole on/off bit (the runtime reads
@@ -20,6 +20,9 @@ links, and naming the apps ark's bundle ships.
 - BundledAppNames(): the top-level directories under the bundle's `apps/`;
   empty for an unbundled binary (R3515, R3516, R3517)
 - builtinAppNames(files): the pure listing → names step (R3515)
+- ViewdefConflicts(arkDir): the ui-engine resolver (`cli.ResolveViewdefCollisions`)
+  over `arkDir` with BundledAppNames as the built-ins; computed from disk, the
+  same code a starting server runs (R3525)
 
 ## Collaborators
 - DirLink: the portable link primitive (symlink / junction)

@@ -4373,6 +4373,33 @@ func cmdUIOpen(args []string) {
 }
 
 // CRC: crc-CLI.md
+// cmdUIConflicts lists viewdef-name conflicts, from the server when one is
+// up, else from disk; either way through the ui-engine's resolver.
+// CRC: crc-CLI.md | R3523, R3524, R3525
+func cmdUIConflicts(args []string) {
+	var conflicts []cli.ViewdefCollision
+	if client := serverClient(arkDir); client != nil {
+		if err := proxyDecode(client, "GET", "/ui/conflicts", nil, &conflicts); err != nil {
+			fatal(err)
+		}
+	} else {
+		conflicts = ark.ViewdefConflicts(arkDir)
+	}
+	printViewdefConflicts(os.Stdout, conflicts)
+}
+
+// printViewdefConflicts writes one entry per losing copy, or a none line.
+// CRC: crc-CLI.md | R3523
+func printViewdefConflicts(w io.Writer, conflicts []cli.ViewdefCollision) {
+	if len(conflicts) == 0 {
+		fmt.Fprintln(w, "no viewdef conflicts")
+		return
+	}
+	for _, c := range conflicts {
+		fmt.Fprintf(w, "%s: %s wins over %s\n  %s\n  %s\n", c.Key, c.Winner, c.Loser, c.WinnerPath, c.LoserPath)
+	}
+}
+
 func cmdUILinkapp(args []string) {
 	// CRC: crc-CLI.md | R3521
 	if len(args) < 2 {

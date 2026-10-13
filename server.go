@@ -490,6 +490,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /files/expand", srv.handleFilesExpand) // R3378, R3379
 	mux.HandleFunc("GET /stale", srv.handleStale)               // R97
 	mux.HandleFunc("GET /missing", srv.handleMissing)           // R98
+	mux.HandleFunc("GET /ui/conflicts", srv.handleUIConflicts)  // R3524
 	mux.HandleFunc("POST /dismiss", srv.handleDismiss)          // R99
 	mux.HandleFunc("GET /config", srv.handleConfig)             // R100
 	mux.HandleFunc("GET /unresolved", srv.handleUnresolved)     // R101
@@ -1903,6 +1904,17 @@ func (srv *Server) handleStale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, stale)
+}
+
+// handleUIConflicts answers `ark ui conflicts` from the running ui-engine,
+// or from disk when the UI is not running.
+// CRC: crc-Server.md | R3524
+func (srv *Server) handleUIConflicts(w http.ResponseWriter, r *http.Request) {
+	if srv.uiRuntime != nil {
+		writeJSON(w, srv.uiRuntime.ViewdefCollisions())
+		return
+	}
+	writeJSON(w, ViewdefConflicts(srv.db.Path()))
 }
 
 func (srv *Server) handleMissing(w http.ResponseWriter, r *http.Request) {

@@ -513,6 +513,9 @@
 - **R3515:** Every ui-engine start passes the names of the apps ark's bundle ships (the top-level directories under the bundle's `apps/`) as `flib.Config.BuiltinApps`, so those apps rank first when viewdef names collide; an unbundled binary passes none
 - **R3521:** `ark ui linkapp add APP` activates an app by making the one directory link `~/.ark/lua/APP` → `~/.ark/apps/APP` with the directory-link helper; `remove APP` deletes that link; nothing else is linked
 - **R3522:** Before starting the ui-engine, `ark serve` repairs activation links: an entry under `~/.ark/lua/` that is a link no longer resolving is re-made to `~/.ark/apps/<entry>` when that directory exists, and left with a log line when it does not; the repair never creates an absent entry
+- **R3523:** `ark ui conflicts` lists the live viewdef-name conflicts between active apps, one line per losing copy naming the viewdef, the winning app and its file, and the losing app and its file; with none it prints `no viewdef conflicts`
+- **R3524:** With a server running, `ark ui conflicts` asks it (`GET /ui/conflicts`), and the server answers from its running ui-engine's list (`flib.Runtime.ViewdefCollisions`), or, when its UI is not running, computes the list from disk as the CLI does
+- **R3525:** With no server, `ark ui conflicts` computes the list from `~/.ark` with ark's built-in app list through the ui-engine's resolver (`cli.ResolveViewdefCollisions`), so it agrees with the log and with `ui.viewdefCollisions()`
 
 ### ark ui Command
 - **R273:** `ark ui` (no subcommand) opens the default browser to the ui-engine's HTTP URL
