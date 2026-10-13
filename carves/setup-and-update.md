@@ -41,7 +41,7 @@ surface was worth redrawing on every platform, not just Windows.
 
 Preconditions, no checkbox: the portable directory-link helper (symlink on Unix,
 junction on Windows) is decided in windows-support Item 3 and shared with
-[app-activation.md](app-activation.md). Items 1 and 2 consume it.
+[app-activation.md](done/app-activation.md). Items 1 and 2 consume it.
 
 <a id="decisions"></a>
 ## Decisions

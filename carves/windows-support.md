@@ -341,7 +341,7 @@ implement.
 ## Item 3
 
 **The `linkapp`/Frictionless-app half of this part is redesigned in
-[app-activation.md](app-activation.md).** That carve replaces the per-file
+[app-activation.md](done/app-activation.md).** That carve replaces the per-file
 symlink aggregation with one directory link per app (a junction on Windows) and
 moves collision handling into the runtime, so the copy-or-manifest question
 below is retired for it. What stays here is the Claude Code integration: skills
@@ -397,7 +397,7 @@ silently when `setup` rewrites it.
   were already directories.
 - **One portable primitive.** A symlink on Unix, a junction on Windows. A
   junction needs no privilege and no Developer Mode. The same helper serves
-  [app-activation.md](app-activation.md)'s one-link-per-app, so it is built once.
+  [app-activation.md](done/app-activation.md)'s one-link-per-app, so it is built once.
 - **Where the links go, and who makes them, moved to
   [setup-and-update.md](setup-and-update.md).** Once every link was a directory
   link into `~/.claude/`, the project-level install had nothing left to do, and
@@ -749,7 +749,7 @@ crossing the socket as data, case-sensitivity, and CRLF. Named as its own part
 so the depth of the audit is honest: shallow, deliberately, for now.
 
 First hits already in hand (2026-09-22, found while grounding
-[app-activation.md](app-activation.md)): the mcp app shells out to Unix binaries
+[app-activation.md](done/app-activation.md)): the mcp app shells out to Unix binaries
 at run time — `ln -sfn` (`apps/mcp/app.lua:46`, activation, owned by
 app-activation.md), `mkdir -p` (`app.lua:86`, `762`), and `base64 -d`
 (`772`). The `os/exec`-of-Unix-helper class is not hypothetical; those three

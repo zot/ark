@@ -21,7 +21,7 @@ directory link per app and have the runtime read apps where they sit.
 
 - **Non-portable.** `os.Symlink` needs a privilege on Windows and `ln` does not
   exist there at all, so the shipped Windows binary can neither install nor
-  self-link. This is what [windows-support.md Item 3](windows-support.md#3) is
+  self-link. This is what [windows-support.md Item 3](../windows-support.md#3) is
   about; that part now rides on this carve.
 - **Non-deterministic.** Every app's viewdefs land in one flat `~/.ark/viewdefs`,
   so when two apps ship a viewdef of the same name the resolution is
@@ -64,7 +64,7 @@ longer turns on link order.
   own `ls`/`cat`/fs verbs; editing an extracted built-in is the sanctioned way to
   override one, so no separate override marker is needed. `ark update` must
   therefore preserve such edits, which is why it works from an install manifest
-  of file hashes ([setup-and-update.md](setup-and-update.md)).
+  of file hashes ([setup-and-update.md](../setup-and-update.md)).
 - **Bundling fails** on a viewdef-name collision among built-ins, so the built-in
   set is conflict-free by construction and a live collision can only involve a
   user app.
@@ -142,11 +142,11 @@ when Items 1 through 4 and 6 have landed and setup is re-measured as a standard
 user; Item 5 can follow.
 
 **Item 1.** Specified in the sibling repos:
-[ui-engine app-discovery.md](../../ui-engine/specs/app-discovery.md) (discovery,
+[ui-engine app-discovery.md](../../../ui-engine/specs/app-discovery.md) (discovery,
 order, viewdef collisions, hot reload) and
-[Frictionless mcp.md](../../frictionless/specs/mcp.md) §2.6 and §4.3 (`flib`
+[Frictionless mcp.md](../../../frictionless/specs/mcp.md) §2.6 and §4.3 (`flib`
 built-in list, entry files) plus
-[helper-scripts.md](../../frictionless/specs/helper-scripts.md) (`linkapp`).
+[helper-scripts.md](../../../frictionless/specs/helper-scripts.md) (`linkapp`).
 These links assume ark, ui-engine and frictionless are checked out side by
 side, as in the shared Go workspace; outside that layout, the same paths
 resolve from each repo's root.
@@ -169,7 +169,7 @@ built-in-then-alphabetical rule, and the hotloaders watch per app. Discovery rea
 - DECIDED (Bill, 2026-10-07): each repo does its own mini-spec pass, so its
   specs, design and traceability are self-contained and make sense in that
   repo's own terms. ark's share is passing its bundled app names as
-  `flib.Config.BuiltinApps` ([embedded-ui.md](../specs/embedded-ui.md)).
+  `flib.Config.BuiltinApps` ([embedded-ui.md](../../specs/embedded-ui.md)).
 - DECIDED (Bill, 2026-10-07): ui-engine keeps the site's own `viewdefs/` as
   the lowest-ranked source, below every app, since its demo and other plain
   sites keep real viewdefs there. A missing `viewdefs/` is normal and silent; one
@@ -204,7 +204,7 @@ and a desktop process behaves the same. Over ssh, every reader (administrators
 included) is refused a junction a standard user made, and can follow one an
 administrator made. So the creator's standing is what ssh's RedirectionTrust
 checks, and a standard user cannot make a junction an ssh session will trust;
-see [windows-support.md Item 3](windows-support.md#3) for the mitigation.
+see [windows-support.md Item 3](../windows-support.md#3) for the mitigation.
 
 **Item 4.** `linkapp add`/`remove` makes or removes the one dir link; startup
 repairs dangling activation links ([reconcile](#reconcile)) and never creates
@@ -234,7 +234,7 @@ an absent one.
   already holds the manager, `ui.viewdefCollisions()` lives in ui-engine, not ark.
   Behavior now lives in ui-engine `specs/app-discovery.md` (R141-R145), frictionless
   `specs/mcp.md` (R191, the flib passthrough) and ark `specs/embedded-ui.md`
-  ([Viewdef conflicts](../specs/embedded-ui.md#viewdef-conflicts), R3523-R3525).
+  ([Viewdef conflicts](../../specs/embedded-ui.md#viewdef-conflicts), R3523-R3525).
 
 **Item 6.** `ui-*` work in `apps/mcp`: delete `ensureSymlink`. The `mkdir -p` and
 `base64 -d` bycatch goes to windows-support Item 7.
