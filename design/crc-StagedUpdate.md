@@ -10,7 +10,7 @@ logic takes its effects as injected functions so tests need no network, no
 process replacement, and no real server.
 
 ## Knows
-- request: `~/.ark/update.json` — `{version, downloadAttempts}` (R3527)
+- request: `~/.ark/update.json` — `{version, downloadAttempts}`, the library's `UpdateRequest` (one shape for the CLI and the UI bridge) (R3527)
 - paths: `~/.ark/ark` / `ark.new` / `ark.old` (`.exe` forms on Windows) and the lock file `~/.ark/update.lock`
 - maxDownloadAttempts: 3 (R3536)
 - effects (injected): serverRunning, versionOf(exe), stage(attempts), refresh(), chain(exe, args), lock(path)

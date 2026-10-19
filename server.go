@@ -5438,7 +5438,7 @@ func (srv *Server) registerLuaFunctions() {
 		// of this binary (`update --check` / `update --stage`, no shell) and
 		// return at once; the third is a cheap snapshot for the UI to poll. The
 		// server never restarts itself: the next `ark serve` takes a staged
-		// update. CRC: crc-UpdateBridge.md | Seq: seq-install.md#6 | R3540, R3541, R3542
+		// update. CRC: crc-UpdateBridge.md | Seq: seq-install.md#6 | R3540, R3541, R3542, R3543
 		if exe, err := os.Executable(); err == nil {
 			srv.updates = NewUpdateBridge(srv.db.Path(), exe)
 		}
@@ -5465,6 +5465,7 @@ func (srv *Server) registerLuaFunctions() {
 			t.RawSetString("newer", lua.LBool(st.Newer))
 			t.RawSetString("state", lua.LString(st.State))
 			t.RawSetString("error", lua.LString(st.Error))
+			t.RawSetString("stagedVersion", lua.LString(st.StagedVersion)) // R3543
 			L.Push(t)
 			return 1
 		}))

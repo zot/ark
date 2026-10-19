@@ -248,8 +248,9 @@ and unknown items carry the negative marker rather than a false green.
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
       the sweep. See Item 7.
   - [x] ~~**7.1 — portable file and process primitives in ui-engine.**~~ **LANDED (2026-10-19 — `#141`.)**
-  - [ ] **7.2 — ark's update bridge for the UI.** **OPEN (#142.)**
-  - [ ] **7.3 — the apps drop their shell-outs.** **OPEN (not queued.)**
+  - [x] ~~**7.2 — ark's update bridge for the UI.**~~ **LANDED (2026-10-19 — `#142`.)**
+  - [x] ~~**7.5 — `sys.updateStatus` names the staged version.**~~ **LANDED (2026-10-19 — `#143`.)**
+  - [ ] **7.3 — the apps drop their shell-outs.** **OPEN (#144.)**
   - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)**
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
@@ -898,6 +899,8 @@ The UI says the update is installed and takes effect on the next start; ark does
 not restart itself. A self-restart would have to weigh pending requests, a
 running Luhmann session and connected UIs, and updating next time rather than
 this minute costs little.
+
+**7.5** adds `stagedVersion` to `sys.updateStatus()`, read from `update.json`, so after a restart the UI can still say which version is staged (found 2026-10-19 while checking 7.3's call sites; without it a staged update from an earlier session reads as staged with no version). It keeps 7.3 Lua-only.
 
 **7.3** is the `/ui-*` pass that moves both apps onto 7.1 and 7.2. It is gated on
 both, and separate from them because Frictionless and mini-spec work do not share

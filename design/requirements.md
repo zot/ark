@@ -5250,6 +5250,7 @@ reason.
 - **R3540:** `sys.checkForUpdate()` starts `update --check` on the server's own executable in the background, with no shell, and returns at once.
 - **R3541:** `sys.requestUpdate()` starts `update --stage` on the server's own executable in the background, with no shell, and returns at once.
 - **R3542:** `sys.updateStatus()` returns `{current, latest, newer, state, error}` synchronously, where `state` is `idle`, `checking`, `downloading`, `staged`, or `failed`; `staged` holds whenever `update.json` and `ark.new` both exist, including from an earlier session.
+- **R3543:** `sys.updateStatus()` also returns `stagedVersion`: the version `update.json` records whenever `state` is `staged`, and `""` otherwise, so the UI can name a staged update after a restart.
 
 ## Feature: ark from inside WSL2
 **Source:** specs/wsl.md

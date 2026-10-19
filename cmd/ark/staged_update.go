@@ -31,11 +31,9 @@ const (
 	maxDownloadAttempts = 3
 )
 
-// updateRequest is update.json. R3527
-type updateRequest struct {
-	Version          string `json:"version"`
-	DownloadAttempts int    `json:"downloadAttempts"`
-}
+// updateRequest is update.json; the shape is the library's, shared with the
+// UI bridge. R3527
+type updateRequest = ark.UpdateRequest
 
 // stagedExePaths returns the installed, staged and aside binary paths; the
 // staged name is the library's, so the UI bridge sees the same file. R3526
@@ -45,12 +43,7 @@ func stagedExePaths(arkDir string) (exe, staged, aside string) {
 }
 
 func readUpdateRequest(arkDir string) (updateRequest, bool) {
-	var req updateRequest
-	data, err := os.ReadFile(filepath.Join(arkDir, ark.UpdateRequestFile))
-	if err != nil || json.Unmarshal(data, &req) != nil || req.Version == "" {
-		return req, false
-	}
-	return req, true
+	return ark.ReadUpdateRequest(arkDir)
 }
 
 func writeUpdateRequest(arkDir string, req updateRequest) error {

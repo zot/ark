@@ -111,10 +111,14 @@ Bridge cases inject `run` and read `Status()`.
 ## Test: the bridge reports check, download and staged states
 **Purpose:** the UI sees in-flight work and the outcome; a stage from an earlier session reads as staged (R3540, R3541, R3542)
 **Input:** `run` blocking on a channel; CheckForUpdate, read Status, release with `0.9.0\nnewer than 0.5.0\n`; then RequestUpdate with `run` failing; then files `update.json` + `ark.new` on disk with a fresh bridge
-**Expected:** `checking` while blocked, then `idle` with latest `0.9.0`, newer true; `failed` with the error; the fresh bridge reports `staged`
+**Expected:** `checking` while blocked, then `idle` with latest `0.9.0`, newer true, `stagedVersion` empty; `failed` with the error; the fresh bridge reports `staged` with `stagedVersion` `0.9.0` from the on-disk `update.json` (R3543)
 **Refs:** crc-UpdateBridge.md
 **Code:** update_bridge_test.go
 **Alarm:** 6
 **Fire alarm:** run the child synchronously inside CheckForUpdate. Red: `CheckForUpdate blocked until the check finished` (the test calls it from a goroutine and gives it a second, so red is an assertion, not a hung suite).
 **Inject:** update_bridge.go:UpdateBridge.CheckForUpdate
 **Pulled:** 2026-10-19 — rang: `CheckForUpdate blocked until the check finished; it must return at once`
+**Alarm:** 8
+**Fire alarm:** report `staged` without filling `stagedVersion`. Red: `a request left on disk reads as "staged" / "", want "staged" / 0.9.0`.
+**Inject:** update_bridge.go:UpdateBridge.Status
+**Pulled:** 2026-10-19 — rang: `a request left on disk reads as "staged" / "", want "staged" / 0.9.0 (R3543)` (a first attempt that left `req` unused did not compile and proved nothing)

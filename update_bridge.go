@@ -10,6 +10,7 @@ package ark
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,13 +44,33 @@ func StagedExeName() string {
 	return "ark.new"
 }
 
-// UpdateStatus is one immutable snapshot of where an update stands. R3542
+// UpdateRequest is update.json: the version staged and how many staged
+// downloads have failed validation. One shape for the CLI and the UI bridge.
+// R3527, R3543
+type UpdateRequest struct {
+	Version          string `json:"version"`
+	DownloadAttempts int    `json:"downloadAttempts"`
+}
+
+// ReadUpdateRequest reads arkDir's update.json; false when absent or unusable.
+// R3527, R3543
+func ReadUpdateRequest(arkDir string) (UpdateRequest, bool) {
+	var req UpdateRequest
+	data, err := os.ReadFile(filepath.Join(arkDir, UpdateRequestFile))
+	if err != nil || json.Unmarshal(data, &req) != nil || req.Version == "" {
+		return req, false
+	}
+	return req, true
+}
+
+// UpdateStatus is one immutable snapshot of where an update stands. R3542, R3543
 type UpdateStatus struct {
-	Current string
-	Latest  string
-	Newer   bool
-	State   string
-	Error   string
+	Current       string
+	Latest        string
+	Newer         bool
+	State         string
+	Error         string
+	StagedVersion string // set only while State is staged
 }
 
 // UpdateBridge runs update checks and stagings for the UI. The status is an
@@ -155,22 +176,18 @@ func (b *UpdateBridge) RequestUpdate() {
 	}()
 }
 
-// Status returns the snapshot, reporting staged whenever a request and its
-// staged binary are both on disk, including from an earlier session.
-// CRC: crc-UpdateBridge.md | Seq: seq-install.md#6.3 | R3542
+// Status returns the snapshot, reporting staged, with the staged version,
+// whenever a request and its staged binary are both on disk, including from
+// an earlier session. CRC: crc-UpdateBridge.md | Seq: seq-install.md#6.3 | R3542, R3543
 func (b *UpdateBridge) Status() UpdateStatus {
 	s := *b.status.Load()
-	if s.State == UpdateIdle && b.staged() {
-		s.State = UpdateStaged
+	if s.State != UpdateIdle {
+		return s
 	}
-	return s
-}
-
-func (b *UpdateBridge) staged() bool {
-	for _, name := range []string{UpdateRequestFile, StagedExeName()} {
-		if _, err := os.Stat(filepath.Join(b.arkDir, name)); err != nil {
-			return false
+	if req, ok := ReadUpdateRequest(b.arkDir); ok {
+		if _, err := os.Stat(filepath.Join(b.arkDir, StagedExeName())); err == nil {
+			s.State, s.StagedVersion = UpdateStaged, req.Version
 		}
 	}
-	return true
+	return s
 }

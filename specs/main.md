@@ -879,7 +879,9 @@ from both renaming.
 in the background (running ark's own binary with `update --check` /
 `update --stage`, no shell) and return at once; `sys.updateStatus()` reports
 where things stand, for the UI to poll while one is in flight. A staged
-update is reported as "takes effect the next time ark starts".
+update is reported as "takes effect the next time ark starts", naming its
+version, which the status reads from `update.json` so the UI can still name it
+after a restart.
 
 ### `ark init` and `ark ui install`
 

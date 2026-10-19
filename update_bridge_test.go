@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-UpdateBridge.md | Test: test-StagedUpdate.md | R3540, R3541, R3542
+// CRC: crc-UpdateBridge.md | Test: test-StagedUpdate.md | R3540, R3541, R3542, R3543
 
 import (
 	"errors"
@@ -49,8 +49,8 @@ func TestUpdateBridgeStates(t *testing.T) {
 	}
 	close(release)
 	st := waitState(t, b, UpdateIdle)
-	if st.Latest != "0.9.0" || !st.Newer || st.Current != Version {
-		t.Errorf("status = %+v, want latest 0.9.0, newer, current %s", st, Version)
+	if st.Latest != "0.9.0" || !st.Newer || st.Current != Version || st.StagedVersion != "" {
+		t.Errorf("status = %+v, want latest 0.9.0, newer, current %s, no staged version", st, Version)
 	}
 	if len(gotArgs) != 2 || gotArgs[0] != "update" || gotArgs[1] != "--check" {
 		t.Errorf("check ran %v, want [update --check]", gotArgs)
@@ -62,13 +62,14 @@ func TestUpdateBridgeStates(t *testing.T) {
 		t.Error("failed state carries no error")
 	}
 
-	for _, name := range []string{UpdateRequestFile, StagedExeName()} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
+	files := map[string]string{UpdateRequestFile: `{"version":"0.9.0","downloadAttempts":0}`, StagedExeName(): "x"}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	fresh := newUpdateBridge(dir, nil)
-	if st := fresh.Status(); st.State != UpdateStaged {
-		t.Errorf("a request left on disk reads as %q, want %q", st.State, UpdateStaged)
+	if st := fresh.Status(); st.State != UpdateStaged || st.StagedVersion != "0.9.0" {
+		t.Errorf("a request left on disk reads as %q / %q, want %q / 0.9.0 (R3543)", st.State, st.StagedVersion, UpdateStaged)
 	}
 }

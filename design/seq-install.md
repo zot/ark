@@ -102,7 +102,7 @@ global part does nothing.
 6. Lua → sys.* → Server.UpdateBridge
    6.1. sys.checkForUpdate() → state checking; goroutine runs `<exe> update --check` (no shell) → idle | failed (R3540)
    6.2. sys.requestUpdate() → state downloading; goroutine runs `<exe> update --stage` → staged | failed (R3541)
-   6.3. sys.updateStatus() → snapshot; staged whenever update.json and ark.new exist (R3542)
+   6.3. sys.updateStatus() → snapshot; staged whenever update.json and ark.new exist (R3542), with stagedVersion from update.json (R3543)
 ```
 
 ## Notes
