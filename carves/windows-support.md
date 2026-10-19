@@ -147,10 +147,18 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**3.1 — the portable directory-link helper.**~~ **LANDED (2026-10-04, #136.)**
   - [x] ~~**3.2 — test on Windows.**~~ **ASSESSED (2026-10-04.)** The helper
         works for a standard user outside ssh; unprivileged `setup` still stops
-        at bundle extraction, as predicted. Measured in Item 3.
-  - [ ] **3.3 — warn when junctions will be unreadable.** **OPEN (not queued;
-        optional.)** `setup` reads its own RedirectionTrust policy and warns a
-        non-administrator whose session enforces it (an ssh login). Item 3.
+        at bundle extraction, as predicted. Measured in Item 3. **Re-tested
+        2026-10-13, after app-activation:** a fresh standard user (`arkfresh`)
+        at its own desktop ran `setup` end to end (six apps activated as
+        junctions, libs, runtime, model), then `serve` logged "Loaded 48
+        viewdefs from 6 apps", the UI came up, and `ui conflicts` answered
+        through the server.
+  - [ ] **3.3 — detect junctions the session cannot read.** **OPEN (not
+        queued.)** Optional. DECIDED (Bill, 2026-10-13, superseding the
+        same day's "required"): normal users always run from the desktop, which
+        does not enforce RedirectionTrust; ssh is only how we test from Linux,
+        and the harness already copes (`winrun.sh`). So this is not product work.
+        Item 3.
 - **Item 9 — the install surface on Windows.** **SPLIT (Bill, 2026-09-24.)**
       Rides on [setup-and-update.md](setup-and-update.md): setup's self-copy
       into `~/.ark` and `update`'s replacement of a running `ark.exe`; the
@@ -223,13 +231,26 @@ and unknown items carry the negative marker rather than a false green.
       `windows-gpu` (WSL2 needed a named CPU model there). Open: gaps O221
       (Ctrl-C and `luhmann attach` through interop) and O222 (a working
       directory on the Linux filesystem). See Item 11.
+- [ ] **Item 12 — `ark claude`: run Claude Code inside the ark server.**
+      **OPEN (not queued.)** PARKED (Bill, 2026-10-13): not now; the
+      level-set in Item 3 removed its Windows motivation. Originally, DECIDED
+      (Bill, 2026-10-13): the general way past
+      the ssh junction problem. Gated: measured 2026-10-13, a default standard user
+      cannot run a task from ssh, so it needs another way to start the server
+      outside the session (Item 3 lists the candidates).
+      See Item 12.
 - [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
       queued.)** Not verified, and an independent track: the mechanism is
       portable (fsnotify); conduct under Windows' quirks, and recovery from
       dropped events, are unchecked.
-- [ ] **Item 7 — the audit past the grep seed.** **OPEN (not queued.)** Runs
-      alongside, not last. Items 1–6 came from one afternoon's greps, not a
-      sweep.
+- **Item 7 — the audit past the grep seed.** **SPLIT (Bill, 2026-10-19.)**
+      Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
+      sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
+      the sweep. See Item 7.
+  - [ ] **7.1 — portable file and process primitives in ui-engine.** **OPEN (#141.)**
+  - [ ] **7.2 — ark's update bridge for the UI.** **OPEN (not queued.)**
+  - [ ] **7.3 — the apps drop their shell-outs.** **OPEN (not queued.)**
+  - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)**
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
 `/tmp/remove` strings in `cmd/ark/main.go` and `message_cli.go` are HTTP route
@@ -465,13 +486,92 @@ path cannot be traversed because it contains an untrusted mount point"), whoever
 is reading: an administrator could not follow a standard user's junction either.
 A process cannot clear the policy for itself (`SetProcessMitigationPolicy`
 answers Access is denied). A desktop process and a scheduled task do not enforce
-it, so for those the junctions work.
+it, so for those the junctions work. *Measured 2026-10-13 on `windows-gpu`:* the
+RedirectionTrust policy (`GetProcessMitigationPolicy`, policy 16) of the console
+desktop's `explorer.exe` reads `flags=0x0`, and of an ssh PowerShell `flags=0x1`
+(enforce). A program started from the desktop is explorer's child and inherits
+its policy. Then end to end, the same day: the standard user `arkfresh`, logged on
+at its own desktop, ran `type` through a junction that the standard user `arktest`
+had made and read the file, while the same read over ssh (as `zot`, an
+administrator) was refused with "untrusted mount point". `arkfresh`'s desktop
+explorer also reads `flags=0x0`. So a normal user creates and reads junctions on
+the desktop with no privilege, and only ssh sessions are affected.
 
 The consequence for users is narrow but real: a **standard user running ark or
 Claude Code over ssh** cannot read the junctions `setup` made, and nothing in
 ark can fix that, since Claude Code is a separate process. An option, not a
 decision: `setup` could read its own policy (`GetProcessMitigationPolicy`) and
 warn when enforcement is on and the user is not an administrator.
+
+SUPERSEDED the same day by the level-set below. DECIDED (Bill, 2026-10-13),
+superseding "an option, not a decision" above: this
+is required, and `ark serve` needs it as much as `setup`. App-activation made the
+server read every app through its `~/.ark/lua/<app>` junction, so the same ssh
+session that cannot follow `~/.claude`'s junctions also starts a server with no
+apps, and nothing says why, since ui-engine's discovery skips an entry `os.Stat`
+fails on. Open fork for the design: ask the policy up front
+(`GetProcessMitigationPolicy` plus an admin check), or recognise error 448 where
+a junction read actually fails, or both.
+
+PROPOSED (Bill, 2026-10-13), not decided: a flag such as `ark serve --task` that
+starts the server as a scheduled task, outside the ssh session, so it does not
+enforce RedirectionTrust and reads the junctions. This is the route `winrun.sh -b`
+already uses, and on 2026-10-04 ssh-side `status`, `luhmann status` and `stop`
+worked against a task-served server. It covers Claude Code as well, when ark hosts
+it: a ConPTY session is a child of the server, so it inherits the task's context
+and reads `~/.claude`, and the ssh user attaches with `luhmann attach` as the same
+user (also proven 2026-10-04). Only `claude` run directly in the ssh shell stays
+broken, and the detection's message can point at the hosted route. Points to
+settle:
+- **Measure first:** whether a fresh standard user can register its own task from
+  ssh. `arktest` works only because it was granted "log on as a batch job", and
+  S4U self-registration was measured only for `zot`. If a default standard user
+  cannot, the flag fails for exactly the users it exists for.
+- The paths that start a server themselves (`ark ui install` and its kin) would
+  start one inside the restricted session; they likely want the same route when
+  enforcement is on.
+- The detection message names the flag, e.g. "this ssh session cannot read
+  junctions; run `ark serve --task`".
+
+**MEASURED (2026-10-13, `windows-gpu`, build 26200): a default standard user
+cannot run a task from ssh.** A fresh account `arkfresh` (member of Users only,
+nothing granted) logged in over ssh by password. The `SeBatchLogonRight` list
+there is `arktest` (granted by hand), Administrators, Backup Operators and
+Performance Log Users; Users is not on it.
+- PowerShell's `Register-ScheduledTask` family fails before reaching Task
+  Scheduler: "Cannot connect to CIM server. Access denied" (it goes through CIM,
+  which a standard ssh user cannot reach). Not the route ark would take anyway.
+- `schtasks /create /ru arkfresh /NP` (S4U, no stored password): prompts for a
+  password regardless, then "ERROR: Access is denied."
+- `schtasks /create` with no `/ru` (Interactive only): registers and "runs", but
+  never executes, `Last Result 267011` (`0x41303`, task has not run), since the
+  user has no desktop session.
+- `schtasks /create /ru arkfresh /rp …` (password logon): registers with "Batch
+  logon privilege needs to be enabled for the task principal", then never
+  executes, `Last Result 267011`.
+
+So the `--task` route fails for exactly the users it was for, and Item 12 cannot
+rest on it as proposed. What is left, none measured yet:
+- **A one-time grant.** An administrator gives the user (or Users) the batch-logon
+  right; after that the password-logon task works, as it does for `arktest`. It
+  costs an admin step and a stored password (S4U was still denied above).
+- **Start the server from the desktop.** A per-user autostart (the `HKCU` Run key
+  or the Startup folder needs no privilege) runs `ark serve` in the desktop
+  session, which does not enforce the policy; ssh clients then reach it over the
+  socket. Only for a user who logs on at the desktop at least once per boot.
+- **Admin-made junctions.** The policy refuses junctions a *non-administrator*
+  created. Whether a standard user can follow, over ssh, a junction an
+  administrator made is not measured; if so, an elevated setup step would make the
+  links readable everywhere.
+
+**DECIDED (Bill, 2026-10-13), the level-set:** normal users always run ark from
+the desktop, where none of this applies. ssh exists so we can test from Linux, and
+getting ssh to work for users outside our environment is not a goal. So 3.3 is
+optional again, the `--task` proposal is dropped, and the measurement above stays
+as **test-harness knowledge**: it is why `arktest` needed the batch-logon right and
+why junction-shaped tests run as tasks. One piece survives on its own merits: a
+`lua/<app>` entry that `os.Stat` cannot read vanishes from ui-engine's discovery
+with no log line, for any reason (a broken link, permissions), and deserves one.
 
 The consequence for testing: an ssh shell gives the wrong answer for anything
 junction-shaped, so Windows tests run as scheduled tasks (S4U for the
@@ -755,6 +855,82 @@ app-activation.md), `mkdir -p` (`app.lua:86`, `762`), and `base64 -d`
 (`772`). The `os/exec`-of-Unix-helper class is not hypothetical; those three
 break on Windows today and want Go-provided portable primitives the apps call
 instead.
+
+**The full inventory, measured 2026-10-19** (`grep -n 'os.execute\|io.popen'`
+over both bundled apps; the line numbers above are from 09-22 and have drifted).
+The `ln` hit is gone (app-activation, #138). What remains:
+
+| App | Line | Shells out to | For |
+|---|---|---|---|
+| mcp | 68, 744 | `mkdir -p` | settings dir, uploads dir |
+| mcp | 754 | `base64 -d` | decode a pasted image to a file |
+| mcp | 77 | `ls -1d */` | `listDirs` |
+| mcp | 23 | `curl` | Frictionless release check |
+| mcp | 881–883 | `uname -s/-m` | platform for the update instructions |
+| ark | 124 | `ls -1AF` | directory listing |
+| ark | 689 | `test -d` | is-directory check |
+| ark | 91 | `PATH=… ark … 2>/dev/null` | the app's whole CLI bridge (`run`, so every `arkCmd`) |
+
+The last row is the worst: `PATH=x cmd` is POSIX shell syntax, so on Windows
+every ark-app call that goes through the CLI fails, not just its stderr
+redirect.
+
+**DECIDED (Bill, 2026-10-19): the portable primitives live in ui-engine as
+`ui.*`,** not in ark's `sys`. A portable file API is not ark-specific, and
+ui-engine is the layer every Frictionless app (and the upstream copy of mcp that
+ark's fixes flow back to) already has. **7.1** is that set: make a directory,
+list one with an is-dir flag per entry, test for a directory, base64-decode,
+run a program from an argv with no shell and return its output, and report
+OS/arch. It is a mini-spec pass in the ui-engine repo, mirrored in ark's
+`specs/lua-api.md`.
+
+**DECIDED (Bill, 2026-10-19): the mcp app's self-update is ported to update ark,
+not Frictionless.** It cannot simply be re-pointed: the Frictionless flow pushes
+a `perform-update` event for an MCP-connected Claude to act on, and ark has no
+MCP server, so nothing would receive it. `ark update` already does the whole job
+(checksum, the Windows rename-aside, the asset refresh), but it lives in
+`cmd/ark`. So **7.2** gives the UI a version check and an update action, the
+latter running ark's own binary as `<exe> update` with no shell. That drops the
+`curl` and `uname` rows outright.
+
+**DECIDED (Bill, 2026-10-19): after a UI-driven update, the user restarts ark.**
+The UI says the update is installed and takes effect on the next start; ark does
+not restart itself. A self-restart would have to weigh pending requests, a
+running Luhmann session and connected UIs, and updating next time rather than
+this minute costs little.
+
+**7.3** is the `/ui-*` pass that moves both apps onto 7.1 and 7.2. It is gated on
+both, and separate from them because Frictionless and mini-spec work do not share
+a pass.
+
+<a id="12"></a>
+
+## Item 12
+
+DECIDED (Bill, 2026-10-13): an `ark claude` subcommand that starts Claude Code
+as a pty session hosted by the ark server and attaches the current terminal to
+it. On Windows this is the general way past the ssh junction problem in
+[Item 3](#3): a hosted session is a child of the server, so when the server runs
+outside the ssh session (as a scheduled task) Claude Code inherits that context
+and reads the `~/.claude` junctions, while the user drives it from ssh through
+the attach path Item 4 and Item 1 already proved there. It is an explicit command,
+so it stays inside the rule that ark never starts Claude on its own.
+
+Grounded 2026-10-13: the server holds exactly one `PtyHost` (`server.go:100`,
+made at `:349`) and it is the Luhmann seat, so this needs hosts per session, not
+a new mode on the existing one.
+
+Open questions:
+- **The gate.** Whether a fresh standard user can start the server as a task from
+  ssh (Item 3's `--task` proposal). If not, this does not help the users it is for.
+- One session per invocation, or named sessions a user can detach from and
+  re-attach to later.
+- How it carries the caller's working directory, environment and arguments into
+  the hosted `claude`.
+- Whether `ark claude` starts the server itself, as a task, when it finds none
+  and the session enforces RedirectionTrust.
+- What it means off Windows, where it is a persistent, re-attachable session
+  (tmux-like) rather than a workaround.
 
 <a id="8"></a>
 

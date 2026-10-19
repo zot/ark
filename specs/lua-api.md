@@ -257,6 +257,17 @@ host owns.
 | `ui.json_encode(value)`                      | Encode a Lua value to a JSON string                                     |
 | `ui.json_decode(text)`                       | Decode a JSON string to a Lua value                                     |
 | `ui.viewdefCollisions()`                     | The live viewdef-name conflicts: array of `{key, winner, winnerPath, loser, loserPath}` (same list as `ark ui conflicts`) |
+| `ui.mkdir(path)`                             | Create a directory and its missing parents; existing is success. `true` or `(nil, err)` |
+| `ui.isDir(path)`                             | `true` if `path` is a directory, following links and junctions; `false` otherwise, never an error |
+| `ui.listDir(path)`                           | Entries sorted by name, hidden included: array of `{name, isDir}` (`isDir` follows links), or `(nil, err)` |
+| `ui.base64Decode(text)`                      | Standard base64 to a byte string, or `(nil, err)`                       |
+| `ui.exec(argv)`                              | Run `argv[1]` with the rest as arguments, **no shell**; returns stdout, or `(nil, err)` with the exit status and stderr. Blocks the session while it runs |
+| `ui.platform()`                              | `{os, arch}` from the server's `GOOS` / `GOARCH`                        |
+
+The six functions after `viewdefCollisions` are the portable OS primitives
+(ui-engine `specs/interfaces.md`, R146–R151 there). Apps use them instead of
+`os.execute` / `io.popen`, because `mkdir -p`, `ls`, `test -d`, `base64 -d` and
+POSIX shell syntax (`VAR=x cmd`, `2>/dev/null`) do not exist on Windows.
 
 ## Cross-cutting concerns
 

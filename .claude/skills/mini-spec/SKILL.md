@@ -434,9 +434,10 @@ the `Rn`, per its `**Requirements:**` field), to anchor the code location.
 **The comment leader is the language's**, and `minispec query comment-patterns` lists it
 per extension: the form to write, and every form read. The examples here are Go. HTML reads
 its page comments, the `//` and `/* */` comments inside its `<script>`, and the `/* */`
-comments inside its `<style>`, each only where it is live. A file whose extension has no
-table is reported as not read, never passed over; a project can define more languages in
-its configuration (see `config-reference.md` in this skill directory).
+comments inside its `<style>`, each only where it is live. A script with no extension is
+read by its `#!` interpreter line. A file no table covers is reported as not read, never
+passed over; a project can define more languages in its configuration, or name files for a
+built-in table with `files` (see `config-reference.md` in this skill directory).
 
 **Block-comment languages:** where `comment-patterns` shows a closer (` -->`, ` */`,
 ` *)`), you MUST append it to every traceability comment. An unclosed block comment
