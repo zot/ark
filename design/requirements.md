@@ -5225,10 +5225,31 @@ reason.
 - **R3478:** `ark update --no-exe` refreshes every asset (skills, agents, apps, and the model if missing) from the running binary's own bundle, downloading nothing for the executable and assuming the running exe is already current; the refresh is manifest-aware and never replaces a link with a copy, and on a symlinked `~/.ark/ark` it proceeds normally.
 - **R3479:** Installed-file hashes and a per-file collision policy live in `~/.ark/install-manifest.json` (not `ark.toml`), reusing the `{hash, onCollision, group}` entry shape.
 - **R3480:** The per-model download URL and pinned SHA-256 come from `[embedding]` config keys (`model_url`, `model_sha256`), so model download stays model-neutral and fetches whatever model the config names.
-- **R3481:** `ark setup` (when it performs the global install) and `ark update` stop a running ark server first, through the graceful `ark stop` path, and neither starts one afterward; on Windows a live server holds `~/.ark/lib` and loaded apps that cannot be overwritten. When the graceful stop does not complete within the grace period, setup and update **abort** with a message telling the user to run `ark stop -f` and retry, rather than continuing to overwrite files a live server holds.
+- **R3481:** `ark setup` (when it performs the global install) and `ark update` (other than `--check` and `--stage`, R3529) stop a running ark server first, through the graceful `ark stop` path, and neither starts one afterward; on Windows a live server holds `~/.ark/lib` and loaded apps that cannot be overwritten. When the graceful stop does not complete within the grace period, setup and update **abort** with a message telling the user to run `ark stop -f` and retry, rather than continuing to overwrite files a live server holds.
 - **R3482:** The bundled reference `install/ark.toml` carries `model_url` and `model_sha256` for its default model (nomic-embed-text-v1.5 Q8_0).
 - **R3483:** (inferred) When the configured model file is absent and `model_url`/`model_sha256` are unset, setup and update report the missing model and how to add the keys instead of downloading.
 - **R3484:** `ark setup`'s global install seeds `~/.ark/install-manifest.json` with the hash of every extracted refreshable asset (same `{hash, onCollision, group}` entry as `ark update` writes), so the first `ark update` can tell a real user edit from an unchanged bundle copy instead of preserving everything. A refresh also records an already-current, un-manifested file (bytes equal to the bundle) without rewriting it, so an install that predates the manifest is seeded by one `ark update --no-exe`.
+
+## Feature: Requested update, staged for the next serve
+**Source:** specs/main.md
+
+- **R3526:** `ark update --stage` applies R3471's version rule (no-op when current, never downgrades), downloads and checksum-verifies the platform binary as plain update does (R3472), and writes it to `~/.ark/ark.new` (`ark.new.exe` on Windows), completing the file under a temporary name before renaming it, so a partial download never carries the staged name.
+- **R3527:** `ark update --stage` records the request in `~/.ark/update.json` with the staged `version` and a `downloadAttempts` count; a user-requested stage writes 0, and a re-stage after a failed validation (R3535) keeps the count it was given.
+- **R3528:** `ark update --check` prints the latest release version and whether it is newer than the running binary, and changes nothing.
+- **R3529:** `ark update --check` and `--stage` do not stop or restart a running server (they are not subject to R3481); `--stage` writes only `ark.new` and `update.json`.
+- **R3530:** `ark update --check` and `--stage` refuse on a symlinked `~/.ark/ark`, as plain update does (R3477).
+- **R3531:** Only an explicit request (`update --stage`, `sys.requestUpdate`) or the retry of a requested update (R3535) downloads a binary; a check never does.
+- **R3532:** `ark serve` runs the update step at startup before anything else, and only when `update.json` exists and no ark server is already running; an `ark.new` with no `update.json` is ignored. No other command runs the step.
+- **R3533:** The startup step is skipped when `~/.ark/ark` is a symbolic link or the running executable is not `~/.ark/ark` (`ark.exe` on Windows).
+- **R3534:** The startup step holds a lock file in `~/.ark` that a crashed process does not leave held; a process that cannot take it skips the step. Every `ark serve` start (past R3533's guards, request or not) deletes a leftover `ark.old` (`ark.exe.old` on Windows), ignoring failure.
+- **R3535:** The startup step validates `ark.new` by running `ark.new version`, which must succeed and report the version `update.json` records. On failure it deletes `ark.new`, increments `downloadAttempts`, and below three attempts re-stages in the background while serve continues normally; the swap waits for the next start.
+- **R3536:** At three failed validations the startup step removes `update.json` and logs that the update was abandoned.
+- **R3537:** On a successful validation the startup step renames `ark` to `ark.old` and `ark.new` to `ark` (restoring `ark` if the second rename fails), then chains to the new binary with the same command line.
+- **R3538:** Chaining is `exec` on Unix; on Windows it starts the new binary with the same arguments and standard streams, waits for it, and exits with its exit code.
+- **R3539:** When `update.json` records the running binary's own version, the startup step refreshes the assets from the running bundle as `update --no-exe` does (model included, R3478), removes `update.json`, and continues serving.
+- **R3540:** `sys.checkForUpdate()` starts `update --check` on the server's own executable in the background, with no shell, and returns at once.
+- **R3541:** `sys.requestUpdate()` starts `update --stage` on the server's own executable in the background, with no shell, and returns at once.
+- **R3542:** `sys.updateStatus()` returns `{current, latest, newer, state, error}` synchronously, where `state` is `idle`, `checking`, `downloading`, `staged`, or `failed`; `staged` holds whenever `update.json` and `ark.new` both exist, including from an earlier session.
 
 ## Feature: ark from inside WSL2
 **Source:** specs/wsl.md

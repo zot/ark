@@ -245,8 +245,13 @@ func flatCommands() []*ucli.Command {
 			Description: "Version-checked, two-phase, manifest-aware, safe on failure.\n" +
 				"   Gripes on a symlinked ~/.ark/ark. --no-exe refreshes skills,\n" +
 				"   agents, apps, and the model from the running binary's own bundle\n" +
-				"   without touching the exe.",
-			Flags:  []ucli.Flag{&ucli.BoolFlag{Name: "no-exe", Usage: "refresh assets from the running bundle without touching the exe"}},
+				"   without touching the exe. --check reports the latest version;\n" +
+				"   --stage downloads it as ark.new for the next serve to take.",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "no-exe", Usage: "refresh assets from the running bundle without touching the exe"},
+				&ucli.BoolFlag{Name: "check", Usage: "print the latest release version and whether it is newer; changes nothing"},
+				&ucli.BoolFlag{Name: "stage", Usage: "download the latest release as ~/.ark/ark.new for the next serve, without stopping a server"},
+			},
 			Action: flatUpdateAction,
 		},
 	}
@@ -265,8 +270,10 @@ func flatSetupAction(_ context.Context, c *ucli.Command) error {
 // CRC: crc-CLI.md | Seq: seq-install.md#3 | R3478
 func flatUpdateAction(_ context.Context, c *ucli.Command) error {
 	var a []string
-	if c.Bool("no-exe") {
-		a = append(a, "--no-exe")
+	for _, f := range []string{"no-exe", "check", "stage"} {
+		if c.Bool(f) {
+			a = append(a, "--"+f)
+		}
 	}
 	cmdUpdate(a)
 	return nil

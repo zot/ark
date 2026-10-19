@@ -516,13 +516,18 @@ ark setup --local    connect the CURRENT DIRECTORY to an existing install:
                      link ark's skills and agents into ./.claude/ and print
                      the CLAUDE.md hint. Requires a prior ` + "`ark setup`" + `.`
 
-const updateUsage = `Usage: ark update [--no-exe]
+const updateUsage = `Usage: ark update [--no-exe | --check | --stage]
 
 ark update           refresh this install to the latest GitHub release:
                      version-checked, two-phase, manifest-aware, and safe on
                      failure. Gripes on a symlinked ~/.ark/ark.
 ark update --no-exe  refresh skills, agents, apps, and the model from the
-                     running binary's own bundle, without touching the exe.`
+                     running binary's own bundle, without touching the exe.
+ark update --check   print the latest release version, then "newer than <v>"
+                     or "not newer than <v>". Changes nothing.
+ark update --stage   download and verify the latest release as ~/.ark/ark.new
+                     without stopping a server; the next ` + "`ark serve`" + ` swaps
+                     it in and refreshes the assets.`
 
 // CRC: crc-CLI.md | Seq: seq-install.md#1 | R3456, R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481
 func cmdSetup(args []string) {
@@ -832,7 +837,7 @@ func stopServerForInstall(arkDir string) error {
 // (R3481). Dispatches to Updater.Update.
 // CRC: crc-CLI.md | Seq: seq-install.md#3 | R3471, R3472, R3477, R3478, R3481
 func cmdUpdate(args []string) {
-	noExe := false
+	noExe, check, stage := false, false, false
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
@@ -840,20 +845,42 @@ func cmdUpdate(args []string) {
 			os.Exit(0)
 		case "--no-exe":
 			noExe = true
+		case "--check":
+			check = true
+		case "--stage":
+			stage = true
 		}
+	}
+	// CRC: crc-StagedUpdate.md | Seq: seq-install.md#4 | R3528, R3529, R3530
+	// --check and --stage change nothing a server holds, so they skip the stop.
+	if check || stage {
+		if isSymlink(filepath.Join(arkDir, arkExeName())) {
+			fatal(fmt.Errorf("~/.ark/ark is a symlink (developer install); update --check and --stage do not apply to it"))
+		}
+		u := newUpdater()
+		if stage {
+			if err := u.Stage(0); err != nil {
+				fatal(err)
+			}
+			return
+		}
+		latest, newer, err := u.Check()
+		if err != nil {
+			fatal(err)
+		}
+		relation := "not newer than"
+		if newer {
+			relation = "newer than"
+		}
+		fmt.Printf("%s\n%s %s\n", latest, relation, u.Version)
+		return
 	}
 	// R3481: stop a running server first; never start one. Abort on a stop
 	// that does not complete rather than refreshing around a live server.
 	if err := stopServerForInstall(arkDir); err != nil {
 		fatal(err)
 	}
-	u := &Updater{
-		ArkDir:  arkDir,
-		Version: ark.Version,
-		Fetcher: &githubReleaseFetcher{},
-		Assets:  bundleAssetSource{},
-	}
-	if err := u.Update(noExe); err != nil {
+	if err := newUpdater().Update(noExe); err != nil {
 		fatal(err)
 	}
 }
@@ -2655,6 +2682,12 @@ func cmdServe(args []string) {
 	force := fs.Bool("force", false, "accept config changes, clear error conditions")
 	compact := fs.Bool("compact", false, "compact LMDB via mdb_env_copy2 before opening (overrides ark.toml auto_compact)")
 	fs.Parse(args)
+
+	// CRC: crc-StagedUpdate.md | Seq: seq-install.md#5 | R3532
+	// Take a requested update before anything else; returns to serve normally.
+	if err := runStagedUpdate(); err != nil {
+		fmt.Fprintf(os.Stderr, "update: %v\n", err)
+	}
 
 	// CRC: crc-CLI.md | R2126, R2127
 	// -compact (when supplied) overrides ark.toml auto_compact;

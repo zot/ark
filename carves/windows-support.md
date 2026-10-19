@@ -247,8 +247,8 @@ and unknown items carry the negative marker rather than a false green.
       Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
       the sweep. See Item 7.
-  - [ ] **7.1 — portable file and process primitives in ui-engine.** **OPEN (#141.)**
-  - [ ] **7.2 — ark's update bridge for the UI.** **OPEN (not queued.)**
+  - [x] ~~**7.1 — portable file and process primitives in ui-engine.**~~ **LANDED (2026-10-19 — `#141`.)**
+  - [ ] **7.2 — ark's update bridge for the UI.** **OPEN (#142.)**
   - [ ] **7.3 — the apps drop their shell-outs.** **OPEN (not queued.)**
   - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)**
 

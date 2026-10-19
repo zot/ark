@@ -241,6 +241,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-DirLink.md → `dirlink.go`, `dirlink_unix.go`, `dirlink_windows.go`
 - [x] crc-AppActivation.md → `appactivation.go`
 - [x] crc-Updater.md → `cmd/ark/update.go`, `cmd/ark/update_windows.go`, `cmd/ark/update_unix.go`, `install_manifest.go`, `modelprovision.go`
+- [x] crc-StagedUpdate.md → `cmd/ark/staged_update.go`, `cmd/ark/staged_update_unix.go`, `cmd/ark/staged_update_windows.go`, `cmd/ark/update.go`, `cmd/ark/main.go`
+- [x] crc-UpdateBridge.md → `update_bridge.go`, `server.go`
 - [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
 - [x] test-PtyHost.md → `ptyhost_test.go`
 - [x] test-PtyBrowser.md → `pty_browser_test.go`
@@ -250,6 +252,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-WSLBridge.md → `cmd/ark/wsl.go`, `cmd/ark/wsl_windows.go`, `cmd/ark/wsl_other.go`
 - [x] test-WSLBridge.md → `cmd/ark/wsl_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`
+- [x] test-StagedUpdate.md → `cmd/ark/staged_update_test.go`, `update_bridge_test.go`
 
 ### Sequences
 - [x] seq-checkpoint.md → `cmd/ark/checkpoint.go`
@@ -262,7 +265,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-cli-urfave.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
-- [x] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`
+- [x] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`, `cmd/ark/staged_update.go`, `update_bridge.go`
 - [x] seq-wsl.md → `cmd/ark/wsl.go`, `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`, `db.go`
 - [x] seq-parallel-refresh.md → `indexer.go`

@@ -675,7 +675,9 @@ this is required rather than tidy: a running server holds the llama.cpp
 libraries under `~/.ark/lib` and the apps it loaded, and Windows refuses to
 overwrite a file a live process has loaded. If the graceful stop does not
 complete, setup and update **abort** and tell the user to run `ark stop -f` and
-retry, rather than overwriting files a live server still holds.
+retry, rather than overwriting files a live server still holds. The exceptions
+are `update --check` and `update --stage`, which change nothing a server holds
+and so never stop one (R3529; see "A requested update" below).
 
 When the marker is absent, setup runs the global install in order:
 
@@ -814,6 +816,70 @@ manifest-aware and never replaces a link with a copy, and on a symlinked
 `~/.ark/ark` it proceeds normally rather than griping (R3478). Pairing a
 new release's assets with the old exe is the mismatch the plain-update
 gripe exists to avoid.
+
+### A requested update, staged and taken at the next serve
+
+`ark update` has to stop a running server before it touches anything, so a
+user in the UI cannot complete an update from inside the server they are
+using. Instead the UI **stages** one: it downloads the new binary beside the
+installed one, and the next `ark serve` takes it. The server never restarts
+itself to do this; pending requests, a running Luhmann session and connected
+UIs make a self-restart too involved, and taking the update at the next
+start costs little.
+
+**Nothing happens unless the user asks.** The UI may *check* whether a newer
+release exists and say so, but it downloads only when the user requests the
+update. Everything below coordinates a requested update and nothing else: a
+`~/.ark/ark.new` with no request behind it is ignored.
+
+**Staging.** `ark update --stage` checks the latest release (doing nothing
+when already current, never downgrading), downloads its binary for this
+platform, verifies it against the release checksum exactly as plain update
+does, and writes it to `~/.ark/ark.new` (`ark.new.exe` on Windows),
+completing the file before it takes that name so a half-written download is
+never mistaken for a staged one. It records the request in
+`~/.ark/update.json`: the version staged and a `downloadAttempts` count,
+starting at 0. It touches nothing else and does not stop a server.
+`ark update --check` only reports the latest release version and whether it
+is newer than the running one. Both refuse on a developer install (a
+symlinked `~/.ark/ark`) the way plain update does.
+
+**At `ark serve` startup**, before anything else, when `update.json` records
+a request and no ark server is already running (a second `ark serve` against a
+live server must not swap the binary under it):
+
+1. **Validate.** Run `ark.new version`. It must succeed *and* report the
+   version `update.json` recorded.
+2. **On failure**, delete `ark.new`, increment `downloadAttempts`, and, below
+   three attempts, stage it again in the background while the server carries
+   on starting normally; the swap waits for the next start. At three failed
+   attempts the request is dropped (`update.json` removed) with a log line
+   saying so, rather than downloading on every start forever.
+3. **On success**, rename `ark` to `ark.old` and `ark.new` to `ark`, then
+   **chain** to the new binary with the same command line: a true `exec` on
+   Unix; on Windows, which has no `exec`, start the new binary with the same
+   arguments and standard streams, wait for it, and exit with its exit code.
+4. **The new binary finishes the update.** It finds a request whose version
+   is its own, so instead of swapping it refreshes the assets from its own
+   bundle (the same manifest-aware refresh as `update --no-exe`, model
+   included), removes `update.json`, and starts serving. No server is
+   running yet at this point, which is why the refresh can happen here and
+   not inside a live server.
+
+`ark.old` (`ark.exe.old` on Windows) is deleted by the next `ark serve` start, whether or not another update is pending (Windows cannot delete it while the chaining process still runs).
+Only `ark serve` does any of this: CLI commands run constantly while a server
+is up, and a swap under a live server would pair the new binary with the old
+assets. The startup step is skipped on a developer install and whenever the
+running binary is not the one in `~/.ark` (WSL interop, a binary run straight
+from a build directory). A lock file in `~/.ark` keeps two starting processes
+from both renaming.
+
+**The UI's side** is three `sys` methods (see `specs/lua-api.md`):
+`sys.checkForUpdate()` and `sys.requestUpdate()` start a check or a staging
+in the background (running ark's own binary with `update --check` /
+`update --stage`, no shell) and return at once; `sys.updateStatus()` reports
+where things stand, for the UI to poll while one is in flight. A staged
+update is reported as "takes effect the next time ark starts".
 
 ### `ark init` and `ark ui install`
 

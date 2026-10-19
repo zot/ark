@@ -14,9 +14,6 @@ import (
 	"path/filepath"
 )
 
-// asideSuffix marks the renamed-aside old binary awaiting deletion. R3473
-const asideSuffix = ".old"
-
 // SwapExe performs the Windows rename-aside swap. CRC: crc-Updater.md | Seq: seq-install.md#3.2.3 | R3473
 func SwapExe(arkDir string, newBinary []byte) error {
 	dest := filepath.Join(arkDir, arkExeWindows)

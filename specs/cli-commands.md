@@ -104,7 +104,7 @@ so no agent types a routing address either. Canonical:
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
 | `unresolved`       | `unresolved [--reason KIND]`                                                                                         | optional                 | lists U records with why; `--reason` narrows to one  |
-| `update`           | `update [--no-exe]`                                                                                                  | none                     | refresh install to latest GitHub release; gripes on a symlinked binary; `--no-exe` refreshes assets from the running bundle only (details below) |
+| `update`           | `update [--no-exe \| --check \| --stage]`                                                                          | none                     | refresh install to latest GitHub release; gripes on a symlinked binary; `--no-exe` refreshes assets from the running bundle only; `--check` reports the latest version; `--stage` downloads it as `ark.new` for the next `serve` (details below) |
 | `wsl-init`         | `wsl-init`                                                                                                           | none                     | Windows `ark.exe` only; prints a `sh` script to `eval` inside WSL2 (details below) |
 | `version`          | `version`                                                                                                           | none                     | prints `ark <version>` (from README.md)              |
 
@@ -1384,6 +1384,8 @@ hand-made link is reported and left, since either may be the user's.
 ```
 ark update
 ark update --no-exe
+ark update --check
+ark update --stage
 ```
 
 `ark update` refreshes an install to the running project's latest GitHub
@@ -1408,6 +1410,20 @@ link with a copy, and proceeds normally on a symlinked binary.
 Either form activates an app it extracts for the first time (one
 `~/.ark/lua/<app>` link, as setup does) and leaves every existing app's
 activation as the user left it.
+
+`ark update --check` prints the latest release version and whether it is
+newer than the running binary, and changes nothing. The output is two lines,
+stable because the UI parses it: the latest version alone, then either
+`newer than <running>` or `not newer than <running>`.
+
+`ark update --stage` prepares an update without stopping a running server:
+it downloads and verifies the latest release's binary as `~/.ark/ark.new`
+(`ark.new.exe` on Windows) and records the request in `~/.ark/update.json`.
+The next `ark serve` validates it, swaps it in, chains to it, and the new
+binary refreshes the assets before serving (see `specs/main.md`, "A
+requested update"). Already current is a no-op; it never downgrades. This is
+what the UI's update button runs. `--check` and `--stage` both refuse on a
+symlinked `~/.ark/ark`, as plain `update` does.
 
 ### `wsl-init` — set ark up inside WSL2
 

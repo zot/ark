@@ -63,6 +63,48 @@ global part does nothing.
         3.3.2. Updater.ProvisionModel(cfg) — download the configured model if the file is absent; report how to add model_url/model_sha256 when unset, no download (R3483)
 ```
 
+## Diagram 4: `ark update --stage` (a requested update, staged)
+
+```
+4. CLI.cmdUpdate(--stage) → Updater.Stage(attempts)
+   4.1. ~/.ark/ark is a symlink? → refuse, as plain update does (R3530); no server stop either way (R3529)
+   4.2. compare ark.Version to the latest release tag; no-op when current, never downgrade (R3471)
+   4.3. download the platform binary; verify against the published checksum (shared with 3.2.2)
+   4.4. write ark.new.tmp, rename to ark.new — a partial download never carries the staged name (R3526)
+   4.5. write update.json {version, downloadAttempts: attempts} (R3527)
+```
+
+## Diagram 5: `ark serve` startup step (taking a staged update)
+
+```
+5. CLI.cmdServe → StagedUpdate.Run(args), before ark.Serve
+   5.1. no update.json, or a server already running → continue to serve (R3532)
+   5.2. ~/.ark/ark a symlink, or running exe not ~/.ark/ark → continue to serve (R3533)
+   5.3. take update.lock; not taken → continue (R3534)
+   5.8. delete a leftover ark.old, ignoring failure, on every start past 5.2, request or not (R3534)
+   5.4. update.json names this binary's own version → the chained new binary:
+        5.4.1. Updater.RefreshAssets(own bundle) + ProvisionModel, as --no-exe (R3539)
+        5.4.2. remove update.json; continue to serve
+   5.5. run `ark.new version`; must succeed and name update.json's version (R3535)
+   5.6. invalid:
+        5.6.1. delete ark.new; downloadAttempts+1
+        5.6.2. below 3 → Updater.Stage(attempts) in the background; continue to serve (R3535)
+        5.6.3. at 3 → remove update.json, log that the update was abandoned; continue to serve (R3536)
+   5.7. valid:
+        5.7.1. rename ark → ark.old, ark.new → ark; undo the first if the second fails (R3537)
+        5.7.2. release the lock; chain(ark, args): Unix exec; Windows run, wait, exit with its code (R3538)
+        5.7.3. the new binary starts at 5 and takes 5.4
+```
+
+## Diagram 6: the UI's update calls
+
+```
+6. Lua → sys.* → Server.UpdateBridge
+   6.1. sys.checkForUpdate() → state checking; goroutine runs `<exe> update --check` (no shell) → idle | failed (R3540)
+   6.2. sys.requestUpdate() → state downloading; goroutine runs `<exe> update --stage` → staged | failed (R3541)
+   6.3. sys.updateStatus() → snapshot; staged whenever update.json and ark.new exist (R3542)
+```
+
 ## Notes
 
 `installLinks` and `retireOldAgentCopies` are shared by global setup

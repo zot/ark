@@ -53,6 +53,7 @@ type Server struct {
 	pidPath            string
 	noScan             bool
 	uiRuntime          *flib.Runtime
+	updates            *UpdateBridge // R3540: the UI's requested-update runs; nil if os.Executable failed
 	watcher            *fsnotify.Watcher
 	ignoredPaths       map[string]struct{} // negative cache: non-indexable paths
 	indexingMu         sync.Mutex
@@ -5429,6 +5430,42 @@ func (srv *Server) registerLuaFunctions() {
 				return 2
 			}
 			L.Push(lua.LString(id))
+			return 1
+		}))
+
+		// sys.checkForUpdate() / sys.requestUpdate() / sys.updateStatus() — the
+		// UI's side of a requested update. The first two start a background run
+		// of this binary (`update --check` / `update --stage`, no shell) and
+		// return at once; the third is a cheap snapshot for the UI to poll. The
+		// server never restarts itself: the next `ark serve` takes a staged
+		// update. CRC: crc-UpdateBridge.md | Seq: seq-install.md#6 | R3540, R3541, R3542
+		if exe, err := os.Executable(); err == nil {
+			srv.updates = NewUpdateBridge(srv.db.Path(), exe)
+		}
+		L.SetField(sysTable, "checkForUpdate", L.NewFunction(func(L *lua.LState) int {
+			if srv.updates != nil {
+				srv.updates.CheckForUpdate()
+			}
+			return 0
+		}))
+		L.SetField(sysTable, "requestUpdate", L.NewFunction(func(L *lua.LState) int {
+			if srv.updates != nil {
+				srv.updates.RequestUpdate()
+			}
+			return 0
+		}))
+		L.SetField(sysTable, "updateStatus", L.NewFunction(func(L *lua.LState) int {
+			st := UpdateStatus{Current: Version, State: UpdateFailed, Error: "no executable path"}
+			if srv.updates != nil {
+				st = srv.updates.Status()
+			}
+			t := L.NewTable()
+			t.RawSetString("current", lua.LString(st.Current))
+			t.RawSetString("latest", lua.LString(st.Latest))
+			t.RawSetString("newer", lua.LBool(st.Newer))
+			t.RawSetString("state", lua.LString(st.State))
+			t.RawSetString("error", lua.LString(st.Error))
+			L.Push(t)
 			return 1
 		}))
 

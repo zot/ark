@@ -35,6 +35,8 @@ const (
 	// arkExeUnix / arkExeWindows are the installed binary names. R3458, R3473
 	arkExeUnix    = "ark"
 	arkExeWindows = "ark.exe"
+	// asideSuffix marks the renamed-aside old binary awaiting deletion. R3473, R3537
+	asideSuffix = ".old"
 )
 
 // refreshableAssetRoots are the top-level bundle directories a refresh touches.
@@ -126,17 +128,9 @@ func (u *Updater) Update(noExe bool) error {
 			return nil
 		}
 		// R3472/R3476: download the new binary and verify before swapping.
-		assetName := releaseAssetName(latest)
-		newBinary, err := u.Fetcher.Download(assetName)
+		newBinary, err := u.fetchVerified(latest)
 		if err != nil {
-			return fmt.Errorf("download %s: %w", assetName, err)
-		}
-		wantSum, err := u.Fetcher.Checksum(assetName)
-		if err != nil {
-			return fmt.Errorf("fetch checksum: %w", err)
-		}
-		if got := ark.HashContent(newBinary); !strings.EqualFold(got, wantSum) {
-			return fmt.Errorf("checksum mismatch for %s: got %s, want %s", assetName, got, wantSum)
+			return err
 		}
 		// R3473/R3476: swap only after the download verified.
 		if err := SwapExe(u.ArkDir, newBinary); err != nil {
@@ -153,6 +147,24 @@ func (u *Updater) Update(noExe bool) error {
 		return err
 	}
 	return u.provisionModel()
+}
+
+// fetchVerified downloads latest's platform binary and checks it against the
+// release checksum; shared by Update and Stage. R3472, R3476, R3526
+func (u *Updater) fetchVerified(latest string) ([]byte, error) {
+	assetName := releaseAssetName(latest)
+	newBinary, err := u.Fetcher.Download(assetName)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", assetName, err)
+	}
+	wantSum, err := u.Fetcher.Checksum(assetName)
+	if err != nil {
+		return nil, fmt.Errorf("fetch checksum: %w", err)
+	}
+	if got := ark.HashContent(newBinary); !strings.EqualFold(got, wantSum) {
+		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", assetName, got, wantSum)
+	}
+	return newBinary, nil
 }
 
 // execNew runs the re-exec second phase, defaulting to the real re-exec.
