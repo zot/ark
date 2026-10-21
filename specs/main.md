@@ -519,6 +519,10 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   intact on failure. Gripes on a symlinked `~/.ark/ark`. `--no-exe`
   refreshes assets from the running binary's own bundle without touching
   the exe. See Setup and Install.
+- `ark _release-asset [--terse] OS ARCH`
+  Internal, for the Makefile: report the release asset name `ark update`
+  downloads for that platform at this binary's version, in baby food by
+  default; `--terse` prints the bare name. See Release assets.
 - `ark add [--dir <path>] [-strategy <name>] <file-or-dir>...`
   Add files. If directory, walk per config. If file, add directly.
 - `ark remove [--dir <path>] <file-or-pattern>...`
@@ -800,6 +804,24 @@ is missing and how to add the keys, not a download (R3483). A new
 ark release must carry one binary asset per platform under a predictable
 name plus a published checksum for update to find and verify; the release
 process owns producing those, and update only consumes them.
+
+**Release assets.** `make release` produces exactly what update consumes, in a
+directory of its own, `release/<version>/`, so a release is published by
+uploading that directory as it stands:
+
+- one binary per supported platform, named `ark-<version>-<os>-<arch>` with
+  `.exe` on Windows, `<version>` carrying no leading `v`;
+- `SHA256SUMS`, in `sha256sum` format, listing every file in the directory;
+- nothing else: that directory is emptied first, so a release never mixes
+  versions. Anything else under `release/` (an older version's directory, or an
+  asset of a separate release kept there by hand) is left alone.
+
+The names come from the binary, not from the Makefile. For each platform the
+Makefile asks `ark _release-asset --terse OS ARCH`, which answers with the same naming
+function update uses to choose its download, at its own build-time version. The
+release and the updater therefore cannot disagree about a name. `make
+release-archives` adds a tar.gz (Unix) or zip (Windows) beside each binary for
+manual download and rewrites `SHA256SUMS` to cover them too.
 
 **A symlinked `~/.ark/ark` is a developer install.** Where `~/.ark/ark`
 links into a source tree, swapping it would replace the link with a

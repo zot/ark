@@ -163,8 +163,15 @@ and unknown items carry the negative marker rather than a false green.
       Rides on [setup-and-update.md](setup-and-update.md): setup's self-copy
       into `~/.ark` and `update`'s replacement of a running `ark.exe`; the
       Windows exe semantics are measured. See Item 9.
-  - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued.)**
-  - [ ] **9.2 — test on Windows.** **OPEN (not queued.)**
+  - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued), mostly
+        covered** by #136 and #142 (2026-10-21 review, see Item 9). Close or
+        trim when 9.2 lands.
+  - [ ] **9.2 — test on Windows.** **OPEN (not queued.)** Plain `ark update`
+        from an installed `~/.ark/ark.exe`, download path included. Needs
+        9.3 and 9.4 first. See Item 9.
+  - [x] ~~**9.3 — the release carries what `update` fetches.**~~ **LANDED (2026-10-21 — `#145`.)** Filed by Bill, 2026-10-21. `/mini-spec`.
+  - [ ] **9.4 — a release-source override for testing.** **OPEN (not
+        queued.)** Filed by Bill, 2026-10-21. `/mini-spec`.
 - **Item 6 — llama.cpp embedding provisioning on Windows.** **SPLIT
       (2026-10-04.)** Measured on the VM: provisioning dropped every file of
       ggml-org's flat Windows zips (fixed, 6.1); with the files in place,
@@ -251,7 +258,13 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**7.2 — ark's update bridge for the UI.**~~ **LANDED (2026-10-19 — `#142`.)**
   - [x] ~~**7.5 — `sys.updateStatus` names the staged version.**~~ **LANDED (2026-10-19 — `#143`.)**
   - [x] ~~**7.3 — the apps drop their shell-outs.**~~ **LANDED (2026-10-19 — `#144`.)**
-  - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)**
+  - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)** The Go-side
+        audit: Unix-only `os/exec`, file modes, path separators as data,
+        case-insensitivity, CRLF. See Item 7.
+  - [ ] **7.6 — verify the ark app's checkpoint repo after 7.3.** **OPEN (not
+        queued), NOT VERIFIED.** Filed by Bill, 2026-10-21. A failed
+        `checkpoint baseline` during 7.3 may have lost the `local` branch.
+        Confirm or rule out, and fix if real. See Item 7.
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
 `/tmp/remove` strings in `cmd/ark/main.go` and `message_cli.go` are HTTP route
@@ -915,6 +928,10 @@ a pass.
   'updateStatus'`). The shell's startup update work therefore waits for `sys`
   (`whenSys` in `apps/mcp/app.lua`). `ui.*` is already there at load. Registering
   `sys` before the apps load would be the cleaner fix, on the Go side.
+- **A shell that fails to load leaves one trace.** The server keeps running
+  with no UI, the Lua logs (`~/.ark/log/lua*.log`) stay empty, and the only sign
+  is a `ui: start failed: … failed to load mcp/app.lua: …` line in the server
+  log (`~/.ark/logs/ark.log`). Look there first when the UI is missing.
 - **`ark status` has no `--dir` flag**, so the ark app's server light had always
   read "not running": the old bridge threw stderr away and got empty stdout. The
   argv bridge surfaced the error. `checkServer` now runs `status` without
@@ -923,6 +940,57 @@ a pass.
   strips it before adding its own.
 - **`HOME` is unset on Windows**, so both apps fall back to `USERPROFILE`; without
   it the ark app's `DB_PATH` came out as `/.ark`.
+
+**7.4** is the sweep this item's opening paragraph asked for, minus what 7.1–7.3
+covered. Those parts handled one class, `os/exec` of Unix helpers, in one place:
+the two bundled apps' Lua. Nothing has looked at the rest yet, so its depth is
+still the afternoon of greps behind Items 1–6. In scope, across the Go code
+(`*.go`, `cmd/ark/`, and the ark-owned parts of ui-engine and microfts2 that ark
+drives):
+
+- **`os/exec` of Unix-only programs from Go.** `sh -c`, `fossil`, `git`, `xdg-open`
+  and the like: which exist on Windows, which have a portable path, and which
+  need a Windows branch.
+- **File-mode assumptions.** `0o755`/`0o600` permission bits, the executable bit
+  as a signal, `Chmod` results that mean nothing on NTFS.
+- **Path separators crossing as data.** Paths stored in bbolt keys, sent over the
+  socket, embedded in URLs or `tmp://` names, or compared as strings. A path
+  written with `\` on Windows and read back expecting `/` breaks lookup silently.
+  Chunk addresses like `C:\x\y:chunk` contain two colons.
+- **Case-insensitivity.** NTFS treats `Foo.md` and `foo.md` as one file. The index
+  keys paths case-sensitively, so one file can end up indexed under two names.
+- **CRLF.** Chunkers, the tag parser (a tag runs to end of line), and any
+  byte-offset arithmetic, when a file has `\r\n` line endings.
+
+How it runs: one measured grep or probe per class, recorded here with its date
+and command like the 2026-10-19 inventory above. Each real hit becomes its own
+part (7.7, 7.8, …), queued as usual. Each false hit is written down as a
+non-defect, like the `/tmp/add` note in Status, so the next sweep doesn't repair
+it. 7.4 is done when every class has a recorded result, not when every hit is
+fixed.
+
+**7.6** checks whether 7.3 left the ark app's checkpoint repo damaged. On
+2026-10-19, `ark ui checkpoint baseline ark` failed while restoring the `local`
+branch (`fossil bundle import … artifact hash error`). Afterwards
+`apps/ark/checkpoint.fossil` appeared to hold trunk only. That observation came
+mid-pass and has not been rechecked. The outer `ark-code.fossil` holds a copy of
+the file from 2026-09-24.
+
+Verify first:
+
+- Is the `local` branch really gone, or only hidden (`fossil branch list --all`,
+  `fossil timeline` against the repo)? Does `fossil rebuild` / `fossil test-integrity`
+  pass?
+- What did the failed import leave behind? A stale bundle file, a half-written
+  repo, or nothing at all?
+- Does `checkpoint local` / `checkpoint baseline` work on the repo as it stands
+  now?
+
+If it is damaged, the fix has two halves. Restore the history (the 09-24 copy
+plus whatever `local` commits came after it, if any survive). Then find out why
+the bundle import failed. That second half is #63's machinery (`baseline`'s
+export/re-import of `local`), so it reopens #63 if it is a code fault rather
+than a one-off. The skill depends on where the fault turns out to be.
 
 <a id="12"></a>
 
@@ -1009,6 +1077,47 @@ itself and rename itself aside, but cannot be overwritten in place, and the
 renamed-aside copy cannot be deleted until its process exits. So the self-copy
 needs nothing special, and `update` needs rename-aside plus a deferred delete.
 The Windows test for this part is those two paths run against the real binary.
+
+**Where it stands (reviewed 2026-10-21).** Most of 9.1 is already proven.
+`SwapExe` (`cmd/ark/update_windows.go`) does the rename-aside. #142 verified the
+staged-update path on `windows-gpu`: the swap, the chain, the asset refresh, and
+`ark.exe.old` swept at every start. Setup's self-copy ran end to end as the
+standard user `arkfresh` on 2026-10-13.
+
+What no test has run, on any platform, is `update`'s **download path**. The unit
+tests inject a `fakeFetcher` (`cmd/ark/staged_update_test.go`), and #142's live
+run used a hand-staged binary. A live test cannot simply use GitHub either,
+for two reasons:
+
+- **The release and the updater disagree on names.** The updater fetches
+  `ark-<version>-<os>-<arch>` (`.exe` on Windows) and a `SHA256SUMS` file
+  (`releaseAssetName` and `checksumAssetName` in `cmd/ark/update.go`). The
+  Makefile's `release` target builds unversioned names (`ark-windows-amd64.exe`),
+  `release-archives` zips or tars them, and nothing writes `SHA256SUMS`. v0.5.0
+  has one asset, `ark-0.5.0-linux-amd64`, and no checksums, so `update` is
+  expected to fail at the checksum step on every platform today. That
+  expectation comes from reading the code; it has not been run.
+  [setup-and-update.md](setup-and-update.md) noted that the release process has
+  to change with `update`; no part tracked it until 9.3.
+- **`releases/latest` skips drafts and pre-releases**, so a GitHub test needs a
+  published release, and the release URL is a constant with no override.
+
+**9.3** makes `make release` produce exactly what the updater fetches: one
+asset per platform under `releaseAssetName`'s pattern, and a sha256sum-format
+`SHA256SUMS` covering them. Worth a check that ties the two together so they
+cannot drift again, e.g. a test that runs the updater's own name and checksum
+parsing over a `make release` output directory.
+
+**9.4** adds a release-source override: an environment variable (name to
+settle, e.g. `ARK_RELEASE_URL`) naming a GitHub-shaped release document that
+`githubReleaseFetcher` reads instead of the API constant. A test then serves real
+`make release` output over plain HTTP and runs a full `ark update` on
+`windows-gpu` with nothing published. It stays useful for every later release as
+a pre-publish check.
+
+**9.2** itself is then that run: an older stamped `ark.exe` installed in a
+throwaway `USERPROFILE`, a newer `make release` served through 9.4, and plain
+`ark update` from the installed exe, with and without a server running.
 
 <a id="10"></a>
 

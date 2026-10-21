@@ -188,6 +188,7 @@ func arkCommands() []*ucli.Command {
 		subscribersCommand(),
 		listenCommand(),
 		searchCommand(),
+		releaseAssetCommand(),
 	}
 	return append(cmds, flatCommands()...)
 }

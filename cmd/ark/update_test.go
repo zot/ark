@@ -1,6 +1,6 @@
 package main
 
-// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3474, R3476, R3477, R3478, R3479, R3484
+// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3472, R3474, R3476, R3477, R3478, R3479, R3484, R3547, R3548
 //
 // Update's decision logic against a fake install root and a fake release source
 // (no network). The whole class here is invisible when violated: a refresh that
@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -24,11 +25,19 @@ type fakeFetcher struct {
 	binary    []byte
 	sum       string
 	downloads int
+	asked     []string // every asset name Download and Checksum were asked for
 }
 
-func (f *fakeFetcher) Latest() (string, error)         { return f.version, nil }
-func (f *fakeFetcher) Download(string) ([]byte, error) { f.downloads++; return f.binary, nil }
-func (f *fakeFetcher) Checksum(string) (string, error) { return f.sum, nil }
+func (f *fakeFetcher) Latest() (string, error) { return f.version, nil }
+func (f *fakeFetcher) Download(name string) ([]byte, error) {
+	f.downloads++
+	f.asked = append(f.asked, name)
+	return f.binary, nil
+}
+func (f *fakeFetcher) Checksum(name string) (string, error) {
+	f.asked = append(f.asked, name)
+	return f.sum, nil
+}
 
 // fakeAssets is an in-memory AssetSource.
 type fakeAssets struct{ files map[string][]byte }
@@ -244,5 +253,62 @@ func TestRefreshActivatesOnlyNewApps(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(arkRoot, "lua", "old")); err == nil {
 		t.Error("refresh re-activated an app the user had deactivated")
+	}
+}
+
+// Test: release asset names come from one function. R3547
+func TestReleaseAssetNameOneFunction(t *testing.T) {
+	cases := []struct{ version, goos, goarch, want string }{
+		{"v0.6.0", "linux", "amd64", "ark-0.6.0-linux-amd64"},
+		{"0.6.0", "windows", "amd64", "ark-0.6.0-windows-amd64.exe"},
+		{"0.6.0", "darwin", "arm64", "ark-0.6.0-darwin-arm64"},
+	}
+	for _, c := range cases {
+		if got := releaseAssetName(c.version, c.goos, c.goarch); got != c.want {
+			t.Errorf("releaseAssetName(%q, %q, %q) = %q, want %q", c.version, c.goos, c.goarch, got, c.want)
+		}
+	}
+	// The command's terse answer for the running platform is the name Update fetches.
+	var out bytes.Buffer
+	if err := releaseAssetReport(&out, "0.6.0", runtime.GOOS, runtime.GOARCH, true); err != nil {
+		t.Fatal(err)
+	}
+	if want := releaseAssetName("0.6.0", runtime.GOOS, runtime.GOARCH) + "\n"; out.String() != want {
+		t.Errorf("terse report = %q, want the name update downloads %q", out.String(), want)
+	}
+	out.Reset()
+	if err := releaseAssetReport(&out, "0.6.0", "windows", "amd64", true); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "ark-0.6.0-windows-amd64.exe\n" {
+		t.Errorf("terse windows report = %q, want ark-0.6.0-windows-amd64.exe", out.String())
+	}
+}
+
+// Test: release asset report is baby food unless --terse. R3548
+func TestReleaseAssetReportBabyFood(t *testing.T) {
+	var out bytes.Buffer
+	if err := releaseAssetReport(&out, "v0.6.0", "windows", "amd64", false); err != nil {
+		t.Fatal(err)
+	}
+	want := "- asset: ark-0.6.0-windows-amd64.exe\n- version: 0.6.0\n- platform: windows/amd64\n"
+	if out.String() != want {
+		t.Errorf("default report =\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
+// Test: update fetches the running platform's release asset. The release names
+// its binaries with `ark _release-asset`; this pins the other end, so the name
+// Update asks for (binary and checksum both) is that same function's answer for
+// the platform it runs on. R3472, R3547
+func TestUpdateFetchesRunningPlatformAsset(t *testing.T) {
+	fetch := &fakeFetcher{version: "v0.6.0", binary: []byte("new"), sum: ark.HashContent([]byte("new"))}
+	u := &Updater{ArkDir: t.TempDir(), Version: "0.5.0", Fetcher: fetch, Out: &bytes.Buffer{}}
+	if _, err := u.fetchVerified(fetch.version); err != nil {
+		t.Fatal(err)
+	}
+	want := releaseAssetName("0.6.0", runtime.GOOS, runtime.GOARCH)
+	if len(fetch.asked) != 2 || fetch.asked[0] != want || fetch.asked[1] != want {
+		t.Errorf("fetch asked for %q, want binary and checksum both %q", fetch.asked, want)
 	}
 }

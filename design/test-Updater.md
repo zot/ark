@@ -51,3 +51,33 @@ green happy path while breaking exactly the guarantee the field exists for.
 **Code:** cmd/ark/update_test.go
 **Fire alarm:** drop the symlink check so plain update swaps a linked binary; the test goes red when the symlink is replaced by a file (or assets refresh on the plain path)
 **Inject:** cmd/ark/update.go:Update
+
+## Test: release asset names come from one function
+**Purpose:** `ark _release-asset` reports exactly the name update downloads, for any platform: `ark-<version>-<os>-<arch>`, `.exe` only on windows, no leading `v` (R3547)
+**Input:** ReleaseAssetName for (v0.6.0, linux, amd64), (0.6.0, windows, amd64), (0.6.0, darwin, arm64); and the command's `--terse` output for the running platform at a stamped version
+**Expected:** `ark-0.6.0-linux-amd64`, `ark-0.6.0-windows-amd64.exe`, `ark-0.6.0-darwin-arm64`; the terse output equals ReleaseAssetName(version, runtime.GOOS, runtime.GOARCH), the name Update fetches
+**Refs:** crc-Updater.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** make the command build its own name string instead of calling ReleaseAssetName (e.g. forget the `.exe`, or keep the `v`); the windows or terse-equality case goes red
+**Inject:** cmd/ark/release_asset_cli.go:releaseAssetReport
+**Pulled:** 2026-10-21 — rang: own Sprintf name without `.exe`; terse windows case red (`ark-0.6.0-windows-amd64`, want `.exe`), baby-food case red too
+
+## Test: release asset report is baby food unless --terse
+**Purpose:** the default answer is `- asset:` / `- version:` / `- platform:` bullets, and `--terse` is the bare name on one line (R3548)
+**Input:** the report for (0.6.0, windows, amd64), with and without terse
+**Expected:** default: three bullets in that order naming `ark-0.6.0-windows-amd64.exe`, `0.6.0`, `windows/amd64`; terse: `ark-0.6.0-windows-amd64.exe` followed by one newline and nothing else
+**Refs:** crc-Updater.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** swap the branches so the default prints the bare name; the default case goes red
+**Inject:** cmd/ark/release_asset_cli.go:releaseAssetReport
+**Pulled:** 2026-10-21 — rang: `if !terse`; default report red, printed the bare name
+
+## Test: update fetches the running platform's release asset
+**Purpose:** the name Update asks the release for, for the binary and for its checksum, is ReleaseAssetName's answer for the running platform, so it matches what `make release` produced (R3472, R3547). Found by probing past the alarm list 2026-10-21: a hardcoded platform at the call site left the whole suite green.
+**Input:** fake fetcher recording every name it is asked for; fetchVerified at latest `v0.6.0`
+**Expected:** exactly two requests, both `ReleaseAssetName("0.6.0", runtime.GOOS, runtime.GOARCH)`
+**Refs:** crc-Updater.md, seq-install.md#3
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** hardcode a platform at the call site (`releaseAssetName(latest, "windows", runtime.GOARCH)`); red on any non-windows host, naming the wrong asset
+**Inject:** cmd/ark/update.go:fetchVerified
+**Pulled:** 2026-10-21 — rang: hardcoded `"windows"`; asked for `ark-0.6.0-windows-amd64.exe` twice, want `ark-0.6.0-linux-amd64`

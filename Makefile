@@ -9,8 +9,11 @@ FRICTIONLESS_BIN := $(FRICTIONLESS_DIR)/build/frictionless
 
 CACHE_DIR := cache
 RELEASE_DIR := release
+# R3544: each version builds into its own directory; nothing else under release/ is touched.
+RELEASE_VERSION_DIR := $(RELEASE_DIR)/$(VERSION)
+RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk tag-overview luhmann-terminal release release-archives
+.PHONY: build install test clean cache cache-clean cache-refresh markdown-editor ark-search pdf-chunk tag-overview luhmann-terminal release release-sums release-archives
 
 # Default: deps, cache, build+bundle
 all: cache markdown-editor ark-search pdf-chunk tag-overview luhmann-terminal build
@@ -60,40 +63,32 @@ install: build
 # cached assets grafted via `ark bundle -src`. llama.cpp libs are NOT bundled —
 # they are provisioned per host at runtime by `ark embed install`.
 release: all
-	@echo "Building release binaries..."
-	@mkdir -p $(RELEASE_DIR)
-	@# Linux AMD64
-	@echo "  Building linux/amd64..."
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_DIR)/ark-linux-amd64 ./cmd/ark
-	@bin/ark bundle -src $(RELEASE_DIR)/ark-linux-amd64 -o $(RELEASE_DIR)/ark-linux-amd64.bundled $(CACHE_DIR)
-	@mv $(RELEASE_DIR)/ark-linux-amd64.bundled $(RELEASE_DIR)/ark-linux-amd64
-	@# Linux ARM64
-	@echo "  Building linux/arm64..."
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_DIR)/ark-linux-arm64 ./cmd/ark
-	@bin/ark bundle -src $(RELEASE_DIR)/ark-linux-arm64 -o $(RELEASE_DIR)/ark-linux-arm64.bundled $(CACHE_DIR)
-	@mv $(RELEASE_DIR)/ark-linux-arm64.bundled $(RELEASE_DIR)/ark-linux-arm64
-	@# macOS AMD64
-	@echo "  Building darwin/amd64..."
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_DIR)/ark-darwin-amd64 ./cmd/ark
-	@bin/ark bundle -src $(RELEASE_DIR)/ark-darwin-amd64 -o $(RELEASE_DIR)/ark-darwin-amd64.bundled $(CACHE_DIR)
-	@mv $(RELEASE_DIR)/ark-darwin-amd64.bundled $(RELEASE_DIR)/ark-darwin-amd64
-	@# macOS ARM64 (Apple Silicon)
-	@echo "  Building darwin/arm64..."
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_DIR)/ark-darwin-arm64 ./cmd/ark
-	@bin/ark bundle -src $(RELEASE_DIR)/ark-darwin-arm64 -o $(RELEASE_DIR)/ark-darwin-arm64.bundled $(CACHE_DIR)
-	@mv $(RELEASE_DIR)/ark-darwin-arm64.bundled $(RELEASE_DIR)/ark-darwin-arm64
-	@# Windows AMD64
-	@echo "  Building windows/amd64..."
-	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_DIR)/ark-windows-amd64.exe ./cmd/ark
-	@bin/ark bundle -src $(RELEASE_DIR)/ark-windows-amd64.exe -o $(RELEASE_DIR)/ark-windows-amd64.bundled.exe $(CACHE_DIR)
-	@mv $(RELEASE_DIR)/ark-windows-amd64.bundled.exe $(RELEASE_DIR)/ark-windows-amd64.exe
-	@echo "Release binaries in $(RELEASE_DIR)/"
-	@ls -la $(RELEASE_DIR)/
+	@echo "Building release binaries into $(RELEASE_VERSION_DIR)..."
+	@rm -rf $(RELEASE_VERSION_DIR) && mkdir -p $(RELEASE_VERSION_DIR)
+	@# R3545: each binary is named by `ark _release-asset`, the function `ark update`
+	@# uses to choose its download, so the release and the updater cannot disagree.
+	@set -e; for p in $(RELEASE_PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		name=$$(bin/ark _release-asset --terse $$os $$arch); \
+		echo "  Building $$os/$$arch -> $$name"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build $(BUILDFLAGS) $(GOTAGS) $(LDFLAGS) -o $(RELEASE_VERSION_DIR)/$$name.raw ./cmd/ark; \
+		bin/ark bundle -src $(RELEASE_VERSION_DIR)/$$name.raw -o $(RELEASE_VERSION_DIR)/$$name $(CACHE_DIR); \
+		rm $(RELEASE_VERSION_DIR)/$$name.raw; \
+	done
+	@$(MAKE) --no-print-directory release-sums
+	@ls -la $(RELEASE_VERSION_DIR)/
 
-# R2972: per-platform release archives (tar.gz for unix, zip for windows).
+# R3546: SHA256SUMS lists every file in the version's release directory, in
+# sha256sum format (what `ark update` verifies against).
+release-sums:
+	@cd $(RELEASE_VERSION_DIR) && rm -f SHA256SUMS && sha256sum -- * > SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS
+	@echo "Wrote $(RELEASE_VERSION_DIR)/SHA256SUMS"
+
+# R2972: per-platform release archives (tar.gz for unix, zip for windows) beside
+# the binaries, for manual download; SHA256SUMS is rewritten to cover them.
 release-archives: release
 	@echo "Creating release archives..."
-	@cd $(RELEASE_DIR) && \
+	@cd $(RELEASE_VERSION_DIR) && \
 		for f in ark-*; do \
 			if [ -f "$$f" ] && ! echo "$$f" | grep -q '\.\(tar\.gz\|zip\)$$'; then \
 				if echo "$$f" | grep -q "windows"; then \
@@ -103,6 +98,7 @@ release-archives: release
 				fi; \
 			fi; \
 		done
+	@$(MAKE) --no-print-directory release-sums
 	@echo "Release archives created"
 
 # Cache: extract frictionless assets, layer ark's own app on top

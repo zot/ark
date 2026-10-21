@@ -5229,6 +5229,11 @@ reason.
 - **R3482:** The bundled reference `install/ark.toml` carries `model_url` and `model_sha256` for its default model (nomic-embed-text-v1.5 Q8_0).
 - **R3483:** (inferred) When the configured model file is absent and `model_url`/`model_sha256` are unset, setup and update report the missing model and how to add the keys instead of downloading.
 - **R3484:** `ark setup`'s global install seeds `~/.ark/install-manifest.json` with the hash of every extracted refreshable asset (same `{hash, onCollision, group}` entry as `ark update` writes), so the first `ark update` can tell a real user edit from an unchanged bundle copy instead of preserving everything. A refresh also records an already-current, un-manifested file (bytes equal to the bundle) without rewriting it, so an install that predates the manifest is seeded by one `ark update --no-exe`.
+- **R3544:** `make release` builds into `release/<version>/` and empties that directory first, so a release never mixes files from different versions; nothing else under `release/` is touched.
+- **R3545:** `make release` names each platform binary with the name `ark _release-asset --terse OS ARCH` reports: `ark-<version>-<os>-<arch>`, `.exe` on Windows, `<version>` without a leading `v`.
+- **R3546:** `make release` writes `SHA256SUMS` in `sha256sum` format listing every file in `release/<version>/`; `make release-archives` rewrites it after adding the archives, so it covers them too.
+- **R3547:** `ark _release-asset OS ARCH` reports the asset name from the same naming function `ark update` uses to choose its download, at the binary's build-time version, needing no server or database.
+- **R3548:** `ark _release-asset` answers in baby food by default (`- asset:`, `- version:`, `- platform:` bullets); `--terse` prints only the bare asset name.
 
 ## Feature: Requested update, staged for the next serve
 **Source:** specs/main.md

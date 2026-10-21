@@ -11,7 +11,7 @@ checkpoint.fossil
 /PENDING.md
 /CURRENT.md
 /DONE.md
-/POST.md
+/POST.mdx
 /notes.md
 /requests/
 /PLAN.md
@@ -24,6 +24,7 @@ node_modules
 /tag-overview/dist/
 /luhmann-terminal/dist/
 /release/
+/msvc-runtime-14.51.36247-win-x64.zip
 /.minispec/backup
 /.claude/skills/ui*/
 /ark.exe

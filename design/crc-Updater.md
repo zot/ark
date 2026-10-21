@@ -1,5 +1,5 @@
 # Updater
-**Requirements:** R3463, R3471-3484, R3517
+**Requirements:** R3463, R3471-3484, R3517, R3547, R3548
 
 `ark update` and the shared refresh machinery it lends to `ark setup`. Brings
 an install up to the running project's latest GitHub release, or (with
@@ -32,6 +32,13 @@ install manifest and the model provisioner, both reused by setup.
   - `--no-exe`: skip the download and swap; refresh every asset (skills,
     agents, apps, model-if-missing) from the *running* binary's bundle,
     downloading nothing for the exe (R3478).
+- ReleaseAssetName(version, goos, goarch): the one naming function for release
+  binaries, `ark-<version>-<os>-<arch>` with `.exe` for windows and the
+  version's leading `v` dropped. Update calls it for the running platform to
+  choose its download; `ark _release-asset` calls it for any platform so the
+  Makefile names its release binaries with the same function (R3547). The
+  command answers in baby-food bullets (`asset`, `version`, `platform`) by
+  default and with the bare name under `--terse` (R3548).
 - SwapExe(newBinary): replace `~/.ark/ark`. On Windows, rename the running
   `~/.ark/ark.exe` aside, write the new binary at the original name, and
   delete the aside copy on a later run — a running exe cannot delete its own

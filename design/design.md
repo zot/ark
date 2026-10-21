@@ -240,7 +240,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-PtyBrowser.md → `pty_browser.go`
 - [x] crc-DirLink.md → `dirlink.go`, `dirlink_unix.go`, `dirlink_windows.go`
 - [x] crc-AppActivation.md → `appactivation.go`
-- [x] crc-Updater.md → `cmd/ark/update.go`, `cmd/ark/update_windows.go`, `cmd/ark/update_unix.go`, `install_manifest.go`, `modelprovision.go`
+- [x] crc-Updater.md → `cmd/ark/update.go`, `cmd/ark/release_asset_cli.go`, `cmd/ark/update_windows.go`, `cmd/ark/update_unix.go`, `install_manifest.go`, `modelprovision.go`
 - [x] crc-StagedUpdate.md → `cmd/ark/staged_update.go`, `cmd/ark/staged_update_unix.go`, `cmd/ark/staged_update_windows.go`, `cmd/ark/update.go`, `cmd/ark/main.go`
 - [x] crc-UpdateBridge.md → `update_bridge.go`, `server.go`
 - [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
@@ -1232,3 +1232,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] I7: R3520 (the Makefile strips the cache's symlinks) is implemented in the Makefile, which minispec cannot read (no extension; see the filename-language request to mini-spec). ark bundle's refusal (R3518) enforces the outcome.
 - [ ] O223: R3516 (setup activates every bundled app) has no unit test: extractBundleAssets needs a bundled binary. Verified by a live ark setup run (the Windows standard-user run for #138).
 - [ ] O224: Something outside a test sandbox wrote ~/.claude/skills links into a temp ark db (14 links into /tmp/.../db/skills, stamped 2026-10-08 13:47, target deleted), so Claude Code silently lost the ark and ui-* skills. Writer not yet identified; likely a temp --db with a real HOME (arkHomeDir ignores --db).
+- A79: R3544-R3546 (make release empties release/<version>/, names binaries via ark _release-asset, writes SHA256SUMS) — Makefile release infrastructure, not Go code (mirrors A69); the naming half is enforced in Go by R3547

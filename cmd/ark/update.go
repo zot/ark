@@ -96,10 +96,12 @@ func arkExeName() string {
 }
 
 // releaseAssetName is the per-platform binary asset name, matching the existing
-// ark-0.5.0-linux-amd64 convention. R3472
-func releaseAssetName(version string) string {
-	name := fmt.Sprintf("ark-%s-%s-%s", strings.TrimPrefix(version, "v"), runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
+// ark-0.5.0-linux-amd64 convention. The one naming function: update calls it for
+// the running platform, `ark _release-asset` for any platform the Makefile builds.
+// CRC: crc-Updater.md | R3472, R3547
+func releaseAssetName(version, goos, goarch string) string {
+	name := fmt.Sprintf("ark-%s-%s-%s", strings.TrimPrefix(version, "v"), goos, goarch)
+	if goos == "windows" {
 		name += ".exe"
 	}
 	return name
@@ -152,7 +154,7 @@ func (u *Updater) Update(noExe bool) error {
 // fetchVerified downloads latest's platform binary and checks it against the
 // release checksum; shared by Update and Stage. R3472, R3476, R3526
 func (u *Updater) fetchVerified(latest string) ([]byte, error) {
-	assetName := releaseAssetName(latest)
+	assetName := releaseAssetName(latest, runtime.GOOS, runtime.GOARCH)
 	newBinary, err := u.Fetcher.Download(assetName)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", assetName, err)

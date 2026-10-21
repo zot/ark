@@ -43,6 +43,7 @@ otherwise emit a different order each run). R2953.
 
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
+| `_release-asset`   | `_release-asset [--terse] OS ARCH`                                                                                   | n/a                      | internal, build-time: release asset name for the Makefile |
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
 **A verb that acts as the calling session takes no identity flag at all.**
 `bloodhound listen`, `connections recall listen`, `luhmann next`, `luhmann
@@ -302,6 +303,27 @@ search` calls and the two halves must agree ([bloodhound.md](bloodhound.md),
 | `message get-tags` | `tag get`    |
 
 ## Commands
+
+### `_release-asset` — internal release asset name
+
+```
+ark _release-asset [--terse] OS ARCH
+```
+
+Reports the asset name `ark update` downloads for `OS`/`ARCH` at this binary's
+build-time version (`ark-<version>-<os>-<arch>`, `.exe` for windows). By default
+the answer is baby food, as every ark response is:
+
+```
+- asset: ark-0.6.0-windows-amd64.exe
+- version: 0.6.0
+- platform: windows/amd64
+```
+
+`--terse` prints the bare asset name on one line, which is how the Makefile's
+`release` target calls it to name each binary, so the release and the updater
+share one naming function. Internal; needs no server or database. See `main.md`
+§Release assets.
 
 ### `add` — index files
 
