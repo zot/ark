@@ -823,6 +823,19 @@ release and the updater therefore cannot disagree about a name. `make
 release-archives` adds a tar.gz (Unix) or zip (Windows) beside each binary for
 manual download and rewrites `SHA256SUMS` to cover them too.
 
+**Trying a release before it is published.** When `ARK_RELEASE_URL` is set,
+update reads its release document from that URL instead of GitHub's
+latest-release API. The document has the API's shape: `tag_name`, and an
+`assets` list of `name` and `browser_download_url` pairs. Each asset URL is
+resolved against the document's own URL, so a document served beside a
+`release/<version>/` directory can name its assets by file name alone, while
+GitHub's absolute URLs pass through unchanged. Every path that asks for a release
+honours the variable: plain `update`, `--check`, `--stage`, and the UI's update
+bridge. Nothing in ark writes such a document. A test that serves a release
+directory writes its own, so `release/<version>/` stays exactly what gets
+published. A document that cannot be fetched or parsed fails update the way an
+unreachable GitHub does, leaving everything as it was.
+
 **A symlinked `~/.ark/ark` is a developer install.** Where `~/.ark/ark`
 links into a source tree, swapping it would replace the link with a
 downloaded file and break the build-and-run loop. On such a binary, plain

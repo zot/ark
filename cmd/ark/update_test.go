@@ -1,6 +1,6 @@
 package main
 
-// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3472, R3474, R3476, R3477, R3478, R3479, R3484, R3547, R3548
+// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3472, R3474, R3476, R3477, R3478, R3479, R3484, R3547, R3548, R3549, R3550, R3551
 //
 // Update's decision logic against a fake install root and a fake release source
 // (no network). The whole class here is invisible when violated: a refresh that
@@ -10,6 +10,8 @@ package main
 import (
 	"bytes"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -310,5 +312,82 @@ func TestUpdateFetchesRunningPlatformAsset(t *testing.T) {
 	want := releaseAssetName("0.6.0", runtime.GOOS, runtime.GOARCH)
 	if len(fetch.asked) != 2 || fetch.asked[0] != want || fetch.asked[1] != want {
 		t.Errorf("fetch asked for %q, want binary and checksum both %q", fetch.asked, want)
+	}
+}
+
+// Test: ARK_RELEASE_URL chooses the release document. No network. R3549
+func TestReleaseURLEnvChoosesDocument(t *testing.T) {
+	t.Setenv(releaseURLEnv, "")
+	if got := newReleaseFetcher().documentURL; got != releaseAPIURL {
+		t.Errorf("unset: document URL = %q, want GitHub's %q", got, releaseAPIURL)
+	}
+	const override = "http://example.test/release.json"
+	t.Setenv(releaseURLEnv, override)
+	if got := newReleaseFetcher().documentURL; got != override {
+		t.Errorf("set: document URL = %q, want the override %q", got, override)
+	}
+}
+
+// Test: relative asset names resolve against the document; absolute URLs pass
+// through. R3550
+func TestReleaseDocumentRelativeAssets(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/rel/release.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"tag_name":"v0.5.1","assets":[` +
+			`{"name":"ark-0.5.1-linux-amd64","browser_download_url":"ark-0.5.1-linux-amd64"},` +
+			`{"name":"SHA256SUMS","browser_download_url":"` + srv.URL + `/elsewhere/SHA256SUMS"}]}`))
+	})
+	mux.HandleFunc("/rel/ark-0.5.1-linux-amd64", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("relative bytes")) })
+	mux.HandleFunc("/elsewhere/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("absolute bytes")) })
+
+	f := &githubReleaseFetcher{documentURL: srv.URL + "/rel/release.json"}
+	if tag, err := f.Latest(); err != nil || tag != "v0.5.1" {
+		t.Fatalf("Latest = %q, %v; want v0.5.1", tag, err)
+	}
+	for name, want := range map[string]string{"ark-0.5.1-linux-amd64": "relative bytes", "SHA256SUMS": "absolute bytes"} {
+		got, err := f.Download(name)
+		if err != nil || string(got) != want {
+			t.Errorf("Download(%s) = %q, %v; want %q", name, got, err, want)
+		}
+	}
+}
+
+// Test: a malformed release document fails before any download. R3551
+func TestReleaseDocumentMalformedFails(t *testing.T) {
+	assetRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/release.json" {
+			assetRequests++
+		}
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	f := &githubReleaseFetcher{documentURL: srv.URL + "/release.json"}
+	if tag, err := f.Latest(); err == nil {
+		t.Fatalf("Latest on a malformed document = %q with no error", tag)
+	}
+	if _, err := f.Download("ark-0.5.1-linux-amd64"); err == nil {
+		t.Error("Download succeeded from a malformed document")
+	}
+	if assetRequests != 0 {
+		t.Errorf("%d asset request(s) reached the server; want none", assetRequests)
+	}
+}
+
+// Test: the production updater's fetcher honours ARK_RELEASE_URL. newUpdater is
+// what plain update, --check, --stage and the UI bridge all build, so this is
+// the wiring that makes R3549 true everywhere. Found by probing past the alarm
+// list: a bare fetcher here left the suite green. R3549
+func TestNewUpdaterHonoursReleaseURL(t *testing.T) {
+	const override = "http://example.test/release.json"
+	t.Setenv(releaseURLEnv, override)
+	f, ok := newUpdater().Fetcher.(*githubReleaseFetcher)
+	if !ok {
+		t.Fatalf("newUpdater's fetcher is %T, want *githubReleaseFetcher", newUpdater().Fetcher)
+	}
+	if f.documentURL != override {
+		t.Errorf("newUpdater's fetcher reads %q, want the override %q", f.documentURL, override)
 	}
 }

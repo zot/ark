@@ -81,3 +81,43 @@ green happy path while breaking exactly the guarantee the field exists for.
 **Fire alarm:** hardcode a platform at the call site (`releaseAssetName(latest, "windows", runtime.GOARCH)`); red on any non-windows host, naming the wrong asset
 **Inject:** cmd/ark/update.go:fetchVerified
 **Pulled:** 2026-10-21 — rang: hardcoded `"windows"`; asked for `ark-0.6.0-windows-amd64.exe` twice, want `ark-0.6.0-linux-amd64`
+
+## Test: ARK_RELEASE_URL chooses the release document
+**Purpose:** the fetcher every update path uses reads its document from `ARK_RELEASE_URL` when set, else from GitHub's API (R3549)
+**Input:** newReleaseFetcher() with the variable unset, then set to `http://example.test/release.json`
+**Expected:** unset: the GitHub latest-release API URL; set: exactly the variable's value. No network either way
+**Refs:** crc-Updater.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** make newReleaseFetcher ignore the variable (always the GitHub constant); the set case goes red, naming the GitHub URL
+**Inject:** cmd/ark/update.go:newReleaseFetcher
+**Pulled:** 2026-10-21 — rang: constant only; set case read the GitHub URL, want the override
+
+## Test: relative asset names resolve against the document
+**Purpose:** a served release directory works with a document naming assets by file name, and absolute URLs pass through (R3550)
+**Input:** an httptest server serving `release.json` (tag `v0.5.1`, one relative asset `ark-0.5.1-linux-amd64`, one absolute asset pointing at the same server under another path) and both files
+**Expected:** Latest is `v0.5.1`; Download of each asset returns the served bytes
+**Refs:** crc-Updater.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** return the asset's URL unresolved; the relative download fails (no scheme)
+**Inject:** cmd/ark/update.go:githubReleaseFetcher.assetURL
+**Pulled:** 2026-10-21 — rang: unresolved URL; relative download failed with `unsupported protocol scheme ""`
+
+## Test: a malformed release document fails before any download
+**Purpose:** an unparseable document is an error from Latest, so update stops before downloading or swapping (R3551)
+**Input:** an httptest server serving `not json` as the document
+**Expected:** Latest returns an error; no asset request reaches the server
+**Refs:** crc-Updater.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** discard the decode error in load (treat the empty document as loaded); Latest returns "" with no error and the case goes red
+**Inject:** cmd/ark/update.go:githubReleaseFetcher.load
+**Pulled:** 2026-10-21 — rang: decode error discarded; Latest returned "" with no error
+
+## Test: the production updater's fetcher honours ARK_RELEASE_URL
+**Purpose:** newUpdater, which every update path builds, gets its fetcher from newReleaseFetcher, so the override reaches plain update, `--check`, `--stage` and the UI bridge (R3549). Found by probing past the alarm list 2026-10-21: a bare `&githubReleaseFetcher{}` in newUpdater left the whole suite green.
+**Input:** `ARK_RELEASE_URL` set to `http://example.test/release.json`; newUpdater()
+**Expected:** its Fetcher is a githubReleaseFetcher reading exactly that URL
+**Refs:** crc-Updater.md, crc-StagedUpdate.md
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** build a bare `&githubReleaseFetcher{}` in newUpdater; red, reading "" instead of the override
+**Inject:** cmd/ark/staged_update.go:newUpdater
+**Pulled:** 2026-10-21 — rang: bare fetcher; read "" instead of the override

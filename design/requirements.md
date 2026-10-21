@@ -5234,6 +5234,9 @@ reason.
 - **R3546:** `make release` writes `SHA256SUMS` in `sha256sum` format listing every file in `release/<version>/`; `make release-archives` rewrites it after adding the archives, so it covers them too.
 - **R3547:** `ark _release-asset OS ARCH` reports the asset name from the same naming function `ark update` uses to choose its download, at the binary's build-time version, needing no server or database.
 - **R3548:** `ark _release-asset` answers in baby food by default (`- asset:`, `- version:`, `- platform:` bullets); `--terse` prints only the bare asset name.
+- **R3549:** When `ARK_RELEASE_URL` is set, update reads its release document (GitHub's latest-release shape: `tag_name`, `assets` of `name` and `browser_download_url`) from that URL instead of GitHub's API, for plain `update`, `--check`, `--stage`, and the UI update bridge alike.
+- **R3550:** Each asset URL in the release document is resolved against the document's own URL, so a relative name such as `ark-0.5.1-linux-amd64` fetches the file beside the document and an absolute URL passes through unchanged.
+- **R3551:** (inferred) A release document that cannot be fetched or parsed fails update before any download or swap, leaving the old binary and `~/.ark/` as they were.
 
 ## Feature: Requested update, staged for the next serve
 **Source:** specs/main.md

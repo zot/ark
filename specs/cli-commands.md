@@ -1429,6 +1429,12 @@ running exe is already current — the developer case where `~/.ark/ark`
 links to a freshly built binary. It stays manifest-aware, never replaces a
 link with a copy, and proceeds normally on a symlinked binary.
 
+`ARK_RELEASE_URL`, when set, names the release document every form reads instead
+of GitHub's latest-release API (same JSON shape: `tag_name`, `assets` with
+`name` and `browser_download_url`; asset URLs resolve against the document's
+URL). It lets a test serve an unpublished `release/<version>/` directory and run
+a real update against it. See `main.md` §Release assets.
+
 Either form activates an app it extracts for the first time (one
 `~/.ark/lua/<app>` link, as setup does) and leaves every existing app's
 activation as the user left it.

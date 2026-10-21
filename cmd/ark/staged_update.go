@@ -241,7 +241,7 @@ func newUpdater() *Updater {
 	return &Updater{
 		ArkDir:  arkDir,
 		Version: ark.Version,
-		Fetcher: &githubReleaseFetcher{},
+		Fetcher: newReleaseFetcher(),
 		Assets:  bundleAssetSource{},
 	}
 }

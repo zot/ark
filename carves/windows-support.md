@@ -170,8 +170,7 @@ and unknown items carry the negative marker rather than a false green.
         from an installed `~/.ark/ark.exe`, download path included. Needs
         9.3 and 9.4 first. See Item 9.
   - [x] ~~**9.3 — the release carries what `update` fetches.**~~ **LANDED (2026-10-21 — `#145`.)** Filed by Bill, 2026-10-21. `/mini-spec`.
-  - [ ] **9.4 — a release-source override for testing.** **OPEN (not
-        queued.)** Filed by Bill, 2026-10-21. `/mini-spec`.
+  - [x] ~~**9.4 — a release-source override for testing.**~~ **LANDED (2026-10-21 — `#146`.)** Filed by Bill, 2026-10-21. `/mini-spec`.
 - **Item 6 — llama.cpp embedding provisioning on Windows.** **SPLIT
       (2026-10-04.)** Measured on the VM: provisioning dropped every file of
       ggml-org's flat Windows zips (fixed, 6.1); with the files in place,

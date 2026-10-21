@@ -1,5 +1,5 @@
 # Updater
-**Requirements:** R3463, R3471-3484, R3517, R3547, R3548
+**Requirements:** R3463, R3471-3484, R3517, R3547-3551
 
 `ark update` and the shared refresh machinery it lends to `ark setup`. Brings
 an install up to the running project's latest GitHub release, or (with
@@ -9,6 +9,7 @@ install manifest and the model provisioner, both reused by setup.
 ## Knows
 - currentVersion: build-time `ark.Version` (`dev` for a plain `go build`)
 - releaseURL: `https://github.com/zot/ark/releases` (latest tag + per-platform assets + checksum)
+- releaseDocumentURL: where the release document is read: `ARK_RELEASE_URL` when set, else GitHub's latest-release API; fixed when the fetcher is built (R3549)
 - manifestPath: `~/.ark/install-manifest.json`
 - manifest: InstallManifest — `{version, files: map[path]{hash, onCollision, group}}` (R3479)
 
@@ -39,6 +40,12 @@ install manifest and the model provisioner, both reused by setup.
   Makefile names its release binaries with the same function (R3547). The
   command answers in baby-food bullets (`asset`, `version`, `platform`) by
   default and with the bare name under `--terse` (R3548).
+- NewReleaseFetcher(): the one place the release source is chosen. Reads
+  `ARK_RELEASE_URL` once, so plain update, `--check`, `--stage` and the UI bridge
+  all honour it (R3549). The fetcher resolves each asset URL against the
+  document's URL, so a test-served document can name assets by file name
+  (R3550); a document it cannot fetch or parse is an error before any download
+  (R3551).
 - SwapExe(newBinary): replace `~/.ark/ark`. On Windows, rename the running
   `~/.ark/ark.exe` aside, write the new binary at the original name, and
   delete the aside copy on a later run — a running exe cannot delete its own

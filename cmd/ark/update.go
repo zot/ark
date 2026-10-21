@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,9 @@ import (
 const (
 	// releaseAPIURL is the GitHub API for zot/ark's latest release. R3472
 	releaseAPIURL = "https://api.github.com/repos/zot/ark/releases/latest"
+	// releaseURLEnv, when set, names a release document read instead of
+	// releaseAPIURL, so an unpublished release can be served and tried. R3549
+	releaseURLEnv = "ARK_RELEASE_URL"
 	// checksumAssetName is the release asset holding sha256sum-format lines. R3472
 	checksumAssetName = "SHA256SUMS"
 	// arkExeUnix / arkExeWindows are the installed binary names. R3458, R3473
@@ -384,7 +388,16 @@ func execNewBinary(arkExe string) error {
 // githubReleaseFetcher fetches the latest zot/ark release over the GitHub API,
 // caching the release document so assets and checksums cost one call. R3472
 type githubReleaseFetcher struct {
-	release *githubRelease
+	documentURL string // where the release document is read; see newReleaseFetcher
+	release     *githubRelease
+}
+
+// newReleaseFetcher is the one place the release source is chosen:
+// ARK_RELEASE_URL when set, else GitHub's latest-release API. Every update path
+// (plain, --check, --stage, the UI bridge) builds its fetcher here.
+// CRC: crc-Updater.md | R3549
+func newReleaseFetcher() *githubReleaseFetcher {
+	return &githubReleaseFetcher{documentURL: cmp.Or(os.Getenv(releaseURLEnv), releaseAPIURL)}
 }
 
 type githubRelease struct {
@@ -400,17 +413,18 @@ func (g *githubReleaseFetcher) load() (*githubRelease, error) {
 		return g.release, nil
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(releaseAPIURL)
+	resp, err := client.Get(g.documentURL)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API %s: HTTP %d", releaseAPIURL, resp.StatusCode)
+		return nil, fmt.Errorf("release document %s: HTTP %d", g.documentURL, resp.StatusCode)
 	}
+	// R3551: an unparseable document stops update before any download.
 	var rel githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("release document %s: %w", g.documentURL, err)
 	}
 	g.release = &rel
 	return &rel, nil
@@ -431,25 +445,40 @@ func (g *githubReleaseFetcher) assetURL(name string) (string, error) {
 	}
 	for _, a := range rel.Assets {
 		if a.Name == name {
-			return a.URL, nil
+			return resolveAgainst(g.documentURL, a.URL)
 		}
 	}
 	return "", fmt.Errorf("release asset %q not found", name)
 }
 
+// resolveAgainst resolves an asset URL against the release document's URL, so a
+// served document can name assets by file name; absolute URLs are unchanged.
+// CRC: crc-Updater.md | R3550
+func resolveAgainst(documentURL, assetURL string) (string, error) {
+	base, err := url.Parse(documentURL)
+	if err != nil {
+		return "", fmt.Errorf("release document URL %q: %w", documentURL, err)
+	}
+	ref, err := url.Parse(assetURL)
+	if err != nil {
+		return "", fmt.Errorf("release asset URL %q: %w", assetURL, err)
+	}
+	return base.ResolveReference(ref).String(), nil
+}
+
 func (g *githubReleaseFetcher) Download(assetName string) ([]byte, error) {
-	url, err := g.assetURL(assetName)
+	assetLoc, err := g.assetURL(assetName)
 	if err != nil {
 		return nil, err
 	}
 	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(url)
+	resp, err := client.Get(assetLoc)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("download %s: HTTP %d", assetLoc, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
 }
