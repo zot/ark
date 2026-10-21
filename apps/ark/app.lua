@@ -3,7 +3,7 @@
 
 local json = require("mcp.json")
 
-local HOME = os.getenv("HOME") or ""
+local HOME = os.getenv("HOME") or os.getenv("USERPROFILE") or ""
 local DB_PATH = HOME .. "/.ark"
 
 -- Display helper: compress long paths for UI display
@@ -83,58 +83,29 @@ local Searching, Messaging, MessageColumn, Message, Luhmann
 -- Ark.HotChunk, Ark.RelatedTag, Ark.DriftPair) live in ark.curation,
 -- loaded via require near the bottom of this file.
 
+-- No extension: on Windows, exec resolves it to ark.exe
 local ARK_BIN = DB_PATH .. "/ark"
-local ARK_PATH = "PATH=" .. DB_PATH .. ":" .. (os.getenv("PATH") or "")
 
--- Helper: run a command and return stdout
-local function run(cmd)
-    local handle = io.popen(ARK_PATH .. " " .. cmd .. " 2>/dev/null")
-    if not handle then return nil end
-    local output = handle:read("*a")
-    handle:close()
-    return output
-end
-
--- Helper: run ark command with db path
--- subcmd starts with the command name, -db is inserted after it
-local function arkCmd(subcmd)
-    local cmd, rest = subcmd:match("^(%S+)%s*(.*)")
-    if not cmd then return nil end
-    local dbFlag = '--dir "' .. DB_PATH .. '"'
-    if rest and rest ~= "" then
-        return run('"' .. ARK_BIN .. '" ' .. cmd .. ' ' .. dbFlag .. ' ' .. rest)
-    else
-        return run('"' .. ARK_BIN .. '" ' .. cmd .. ' ' .. dbFlag)
-    end
+-- Helper: run an ark command with the db path, no shell (works on Windows).
+-- Each argument is one argv element; --dir is inserted after the command name.
+-- Returns stdout, or (nil, err) with the exit status and stderr.
+local function arkCmd(cmd, ...)
+    return ui.exec({ARK_BIN, cmd, "--dir", DB_PATH, ...})
 end
 
 -- Helper: parse JSON from ark output, return table or nil
-local function arkJSON(subcmd)
-    local output = arkCmd(subcmd)
+local function arkJSON(...)
+    local output = arkCmd(...)
     if not output or output == "" then return nil end
     local ok, result = pcall(json.decode, output)
     if ok then return result end
     return nil
 end
 
--- Helper: list directory entries with type info
--- Uses ls -1AF to classify entries in a single subprocess (F appends / to dirs)
+-- Helper: list directory entries with type info, directories first.
+-- A link to a directory counts as a directory.
 local function listDir(dirPath)
-    local entries = {}
-    local handle = io.popen('ls -1AF "' .. dirPath .. '" 2>/dev/null')
-    if not handle then return entries end
-    for line in handle:lines() do
-        if line ~= "" then
-            local isDir = line:sub(-1) == "/"
-            local name = isDir and line:sub(1, -2) or line
-            -- ls -F also appends * @ | for executables, symlinks, pipes — strip those
-            if not isDir and name:match("[%*@|]$") then
-                name = name:sub(1, -2)
-            end
-            table.insert(entries, {name = name, isDir = isDir})
-        end
-    end
-    handle:close()
+    local entries = ui.listDir(dirPath) or {}
     table.sort(entries, function(a, b)
         if a.isDir ~= b.isDir then return a.isDir end
         return a.name < b.name
@@ -144,7 +115,7 @@ end
 
 -- Helper: query show-why for a path and apply results to a node
 local function applyWhy(node)
-    local why = arkJSON('config show-why "' .. node.fullPath .. '"')
+    local why = arkJSON("config", "show-why", node.fullPath)
     if why then
         node.state = why.status or "unresolved"
         node.whyPatterns = why.patterns and table.concat(why.patterns, ", ") or ""
@@ -543,7 +514,7 @@ end
 
 function Searching:addSource()
     if self.newDir == "" then return end
-    arkCmd('config add-source --strategy ' .. self.newStrategy .. ' "' .. self.newDir .. '"')
+    arkCmd("config", "add-source", "--strategy", self.newStrategy, self.newDir)
     self:cancelAddForm()
     self:loadConfig()
     -- Select the newly added source
@@ -558,7 +529,7 @@ end
 
 function Searching:removeSource()
     if not self.selectedSource then return end
-    arkCmd('config remove-source "' .. self.selectedSource.dir .. '"')
+    arkCmd("config", "remove-source", self.selectedSource.dir)
     self.selectedSource = nil
     self:loadConfig()
 end
@@ -597,7 +568,8 @@ function Searching:collapseResolved()
 end
 
 function Searching:checkServer()
-    local output = arkCmd("status")
+    -- status takes no --dir; it reads the default ~/.ark, which is DB_PATH
+    local output = ui.exec({ARK_BIN, "status"})
     if not output or output == "" then
         self._serverRunning = false
         return
@@ -607,7 +579,7 @@ function Searching:checkServer()
     for key, val in output:gmatch("(%w+):%s*(.-)%s*\n") do
         counts[key] = val
     end
-    self._serverRunning = (counts.server == "running")
+    self._serverRunning = (counts.server or ""):match("^running") ~= nil
     self._statusCounts = {
         included = tonumber(counts.files) or 0,
         stale = tonumber(counts.stale) or 0,
@@ -686,10 +658,7 @@ local function resolveSlugName(slug)
         for j = #parts, i, -1 do
             local combined = table.concat(parts, "-", i, j)
             local candidate = current .. "/" .. combined
-            local fh = io.popen('test -d "' .. candidate .. '" && echo y 2>/dev/null')
-            local exists = fh and fh:read("*a"):match("y") or false
-            if fh then fh:close() end
-            if exists then
+            if ui.isDir(candidate) then
                 current = candidate
                 i = j + 1
                 found = true
@@ -778,25 +747,25 @@ function Searching:saveProjects()
     for _, c in ipairs(self._projectCandidates or {}) do
         if c.selected and not c._wasConfigured then
             -- Newly selected: add sources
-            arkCmd('config add-strategy "*.jsonl" chat-jsonl')
-            arkCmd('config add-strategy "*.md" markdown')
+            arkCmd("config", "add-strategy", "*.jsonl", "chat-jsonl")
+            arkCmd("config", "add-strategy", "*.md", "markdown")
             local dir = claudeDir .. "/" .. c.slug
-            arkCmd('config add-source "' .. dir .. '"')
-            arkCmd('config add-include "*.jsonl" --source "' .. dir .. '"')
-            arkCmd('config add-include "memory/*.md" --source "' .. dir .. '"')
+            arkCmd("config", "add-source", dir)
+            arkCmd("config", "add-include", "*.jsonl", "--source", dir)
+            arkCmd("config", "add-include", "memory/*.md", "--source", dir)
             if c._resolvedPath ~= "" then
-                arkCmd('config add-source "' .. c._resolvedPath .. '"')
+                arkCmd("config", "add-source", c._resolvedPath)
             end
             added = added + 1
         elseif not c.selected and c._wasConfigured then
             -- Deselected: remove sources
             local dir = claudeDir .. "/" .. c.slug
-            arkCmd('config remove-source "' .. dir .. '"')
-            arkCmd('remove "' .. dir .. '/**"')
+            arkCmd("config", "remove-source", dir)
+            arkCmd("remove", dir .. "/**")
             -- Remove file source if it was matched
             for _, p in ipairs(self._projects or {}) do
                 if p.slug == c.slug and p._fileSource then
-                    arkCmd('config remove-source "' .. p._fileSource.dir .. '"')
+                    arkCmd("config", "remove-source", p._fileSource.dir)
                     break
                 end
             end
@@ -1510,37 +1479,42 @@ function Source:savePatterns()
     for _, p in ipairs(newExc) do newExcSet[p] = true end
 
     local errors = {}
-    local sourceFlag = '--source "' .. self.dir .. '"'
+    -- Run one pattern edit for this source, recording a failed call or an
+    -- error reported on stdout
+    local function patternCmd(sub, p)
+        local out, err = arkCmd("config", sub, p, "--source", self.dir)
+        if err then
+            table.insert(errors, err)
+        elseif out:match("error") then
+            table.insert(errors, out)
+        end
+    end
 
     -- Remove old includes not in new
     for _, p in ipairs(oldInc) do
         if not newIncSet[p] then
-            local out = arkCmd('config remove-pattern "' .. p .. '" ' .. sourceFlag)
-            if out and out:match("error") then table.insert(errors, out) end
+            patternCmd("remove-pattern", p)
         end
     end
 
     -- Remove old excludes not in new
     for _, p in ipairs(oldExc) do
         if not newExcSet[p] then
-            local out = arkCmd('config remove-pattern "' .. p .. '" ' .. sourceFlag)
-            if out and out:match("error") then table.insert(errors, out) end
+            patternCmd("remove-pattern", p)
         end
     end
 
     -- Add new includes not in old
     for _, p in ipairs(newInc) do
         if not oldIncSet[p] then
-            local out = arkCmd('config add-include "' .. p .. '" ' .. sourceFlag)
-            if out and out:match("error") then table.insert(errors, out) end
+            patternCmd("add-include", p)
         end
     end
 
     -- Add new excludes not in old
     for _, p in ipairs(newExc) do
         if not oldExcSet[p] then
-            local out = arkCmd('config add-exclude "' .. p .. '" ' .. sourceFlag)
-            if out and out:match("error") then table.insert(errors, out) end
+            patternCmd("add-exclude", p)
         end
     end
 
@@ -1720,7 +1694,7 @@ end
 
 function DataSource:removeMe()
     if self._source then
-        arkCmd('config remove-source "' .. self._source.dir .. '"')
+        arkCmd("config", "remove-source", self._source.dir)
     end
     if searching.selectedSource == self._source then
         searching.selectedSource = nil
@@ -1802,18 +1776,17 @@ end
 function Node:cycleState()
     local source = searching.selectedSource
     if not source then return end
-    local srcFlag = ' --source "' .. source.dir .. '"'
 
     if self.state == "included" then
         -- Switch to excluded: remove current pattern, add exclude
-        arkCmd('config remove-pattern "' .. self.name .. '"' .. srcFlag)
-        arkCmd('config add-exclude "' .. nodePattern(self, "exclude") .. '"' .. srcFlag)
+        arkCmd("config", "remove-pattern", self.name, "--source", source.dir)
+        arkCmd("config", "add-exclude", nodePattern(self, "exclude"), "--source", source.dir)
     elseif self.state == "excluded" then
         -- Clear to unresolved: remove the exclude pattern
-        arkCmd('config remove-pattern "' .. nodePattern(self, "exclude") .. '"' .. srcFlag)
+        arkCmd("config", "remove-pattern", nodePattern(self, "exclude"), "--source", source.dir)
     else
         -- Unresolved → included
-        arkCmd('config add-include "' .. nodePattern(self, "include") .. '"' .. srcFlag)
+        arkCmd("config", "add-include", nodePattern(self, "include"), "--source", source.dir)
     end
 
     -- Re-classify this node
@@ -1905,9 +1878,9 @@ function Node:applyException()
     local pattern = self.relPath .. "/" .. self.exceptionPattern
 
     if self.state == "included" then
-        arkCmd('config add-exclude "' .. pattern .. '" --source "' .. source.dir .. '"')
+        arkCmd("config", "add-exclude", pattern, "--source", source.dir)
     else
-        arkCmd('config add-include "' .. pattern .. '" --source "' .. source.dir .. '"')
+        arkCmd("config", "add-include", pattern, "--source", source.dir)
     end
 
     self.exceptionPattern = ""

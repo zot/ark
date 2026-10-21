@@ -250,7 +250,7 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**7.1 — portable file and process primitives in ui-engine.**~~ **LANDED (2026-10-19 — `#141`.)**
   - [x] ~~**7.2 — ark's update bridge for the UI.**~~ **LANDED (2026-10-19 — `#142`.)**
   - [x] ~~**7.5 — `sys.updateStatus` names the staged version.**~~ **LANDED (2026-10-19 — `#143`.)**
-  - [ ] **7.3 — the apps drop their shell-outs.** **OPEN (#144.)**
+  - [x] ~~**7.3 — the apps drop their shell-outs.**~~ **LANDED (2026-10-19 — `#144`.)**
   - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)**
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
@@ -905,6 +905,24 @@ this minute costs little.
 **7.3** is the `/ui-*` pass that moves both apps onto 7.1 and 7.2. It is gated on
 both, and separate from them because Frictionless and mini-spec work do not share
 a pass.
+
+**What 7.3 found (2026-10-19), tested in an isolated `setup` + `serve`:**
+
+- **ark registers `sys` after the mcp app loads.** The shell's `app.lua` runs
+  inside the UI engine's start; `registerLuaFunctions` runs only once that start
+  returns. A shell that touches `sys` at load time takes the whole UI down
+  (`ui: start failed … attempt to index a non-table object(nil) with key
+  'updateStatus'`). The shell's startup update work therefore waits for `sys`
+  (`whenSys` in `apps/mcp/app.lua`). `ui.*` is already there at load. Registering
+  `sys` before the apps load would be the cleaner fix, on the Go side.
+- **`ark status` has no `--dir` flag**, so the ark app's server light had always
+  read "not running": the old bridge threw stderr away and got empty stdout. The
+  argv bridge surfaced the error. `checkServer` now runs `status` without
+  `--dir`, and matches `server: running (pid …)` by prefix.
+- **ark reports release tags with their `v`** (`latest = "v0.5.0"`); the shell
+  strips it before adding its own.
+- **`HOME` is unset on Windows**, so both apps fall back to `USERPROFILE`; without
+  it the ark app's `DB_PATH` came out as `/.ark`.
 
 <a id="12"></a>
 

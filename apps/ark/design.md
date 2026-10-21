@@ -421,6 +421,24 @@ report the removal, and both name where the write landed from
 `result.disposition` ("written into the file" / "routed via @ext
 mirror").
 
+## CLI bridge and file helpers (portable)
+
+Module-level helpers in `app.lua`. None goes through a shell, so the app
+works on Windows (carve `windows-support.md`, Item 7).
+
+| Helper | Description |
+|--------|-------------|
+| `HOME` | `os.getenv("HOME")`, falling back to `USERPROFILE` |
+| `arkCmd(cmd, ...)` | `ui.exec({ARK_BIN, cmd, "--dir", DB_PATH, ...})`: each argument is one argv element, never quoted by hand. Returns stdout, or `(nil, err)` with the exit status and stderr |
+| `arkJSON(cmd, ...)` | `arkCmd` + JSON decode; nil on error or bad JSON |
+| `listDir(path)` | `ui.listDir`, sorted directories first then by name; a link to a directory counts as a directory |
+| `ui.isDir(path)` | Used directly by the project-path decoder (no `test -d`) |
+| `checkServer()` | `ui.exec({ARK_BIN, "status"})` without `arkCmd`: `status` takes no `--dir` (it reads the default `~/.ark`, which is `DB_PATH`). Running when the `server:` line starts with `running` (it carries a pid) |
+
+Callers that report config errors (`Source` pattern diffing) record `err`
+as well as an `error` line in stdout, so a failed CLI call is no longer
+silent.
+
 ## Methods
 
 ### Ark (root)

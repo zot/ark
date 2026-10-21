@@ -271,8 +271,12 @@ The global `mcp` object is provided by the server. This app adds:
 | _todoApp | string | App name for progress reporting during todo steps |
 | showUpdatePrefDialog | boolean | Whether first-run update preference dialog is visible |
 | showUpdateConfirmDialog | boolean | Whether update confirmation dialog is visible |
-| latestVersion | string | Latest version string from GitHub releases API |
-| _isUpdating | boolean | Whether an update is currently in progress |
+| latestVersion | string | Latest ark release, from `sys.updateStatus().latest` |
+| _currentVersion | string | Running ark version, from `sys.updateStatus().current` |
+| _stagedVersion | string | Version waiting to take effect at the next start (`""` when none) |
+| _isUpdating | boolean | Whether a user-requested download is in progress |
+| _requestPending | boolean | Update clicked; `sys.requestUpdate()` is sent once nothing is in flight |
+| _updatePoll | token | Session interval polling `sys.updateStatus()` (nil when idle) |
 | _updateNotificationDismissed | boolean | Whether the update notification banner was dismissed this session |
 | _needsUpdate | boolean | Whether a newer version is available |
 | tutorial | MCP.Tutorial | Tutorial walkthrough state (loaded from tutorial.lua) |
@@ -362,24 +366,25 @@ The global `mcp` object is provided by the server. This app adds:
 | appProgress(name, progress, stage) | Update app build progress (delegates to appConsole:onAppProgress) |
 | appUpdated(name) | Rescan apps and delegate to appConsole:onAppUpdated |
 | readSettings() | Read and parse `.ui/storage/settings.json`, returns empty table if missing/invalid |
-| writeSettings(data) | Write settings table as JSON to `.ui/storage/settings.json`, creates storage/ dir if needed |
-| checkForUpdates() | Fetch latest version from GitHub, compare with current, persist result to settings |
+| writeSettings(data) | Write settings table as JSON to `.ui/storage/settings.json`, creates storage/ dir if needed (`ui.mkdir`) |
+| checkForUpdates() | `sys.checkForUpdate()`, then `watchUpdate()` |
+| watchUpdate() | Apply `sys.updateStatus()` now; while it reports busy, poll it every `UPDATE_POLL_MS` with a session interval |
+| applyUpdateStatus(st) | Copy a status snapshot into the fields, send a pending request, finish a request (toast), persist a completed check; returns true while polling should continue |
 | showUpdatePreferenceDialog() | Show the first-run update preference dialog |
 | setUpdatePreference(enabled) | Save checkUpdate preference to settings; triggers checkForUpdates() if enabled |
 | enableUpdates() | Convenience wrapper: calls setUpdatePreference(true) |
 | disableUpdates() | Convenience wrapper: calls setUpdatePreference(false) |
 | getUpdatePreference() | Read checkUpdate boolean from settings |
-| currentVersion() | Returns version string from mcp:status().version |
-| noUpdateAvailable() | Returns not _needsUpdate |
-| updateAvailable() | Returns _needsUpdate |
-| hideUpdateNotification() | Returns true if notification should be hidden (no update, dismissed, or updating) |
-| showUpdateNotification() | Returns true if update available, not dismissed, and not updating (for ui-class-showing) |
+| currentVersion() | Returns _currentVersion |
+| isStaged() | Returns _stagedVersion ~= "" |
+| updateAvailable() | Returns _needsUpdate and not staged and not updating (the star) |
+| showUpdateNotification() | Returns (available or staged), not dismissed, and not updating (for ui-class-showing) |
+| updateBannerText() | "ark vX is available!" or the staged message |
 | dismissUpdateNotification() | Set _updateNotificationDismissed to true |
 | startUpdate() | Show the update confirmation dialog |
 | cancelUpdate() | Hide the update confirmation dialog |
-| confirmUpdate() | Emit pushState event with platform detection and update instructions, set _isUpdating |
+| confirmUpdate() | Close the dialog, set _isUpdating and _requestPending, `watchUpdate()` |
 | isUpdating() | Returns _isUpdating |
-| notUpdating() | Returns not _isUpdating |
 | hasDownloadedApps() | Check if any app in app-console has _isDownloaded |
 | readUserSettings() | Read ~/.claude/frictionless.json, return table (or {} if missing) |
 | writeUserSettings(data) | Write table as JSON to ~/.claude/frictionless.json |
@@ -561,8 +566,13 @@ Module-level functions (not methods on mcp):
 
 | Function | Description |
 |----------|-------------|
-| compareVersions(current, latest) | Semver comparison: parses "major.minor.patch" from both strings, returns true if latest > current |
-| fetchLatestVersion() | Runs `curl` against `https://api.github.com/repos/zot/frictionless/releases/latest` with 5s connect / 10s max timeout, parses JSON for `tag_name`, strips leading "v", returns version string or nil |
+| readJsonFile(path) / writeJsonFile(path, data) | JSON file I/O; the writer makes the parent with `ui.mkdir` |
+| listDirs(path) | Names of `path`'s subdirectories, from `ui.listDir` (links to directories count) |
+| stagedMessage(version) | "ark vX is staged and takes effect the next time ark starts" |
+| bareVersion(v) | Strips a release tag's leading "v" (ark reports `v0.5.0`); the shell adds its own |
+| whenSys(fn) | Run `fn` once ark's `sys` global exists, retrying every `SYS_WAIT_MS` (200) up to `SYS_WAIT_TRIES` (50). The shell loads inside the UI engine's start, **before** ark registers `sys`, so touching `sys` at load fails the whole shell |
+
+No helper shells out: the shell uses `ui.*` so it runs on Windows. `HOME` falls back to `USERPROFILE` for `~/.claude/frictionless.json`.
 
 ## Tutorial First-Run Flow
 
@@ -579,7 +589,7 @@ The tutorial runs the update preference dialog check first (existing behavior), 
 `mcp:readSettings()` and `mcp:writeSettings(data)` provide shared settings storage at `{base_dir}/storage/settings.json`. They are defined on the global `mcp` object so any app can use them (e.g., the prefs app reads/writes the `checkUpdate` preference).
 
 - `readSettings()` opens the file, JSON-decodes it, returns the table (or `{}` on any failure)
-- `writeSettings(data)` creates the `storage/` directory if needed via `mkdir -p`, then writes JSON
+- `writeSettings(data)` creates the `storage/` directory if needed via `ui.mkdir`, then writes JSON
 
 ### First-Run Flow
 
@@ -591,57 +601,56 @@ During initialization (`if not session.reloading`):
 
 ### Update Check Flow
 
-When `settings.checkUpdate == true` on startup:
-1. Restore cached state: if `settings.needsUpdate` is true, set `mcp._needsUpdate = true` and `mcp.latestVersion` from settings (so the star/notification appear immediately without waiting for network)
-2. Call `mcp:checkForUpdates()` which:
-   - Gets current version from `mcp:status().version`
-   - Calls `fetchLatestVersion()` (curl to GitHub API)
-   - Compares with `compareVersions(current, latest)`
-   - Sets `mcp.latestVersion` and `mcp._needsUpdate`
-   - Persists `needsUpdate` and `latestVersion` to settings
+The shell drives ark's update bridge (`sys.checkForUpdate`, `sys.requestUpdate`, `sys.updateStatus`); ark compares the versions. On startup (`if not session.reloading`):
+1. If `settings.checkUpdate` is true and `settings.needsUpdate` is cached, restore `_needsUpdate` and `latestVersion` (the star appears before any network)
+2. Through `whenSys` (steps 3–4 wait for ark's `sys`):
+3. `watchUpdate()` once, whatever the preference: a staged update from an earlier session shows in the banner
+4. If `settings.checkUpdate` is true, `checkForUpdates()`: `sys.checkForUpdate()` (returns at once, state `checking`), then `watchUpdate()`
+
+`watchUpdate()` applies `sys.updateStatus()` immediately; if `applyUpdateStatus` says to continue and no `_updatePoll` exists, it starts a `session:setInterval` every `UPDATE_POLL_MS` (1000) that applies the status again and clears itself when told to stop.
+
+`applyUpdateStatus(st)`:
+1. Copy `current` → `_currentVersion`, a non-empty `latest` → `latestVersion`, and `stagedVersion` → `_stagedVersion` when `state == "staged"` (else `""`); versions pass through `bareVersion`
+2. `checking` / `downloading`: continue
+3. `_requestPending`: clear it, call `sys.requestUpdate()`, continue (the bridge ignores a request while a check is in flight, so it is sent only from here, once nothing runs)
+4. `failed`: if `_isUpdating`, a danger toast with `st.error`; a failed check stays quiet
+5. otherwise, with a non-empty `latest`: set `_needsUpdate = st.newer` and persist `needsUpdate`/`latestVersion`; if `_isUpdating`, then `staged` → a success toast with `stagedMessage()` and un-dismiss the banner, anything else → a warning toast ("already up to date" when not newer, else "did not start; try again")
+6. clear `_isUpdating`; stop
 
 ### Notification / Star / Dialog UI
 
 **Orange star indicator** (`.mcp-update-star`):
 - Positioned at top-right of menu button container (absolute, top: -4px, right: -4px)
-- Shown when `updateAvailable()` returns true, hidden via `noUpdateAvailable()`
+- Shown when `updateAvailable()` returns true (newer, not staged, not downloading)
 - Pulses via `star-pulse` CSS animation (opacity 1 → 0.6 → 1, 2s)
 - Click calls `startUpdate()` to open the confirm dialog
 
 **Update notification banner** (`.mcp-update-notification`):
 - Fixed position below menu area (top: 72px, right: 12px)
 - Uses `sl-alert` with variant "primary" and download icon
-- Shows latest version number
-- Hidden when `hideUpdateNotification()` returns true (no update OR dismissed OR updating)
-- **Update** button calls `startUpdate()`, **Later** button calls `dismissUpdateNotification()`
+- Text from `updateBannerText()`: available ("ark vX is available!") or staged (`stagedMessage`)
+- Shown when `showUpdateNotification()` (available or staged, not dismissed, not downloading)
+- **Update** → `startUpdate()` and **Later** → `dismissUpdateNotification()`, both hidden when `isStaged()`; **OK** → `dismissUpdateNotification()`, shown only when `isStaged()`
 
 **First-run preference dialog** (`sl-dialog`):
 - Bound to `showUpdatePrefDialog` via `ui-attr-open`
+- "Would you like ark to check for updates on startup?"
 - Footer buttons: No → `disableUpdates()`, Yes → `enableUpdates()`
 
 **Update confirmation dialog** (`sl-dialog`):
 - Bound to `showUpdateConfirmDialog` via `ui-attr-open`
-- Body shows latest version and current version
+- Body shows latest and current version, and that ark downloads it now and it takes effect the next time ark starts
 - Footer buttons: Cancel → `cancelUpdate()`, Update → `confirmUpdate()`
 
 ### Update Execution Flow
 
-`confirmUpdate()`:
-1. Closes the dialog, sets `_isUpdating = true`, dismisses the notification
-2. Detects platform via `uname -s` and architecture via `uname -m`
-3. Emits a `pushState` event with:
-   - `type = "update"`, `action = "perform-update"`
-   - `currentVersion`, `latestVersion`
-   - `platform`, `architecture`
-   - `releaseUrl` pointing to the specific GitHub release tag
-   - `instructions` with step-by-step binary download/replace/chmod/restart/update procedure
+`confirmUpdate()` closes the dialog, sets `_isUpdating` and `_requestPending`, and calls `watchUpdate()`, whose first apply sends `sys.requestUpdate()` (or waits for an in-flight check to end first). Nothing downloads before this click. The server never restarts itself: the staged binary takes effect at the next `ark serve`.
 
 ### Progress Indicator
 
-While `_isUpdating` is true:
+While `_isUpdating` is true (a requested download):
 - The normal status bar text is hidden (`ui-class-hidden="isUpdating()"`)
-- A replacement span shows "Updating to vX.Y.Z..." with an indeterminate `sl-progress-bar`
-- This span is hidden when `notUpdating()` returns true
+- A replacement span shows "Updating to vX.Y.Z..." with an indeterminate `sl-progress-bar` (`ui-class-showing="isUpdating()"`)
 
 ## Chat Panel Features
 

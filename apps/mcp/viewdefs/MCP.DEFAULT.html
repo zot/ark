@@ -192,7 +192,7 @@
 
     <!-- First-run: update preference dialog -->
     <sl-dialog label="Check for Updates?" ui-attr-open="showUpdatePrefDialog">
-      <p>Would you like Frictionless to check for updates on startup?</p>
+      <p>Would you like ark to check for updates on startup?</p>
       <sl-button slot="footer" variant="default" ui-action="disableUpdates()">No</sl-button>
       <sl-button slot="footer" variant="primary" ui-action="enableUpdates()">Yes</sl-button>
     </sl-dialog>
@@ -200,7 +200,7 @@
     <!-- Update confirm dialog -->
     <sl-dialog label="Update Available" ui-attr-open="showUpdateConfirmDialog">
       <p>Version <strong ui-value="latestVersion"></strong> is available (you have <strong ui-value="currentVersion()"></strong>).</p>
-      <p>Proceed with update? Claude will download and install the new version.</p>
+      <p>Download it now? The new version takes effect the next time ark starts.</p>
       <sl-button slot="footer" variant="default" ui-action="cancelUpdate()">Cancel</sl-button>
       <sl-button slot="footer" variant="primary" ui-action="confirmUpdate()">Update</sl-button>
     </sl-dialog>
@@ -209,10 +209,11 @@
     <div class="mcp-update-notification hidden" ui-class-showing="showUpdateNotification()">
       <sl-alert variant="primary" open>
         <sl-icon slot="icon" name="download"></sl-icon>
-        <span>Frictionless v<strong ui-value="latestVersion"></strong> is available!</span>
+        <span ui-value="updateBannerText()"></span>
         <div class="update-actions">
-          <sl-button size="small" variant="primary" ui-action="startUpdate()">Update</sl-button>
-          <sl-button size="small" variant="default" ui-action="dismissUpdateNotification()">Later</sl-button>
+          <sl-button size="small" variant="primary" ui-action="startUpdate()" ui-class-hidden="isStaged()">Update</sl-button>
+          <sl-button size="small" variant="default" ui-action="dismissUpdateNotification()" ui-class-hidden="isStaged()">Later</sl-button>
+          <sl-button size="small" variant="default" ui-action="dismissUpdateNotification()" class="hidden" ui-class-showing="isStaged()">OK</sl-button>
         </div>
       </sl-alert>
     </div>

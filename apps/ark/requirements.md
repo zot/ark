@@ -20,6 +20,15 @@ icon). Each sets the view mode and displays the ark app.
 **Lua + in-process Go:** The app uses `mcp:search_grouped()` for search
 and `mcp:inbox()` for messaging (both in-process Go functions). Config
 operations use `ark` CLI commands.
+
+**Portable on Windows.** The app runs the CLI with no shell: each call
+is an argument list handed to `ui.exec` (no `PATH=` prefix, no stderr
+redirect, no hand-quoted paths), so it works the same on Windows. A
+failed call returns its error (exit status and stderr) instead of
+discarding stderr. Directory listings and is-directory tests use
+`ui.listDir` / `ui.isDir`; a link to a directory counts as a directory.
+The home directory is `HOME`, falling back to `USERPROFILE`.
+
 If we discover missing CLI support during development, that's the app
 doing its job — we go add it to ark.
 

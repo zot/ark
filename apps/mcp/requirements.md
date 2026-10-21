@@ -211,18 +211,29 @@ An inline variable browser panel that replaces the previous external `/variables
 
 ## Update Check System
 
+The shell updates **ark**, not Frictionless: ark has no MCP server, so
+nothing would receive the old `perform-update` event. Ark's update bridge
+does the work (`sys.checkForUpdate()`, `sys.requestUpdate()`,
+`sys.updateStatus()`; see ark's `specs/lua-api.md`). The shell runs no
+shell commands and no `curl` or `uname`.
+
+**Nothing downloads unless the user clicks Update.** A check only asks
+whether a newer release exists. A requested update is **staged**: ark
+downloads it beside the installed binary and takes it the next time ark
+starts. The server never restarts itself.
+
 ### Settings Persistence
 
 Shared settings are stored in `.ui/storage/settings.json` via two methods on the global `mcp` object:
 - `mcp:readSettings()` — reads and parses the JSON file, returning an empty table if missing or invalid
-- `mcp:writeSettings(data)` — writes the table as JSON, creating the `storage/` directory if needed
+- `mcp:writeSettings(data)` — writes the table as JSON, creating the `storage/` directory if needed (`ui.mkdir`)
 
 These methods are available to any app (e.g., the prefs app uses them to toggle the update preference).
 
 ### First-Run Dialog
 
 On first startup (no settings file or no `checkUpdate` key):
-- Show a dialog asking "Would you like Frictionless to check for updates on startup?"
+- Show a dialog asking "Would you like ark to check for updates on startup?"
 - Yes button saves `checkUpdate: true` and immediately triggers an update check
 - No button saves `checkUpdate: false` and skips
 
@@ -230,43 +241,58 @@ On first startup (no settings file or no `checkUpdate` key):
 
 When `checkUpdate` is enabled in settings:
 - On startup, restore any cached `needsUpdate`/`latestVersion` from settings (so the star appears immediately)
-- Then fetch the latest version from the GitHub releases API (`curl` with timeouts)
-- Compare current version (from `mcp:status().version`) against latest using semver comparison
+- Then start a check with `sys.checkForUpdate()`, which returns at once
+- Poll `sys.updateStatus()` with a session timer while its state is `checking` or `downloading`; stop polling otherwise
+- Take `newer`, `latest` and `current` from the status (ark compares the versions)
 - Persist the result (`needsUpdate`, `latestVersion`) to settings for next startup
+- A failed check is quiet (being offline is normal); a failed requested download is not
+
+### Staged Update
+
+Whatever the preference, startup reads `sys.updateStatus()` once. When its
+state is `staged` (a request from this or an earlier session), the shell
+shows "ark `<stagedVersion>` is staged and takes effect the next time ark
+starts" in the notification banner, and the star stays hidden: there is
+nothing more to do but restart.
 
 ### Update Available Indicator
 
-When an update is available:
+When an update is available (newer, not staged, not downloading):
 - An orange pulsing star icon appears on the menu button (top-right corner)
 - The star pulses via CSS animation for visibility
 - Clicking the star opens the update confirmation dialog
 
 ### Update Notification Banner
 
-When an update is available (and not dismissed, and not currently updating):
+When an update is available or staged (and not dismissed, and not currently downloading):
 - A notification banner appears below the menu button area
-- Shows the available version number
-- **Update** button opens the confirmation dialog
-- **Later** button dismisses the notification for the current session
+- Available: "ark vX.Y.Z is available!", with **Update** (opens the confirmation dialog) and **Later**
+- Staged: the staged message above, with **OK** only
+- **Later** / **OK** dismisses the banner for the current session
 
 ### Update Confirmation Dialog
 
 The confirmation dialog shows:
 - Current version and available version
-- Asks user to confirm the update
+- Says the download happens now and the new version takes effect the next time ark starts
 - **Cancel** closes the dialog
-- **Update** triggers the update by emitting a `pushState` event with:
-  - Current and latest version numbers
-  - Platform and architecture detection (via `uname`)
-  - Release URL pointing to GitHub releases
-  - Step-by-step instructions for the agent to download and install the binary
+- **Update** calls `sys.requestUpdate()` and polls `sys.updateStatus()` until the download ends:
+  - `staged`: a success toast with the staged message, and the banner shows it
+  - `failed`: a danger toast with the error
 
 ### Progress Indicator
 
-While an update is in progress:
+While a requested download runs (state `downloading`):
 - The status bar switches to show "Updating to vX.Y.Z..." with an indeterminate progress bar
 - The normal status text is hidden during this state
 - The update notification banner is also hidden
+
+### Portable File Work
+
+The shell never shells out, so it runs on Windows. It creates directories
+with `ui.mkdir`, lists them with `ui.listDir`, and decodes a pasted image
+with `ui.base64Decode` straight into the upload file (no temp file). The
+home directory is `HOME`, falling back to `USERPROFILE`.
 
 ### Prefs Integration
 

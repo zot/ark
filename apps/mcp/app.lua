@@ -4,34 +4,6 @@
 
 local json = require("mcp.json")
 
--- Version comparison helper
-local function compareVersions(current, latest)
-    local function parse(v)
-        local major, minor, patch = v:match("(%d+)%.(%d+)%.(%d+)")
-        return tonumber(major) or 0, tonumber(minor) or 0, tonumber(patch) or 0
-    end
-    local cm, cn, cp = parse(current)
-    local lm, ln, lp = parse(latest)
-    if lm > cm then return true end
-    if lm == cm and ln > cn then return true end
-    if lm == cm and ln == cn and lp > cp then return true end
-    return false
-end
-
--- Fetch latest version from GitHub releases API
-local function fetchLatestVersion()
-    local handle = io.popen('curl -s --connect-timeout 5 --max-time 10 "https://api.github.com/repos/zot/frictionless/releases/latest" 2>/dev/null')
-    if not handle then return nil end
-    local content = handle:read("*a")
-    handle:close()
-    if not content or content == "" then return nil end
-    local ok, data = pcall(json.decode, content)
-    if ok and data and data.tag_name then
-        return data.tag_name:gsub("^v", "")
-    end
-    return nil
-end
-
 -- Filesystem helpers
 
 local function fileExists(path)
@@ -65,24 +37,21 @@ end
 local function writeJsonFile(path, data)
     if not path then return end
     local dir = path:match("(.+)/[^/]+$")
-    if dir then os.execute('mkdir -p "' .. dir .. '"') end
+    if dir then ui.mkdir(dir) end
     local f = io.open(path, "w")
     if not f then return end
     f:write(json.encode(data))
     f:close()
 end
 
+-- Names of path's subdirectories (links to directories count)
 local function listDirs(path)
     local dirs = {}
-    local handle = io.popen('ls -1d "' .. path .. '"/*/ 2>/dev/null')
-    if not handle then return dirs end
-    for line in handle:lines() do
-        local name = line:match("([^/]+)/$")
-        if name and name ~= "" then
-            table.insert(dirs, name)
+    for _, entry in ipairs(ui.listDir(path) or {}) do
+        if entry.isDir then
+            table.insert(dirs, entry.name)
         end
     end
-    handle:close()
     return dirs
 end
 
@@ -103,7 +72,7 @@ end
 
 -- User settings helpers (~/.claude/frictionless.json — per-user, not per-project)
 local function userSettingsPath()
-    local home = os.getenv("HOME")
+    local home = os.getenv("HOME") or os.getenv("USERPROFILE")
     if not home then return nil end
     return home .. "/.claude/frictionless.json"
 end
@@ -379,7 +348,10 @@ end
 mcp.showUpdatePrefDialog = mcp.showUpdatePrefDialog or false
 mcp.showUpdateConfirmDialog = mcp.showUpdateConfirmDialog or false
 mcp.latestVersion = mcp.latestVersion or ""
+mcp._currentVersion = mcp._currentVersion or ""
+mcp._stagedVersion = mcp._stagedVersion or ""
 mcp._isUpdating = mcp._isUpdating or false
+mcp._requestPending = mcp._requestPending or false
 mcp._updateNotificationDismissed = mcp._updateNotificationDismissed or false
 mcp._needsUpdate = mcp._needsUpdate or false
 
@@ -738,21 +710,19 @@ function mcp:processImageUpload()
 
     if base64Data == "" then return end
 
-    -- Write base64 to temp file, decode to output
+    local bytes = ui.base64Decode(base64Data)
+    if not bytes then return end
     local status = self:status()
     local uploadDir = (status and status.base_dir or "/tmp") .. "/storage/uploads"
-    os.execute('mkdir -p "' .. uploadDir .. '"')
+    ui.mkdir(uploadDir)
 
     local ext = filename:match("%.(%w+)$") or "png"
     local outPath = uploadDir .. "/img-" .. os.time() .. "-" .. math.random(10000) .. "." .. ext
 
-    local tmpB64 = os.tmpname()
-    local f = io.open(tmpB64, "wb")
+    local f = io.open(outPath, "wb")
     if not f then return end
-    f:write(base64Data)
+    f:write(bytes)
     f:close()
-    os.execute('base64 -d < "' .. tmpB64 .. '" > "' .. outPath .. '"')
-    os.remove(tmpB64)
 
     table.insert(self._imageAttachments, session:create(ImageAttachment, {
         path = outPath,
@@ -794,20 +764,92 @@ end
 
 -- Update check methods
 
+-- Ark's update bridge (sys.*Update*) does the work: the shell only asks it
+-- to check or stage, and polls sys.updateStatus() while either runs.
+-- Nothing downloads unless the user clicks Update; a staged update takes
+-- effect the next time ark starts (the server never restarts itself).
+local UPDATE_POLL_MS = 1000
+local UPDATE_BUSY = { checking = true, downloading = true }
+
+local SYS_WAIT_MS = 200
+local SYS_WAIT_TRIES = 50
+
+-- Run fn once ark's sys global exists. The shell loads inside the UI
+-- engine's start, before ark registers sys, so startup work must wait.
+local function whenSys(fn)
+    if rawget(_G, "sys") then return fn() end
+    local tries = 0
+    local token
+    token = session:setInterval(function()
+        tries = tries + 1
+        if rawget(_G, "sys") then
+            session:clearInterval(token)
+            fn()
+        elseif tries >= SYS_WAIT_TRIES then
+            session:clearInterval(token)
+        end
+    end, SYS_WAIT_MS)
+end
+
+-- Release tags carry a leading "v"; the shell adds its own
+local function bareVersion(v)
+    return (v:gsub("^v", ""))
+end
+
+local function stagedMessage(version)
+    return "ark v" .. version .. " is staged and takes effect the next time ark starts"
+end
+
 function mcp:checkForUpdates()
-    local current = self:currentVersion()
-    if not current then return end
-    local latest = fetchLatestVersion()
-    if not latest then return end
-    self.latestVersion = latest
-    self._needsUpdate = compareVersions(current, latest)
-    -- Persist to settings
-    local settings = self:readSettings()
-    settings.needsUpdate = self._needsUpdate
-    if self._needsUpdate then
-        settings.latestVersion = latest
+    sys.checkForUpdate()
+    self:watchUpdate()
+end
+
+-- Apply the update status now, and keep polling while it is busy
+function mcp:watchUpdate()
+    if not self:applyUpdateStatus(sys.updateStatus()) or self._updatePoll then return end
+    self._updatePoll = session:setInterval(function()
+        if not self:applyUpdateStatus(sys.updateStatus()) then
+            session:clearInterval(self._updatePoll)
+            self._updatePoll = nil
+        end
+    end, UPDATE_POLL_MS)
+end
+
+-- Copy a status snapshot into the shell; returns true while polling should continue
+function mcp:applyUpdateStatus(st)
+    self._currentVersion = st.current
+    if st.latest ~= "" then self.latestVersion = bareVersion(st.latest) end
+    self._stagedVersion = st.state == "staged" and bareVersion(st.stagedVersion) or ""
+    if UPDATE_BUSY[st.state] then return true end
+    if self._requestPending then
+        -- The bridge ignores a request while a check runs, so send it only now
+        self._requestPending = false
+        sys.requestUpdate()
+        return true
     end
-    self:writeSettings(settings)
+    if st.state == "failed" then
+        -- A failed check stays quiet (offline is normal); a failed download does not
+        if self._isUpdating then self:notify("ark update failed: " .. st.error, "danger") end
+    elseif st.latest ~= "" then
+        self._needsUpdate = st.newer
+        local settings = self:readSettings()
+        settings.needsUpdate = st.newer
+        settings.latestVersion = self.latestVersion
+        self:writeSettings(settings)
+        if self._isUpdating then
+            if self:isStaged() then
+                self:notify(stagedMessage(self._stagedVersion), "success")
+                self._updateNotificationDismissed = false
+            elseif st.newer then
+                self:notify("The ark update did not start; try again.", "warning")
+            else
+                self:notify("ark is already up to date.", "warning")
+            end
+        end
+    end
+    self._isUpdating = false
+    return false
 end
 
 function mcp:showUpdatePreferenceDialog()
@@ -838,24 +880,24 @@ function mcp:getUpdatePreference()
 end
 
 function mcp:currentVersion()
-    local status = self:status()
-    return status and status.version
+    return self._currentVersion
 end
 
-function mcp:noUpdateAvailable()
-    return not self._needsUpdate
+function mcp:isStaged()
+    return self._stagedVersion ~= ""
 end
 
 function mcp:updateAvailable()
-    return self._needsUpdate
-end
-
-function mcp:hideUpdateNotification()
-    return not self._needsUpdate or self._updateNotificationDismissed or self._isUpdating
+    return self._needsUpdate and not self:isStaged() and not self._isUpdating
 end
 
 function mcp:showUpdateNotification()
-    return self._needsUpdate and not self._updateNotificationDismissed and not self._isUpdating
+    return (self:updateAvailable() or self:isStaged()) and not self._updateNotificationDismissed
+end
+
+function mcp:updateBannerText()
+    if self:isStaged() then return stagedMessage(self._stagedVersion) end
+    return "ark v" .. self.latestVersion .. " is available!"
 end
 
 function mcp:dismissUpdateNotification()
@@ -873,48 +915,12 @@ end
 function mcp:confirmUpdate()
     self.showUpdateConfirmDialog = false
     self._isUpdating = true
-    self._updateNotificationDismissed = true
-
-    -- Detect platform for instructions
-    local uname_s = ""
-    local uname_m = ""
-    local h = io.popen("uname -s 2>/dev/null")
-    if h then uname_s = h:read("*a"):match("^%s*(.-)%s*$") or ""; h:close() end
-    h = io.popen("uname -m 2>/dev/null")
-    if h then uname_m = h:read("*a"):match("^%s*(.-)%s*$") or ""; h:close() end
-
-    local event = {
-        type = "update",
-        action = "perform-update",
-        currentVersion = self:currentVersion(),
-        latestVersion = self.latestVersion,
-        platform = uname_s,
-        architecture = uname_m,
-        releaseUrl = "https://github.com/zot/frictionless/releases/download/v" .. self.latestVersion,
-        instructions = [[
-1. Detect platform (uname -s) and architecture (uname -m)
-2. Download the appropriate binary from releaseUrl:
-   - Linux x86_64: frictionless-linux-amd64
-   - Linux aarch64: frictionless-linux-arm64
-   - Darwin arm64: frictionless-darwin-arm64
-   - Darwin x86_64: frictionless-darwin-amd64
-3. Replace the current frictionless binary (which frictionless)
-4. Make it executable (chmod +x)
-5. The MCP server will restart automatically with the new binary
-6. Call the ui_update tool (NOT install --force) for smart file update
-7. If conflicts returned, offer to merge each one
-8. Notify the user that update is complete
-]]
-    }
-    mcp.pushState(event)
+    self._requestPending = true
+    self:watchUpdate()
 end
 
 function mcp:isUpdating()
     return self._isUpdating
-end
-
-function mcp:notUpdating()
-    return not self._isUpdating
 end
 
 function mcp:lightboxVisible()
@@ -1138,15 +1144,18 @@ if not session.reloading then
     if settings.checkUpdate == nil then
         -- First run: show preference dialog
         mcp:showUpdatePreferenceDialog()
-    elseif settings.checkUpdate then
-        -- Restore cached needsUpdate from settings
-        if settings.needsUpdate then
-            mcp._needsUpdate = true
-            mcp.latestVersion = settings.latestVersion or ""
-        end
-        -- Check for updates (runs curl in background-ish, may block briefly)
-        mcp:checkForUpdates()
+    elseif settings.checkUpdate and settings.needsUpdate then
+        -- Restore the cached result so the star shows before the check ends
+        mcp._needsUpdate = true
+        mcp.latestVersion = settings.latestVersion or ""
     end
+    -- Whatever the preference, show a staged update from an earlier session
+    whenSys(function()
+        mcp:watchUpdate()
+        if settings.checkUpdate then
+            mcp:checkForUpdates()
+        end
+    end)
 
     -- Tutorial first-run check
     local userSettings = mcp:readUserSettings()
