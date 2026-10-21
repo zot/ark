@@ -166,7 +166,7 @@ and unknown items carry the negative marker rather than a false green.
   - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued), mostly
         covered** by #136 and #142 (2026-10-21 review, see Item 9). Close or
         trim when 9.2 lands.
-  - [ ] **9.2 — test on Windows.** **OPEN (not queued.)** Plain `ark update`
+  - [x] ~~**9.2 — test on Windows.**~~ **LANDED (2026-10-21 — `#147`.)** Plain `ark update`
         from an installed `~/.ark/ark.exe`, download path included. Needs
         9.3 and 9.4 first. See Item 9.
   - [x] ~~**9.3 — the release carries what `update` fetches.**~~ **LANDED (2026-10-21 — `#145`.)** Filed by Bill, 2026-10-21. `/mini-spec`.
@@ -1117,6 +1117,33 @@ a pre-publish check.
 **9.2** itself is then that run: an older stamped `ark.exe` installed in a
 throwaway `USERPROFILE`, a newer `make release` served through 9.4, and plain
 `ark update` from the installed exe, with and without a server running.
+
+**The 9.2 run (2026-10-21, `windows-gpu`, scheduled task as `zot`).** Setup
+installed 0.5.0 into `USERPROFILE=C:\t147` (assets, Vulkan llama libraries with
+the MSVC runtime, the model). A 0.5.1 `make release` was served from the dev box
+(`10.10.10.2:8765`) beside a rig-written release document. Results:
+
+- **No server running: passed.** The installed `ark.exe update` read the served
+  document, fetched the 0.5.1 exe and `SHA256SUMS` (the HTTP log shows each
+  request), renamed itself to `ark.exe.old`, and the new exe reported 0.5.1. The
+  next `serve` start swept `ark.exe.old`.
+- **Server running: passed, after a ui-engine fix.** The first attempt's
+  graceful stop never finished. `LuaSession.Shutdown` panicked with "close of
+  closed channel": `cancelTimer` ignored its own already-cancelled flag, so an
+  interval Lua had cleared (the mcp shell's `whenSys` wait, since 7.3) was
+  closed a second time. Every graceful stop of ark since 7.3 hung until the
+  timeout, on Linux too. Fixed in ui-engine (R102 honoured,
+  `test-SessionTimer.md`). With both binaries rebuilt, update stopped the 0.5.0
+  server, installed 0.5.1, and left no ark process.
+- **A pitfall for the next run:** the "old" binary must already contain
+  `ARK_RELEASE_URL`. The first attempt installed a 0.5.0 built before #146,
+  which correctly ignored the variable and asked GitHub.
+- **Found, not fixed:** update reported three bundled html files as
+  user-modified. Nobody had edited them: every `serve` start injects the theme
+  block between their `<!-- #frictionless -->` markers
+  (`flib.InjectAllThemeBlocks`), so they never match the manifest again and no
+  update will refresh them. It is not Windows-specific; it belongs to
+  [setup-and-update.md](setup-and-update.md).
 
 <a id="10"></a>
 

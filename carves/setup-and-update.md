@@ -38,6 +38,9 @@ surface was worth redrawing on every platform, not just Windows.
       install is hardcoded, per-file, copying, and project-scoped, and it
       creates symlinks; the Frictionless-side halves of Items 3, 7, and
       Windows Item 3.
+- [ ] **Item 9 — the theme block makes bundled html read as user-modified.** **OPEN
+      (not queued.)** Filed by Bill, 2026-10-21, from the windows-support 9.2 run.
+      Not Windows-specific. See Item 9.
 
 Preconditions, no checkbox: the portable directory-link helper (symlink on Unix,
 junction on Windows) is decided in windows-support Item 3 and shared with
@@ -326,3 +329,19 @@ one on a later run; the aside copy deletes normally once its process has exited.
   - **Frictionless's Windows position.** Whether Frictionless ships a Windows
     build of its own, or only reaches Windows embedded in ark, changes how hard
     to press the `os.Symlink` and `ln -sfn` points.
+
+- **Item 9.** Every `serve` start runs `flib.InjectAllThemeBlocks` over
+  `~/.ark/html` (`server.go`), which writes the current theme block (a theme-class
+  `<script>` and versioned `<link>`s to `/themes/*.css`) between the
+  `<!-- #frictionless -->` and `<!-- /frictionless -->` markers of every html file.
+  The bundled files carry the markers with nothing between them, and the install
+  manifest records those hashes. So after the first start each such file differs
+  from its manifest hash, update reports it as `preserved user-modified`, and no
+  update ever refreshes it. Measured 2026-10-21 on `windows-gpu`:
+  `html/index.html`, `content-plain.html` and `content-markdown.html` were
+  rewritten at the serve start and then preserved by update, though nobody had
+  touched them. Proposed fix: the manifest hashes html with the region between
+  the markers removed, so an edit anywhere else is still detected while the
+  injected block, which is regenerated at every start and never hand-edited, is
+  not. Check `crc-Updater.md` RefreshAssets and the manifest's hashing when
+  designing it; the theme injector lives in frictionless (`internal/mcp/theme.go`).
