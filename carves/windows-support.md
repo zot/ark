@@ -163,9 +163,11 @@ and unknown items carry the negative marker rather than a false green.
       Rides on [setup-and-update.md](setup-and-update.md): setup's self-copy
       into `~/.ark` and `update`'s replacement of a running `ark.exe`; the
       Windows exe semantics are measured. See Item 9.
-  - [ ] **9.1 — self-copy and exe replacement.** **OPEN (not queued), mostly
-        covered** by #136 and #142 (2026-10-21 review, see Item 9). Close or
-        trim when 9.2 lands.
+  - [x] ~~**9.1 — self-copy and exe replacement.**~~ **ASSESSED (Bill,
+        2026-10-21.)** Closed with no change of its own: setup's self-copy
+        (#136, run as `arkfresh` 2026-10-13) and the running exe's rename-aside
+        (#142's staged path, #147's plain update) are proven on `windows-gpu`.
+        See Item 9.
   - [x] ~~**9.2 — test on Windows.**~~ **LANDED (2026-10-21 — `#147`.)** Plain `ark update`
         from an installed `~/.ark/ark.exe`, download path included. Needs
         9.3 and 9.4 first. See Item 9.
