@@ -461,6 +461,13 @@ func (b *RecallAgentBuilder) RecallListen(ctx context.Context, session string, a
 	}
 }
 
+// The consumer's two result tags: a directed finding, and an ambient
+// recollection. R2865
+const (
+	bloodhoundResultTag = "ark-bloodhound-result"
+	recallResultTag     = "ark-recall-result"
+)
+
 // recallListenPrompt fetches each result doc the events point at and
 // wraps them as a consumer crank-handle (R2865): the result content,
 // then what to do with it and the instruction to listen again. When a
@@ -492,14 +499,34 @@ func (b *RecallAgentBuilder) recallListenPrompt(session string, events []Event) 
 	if strings.Contains(sb.String(), ".jsonl:") {
 		extTagNote = "Some referenced chunks live in chat-JSONL files (past conversations) — apply any tag on those as an external (`@ext`) tag, never an inline edit, since the file is append-only source of truth; that is how conversations enter the hypergraph. "
 	}
-	fmt.Fprintf(&sb,
-		"\n\n---\nThis is ambient recall — material from the corpus related to the current conversation. "+
-			"`## Surface:` items are chunks worth showing the user; `## Recommend:` items are tags worth attaching. "+
-			"Decide what genuinely helps the user right now — you have final say; skip anything stale or off-topic. "+
-			"%s"+
-			"If the user rejects a recommended tag, run `~/.ark/ark connections recall reject-derived`. "+
-			"Then run `~/.ark/ark connections recall listen` again to keep receiving.\n",
-		extTagNote)
+	// R2865: the crank handle describes what actually arrived. A directed
+	// finding (`@ark-bloodhound-result`) is the answer to the caller's own
+	// watermark, not ambient recall; Surface guidance belongs to recollections,
+	// and the reject-a-tag step to any doc carrying a `## Recommend:` item —
+	// a pool-served finding can carry those too (R3283).
+	finding, ambient := false, false
+	for _, ev := range events {
+		switch ev.Tag {
+		case bloodhoundResultTag:
+			finding = true
+		case recallResultTag:
+			ambient = true
+		}
+	}
+	sb.WriteString("\n\n---\n")
+	if finding {
+		sb.WriteString("A `## Finding:` is the answer to a `<BLOODHOUND>` you emitted, headed by your clue. Fold it into your reasoning; show the user only what helps them. ")
+	}
+	if ambient {
+		sb.WriteString("This is ambient recall — material from the corpus related to the current conversation. " +
+			"`## Surface:` items are chunks worth showing the user; `## Recommend:` items are tags worth attaching. " +
+			"Decide what genuinely helps the user right now — you have final say; skip anything stale or off-topic. ")
+	}
+	sb.WriteString(extTagNote)
+	if ambient || strings.Contains(sb.String(), "## Recommend:") {
+		sb.WriteString("If the user rejects a recommended tag, run `~/.ark/ark connections recall reject-derived`. ")
+	}
+	sb.WriteString("Then run `~/.ark/ark connections recall listen` again to keep receiving.\n")
 	return sb.String()
 }
 

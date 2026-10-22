@@ -257,3 +257,58 @@ func TestRecallNextEchoesOnlyTheRequestedTube(t *testing.T) {
 		}
 	}
 }
+
+// R2865: listen's crank handle describes what arrived. Measured 2026-10-22: a
+// directed finding came back calling itself ambient recall, with Surface and
+// Recommend guidance for items it did not have.
+func TestListenFooterDescribesWhatArrived(t *testing.T) {
+	_, db := setupRecall(t)
+	if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatalf("AddChunker(markdown): %v", err)
+	}
+	b := NewRecallAgentBuilder(db)
+	write := func(path, body string) {
+		t.Helper()
+		if err := SyncVoid(db, func(db *DB) error {
+			_, e := db.AddTmpFile(path, "markdown", []byte(body))
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("tmp://T/finding", "## Finding: where is it?\n- a.md:1-2\n")
+	write("tmp://T/finding-rec", "## Finding: where is it?\n- a.md:1-2\n\n## Recommend: a.md:1-2 @t\n")
+	write("tmp://T/ambient", "## Surface: a.md:1-2\n")
+
+	cases := []struct {
+		name           string
+		ev             Event
+		want, dontWant []string
+	}{
+		{"finding", Event{Tag: bloodhoundResultTag, Path: "tmp://T/finding"},
+			[]string{"answer to a `<BLOODHOUND>`", "recall listen` again"},
+			[]string{"ambient recall", "reject-derived"}},
+		{"finding with a proposal", Event{Tag: bloodhoundResultTag, Path: "tmp://T/finding-rec"},
+			[]string{"answer to a `<BLOODHOUND>`", "reject-derived"},
+			[]string{"ambient recall"}},
+		{"ambient", Event{Tag: recallResultTag, Path: "tmp://T/ambient"},
+			[]string{"ambient recall", "`## Surface:` items", "reject-derived"},
+			[]string{"answer to a `<BLOODHOUND>`"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := b.recallListenPrompt("sess-A", []Event{tc.ev})
+			footer := out[strings.LastIndex(out, "\n---\n"):]
+			for _, w := range tc.want {
+				if !strings.Contains(footer, w) {
+					t.Errorf("footer lacks %q:\n%s", w, footer)
+				}
+			}
+			for _, w := range tc.dontWant {
+				if strings.Contains(footer, w) {
+					t.Errorf("footer has %q, which this batch does not warrant:\n%s", w, footer)
+				}
+			}
+		})
+	}
+}

@@ -80,3 +80,22 @@ the caller passed one.
 requested one; the prompt says `--tube sess-A` to a caller that typed none.
 **Inject:** recall_next.go:RecallNext
 **Pulled:** 2026-10-22 — rang: "prompt tells the secretary to pass --tube although it typed none"
+
+## Test: listen's footer describes what arrived
+**Purpose:** R2865's crank handle tells the caller what to do with what came
+back. Measured 2026-10-22: a directed finding came back calling itself ambient
+recall, with Surface and Recommend guidance for items it did not have.
+**Input:** three result docs written to tmp:// and handed to
+`recallListenPrompt` as events: a finding on the bloodhound-result tag; a
+finding carrying a `## Recommend:` item (a pool hunt's proposal, R3283); an
+ambient recollection on the recall-result tag.
+**Expected:** a finding's footer names it as the answer to the caller's
+watermark and says nothing about ambient recall; the reject-a-tag step appears
+for the recollection and for the finding with a proposal, not for the plain
+finding; every footer ends with the instruction to listen again.
+**Refs:** crc-RecallAgentBuilder.md, R2865, R3283
+**Code:** recall_secretary_test.go
+**Fire alarm:** restore HEAD's `recallListenPrompt`; both finding cases fail,
+with the footer calling them ambient recall.
+**Inject:** recall_next.go:recallListenPrompt
+**Pulled:** 2026-10-22 — rang: "footer has \"ambient recall\", which this batch does not warrant" on both finding cases

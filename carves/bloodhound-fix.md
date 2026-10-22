@@ -15,7 +15,7 @@ Opened by Bill, 2026-10-22.
 - [ ] **Item 2 — paraphrased prose in the transcripts ark indexes.** **OPEN (not
       queued), NOT VERIFIED.** What recall and chat indexing see. See Item 2.
 - [ ] **Item 3 — a multi-paragraph watermark came back as one hunt.** **OPEN (#157.)** See Item 3.
-- [ ] **Item 4 — a finding labels itself ambient recall.** **OPEN (#156.)** See Item 4.
+- [x] ~~**Item 4 — a finding labels itself ambient recall.**~~ **LANDED (2026-10-22 — `#156`.)** See Item 4.
 - [ ] **Item 5 — nothing shows whether a watermark was recognized.** **OPEN
       (not queued.)** Overlaps the observability carve. See Item 5.
 - **Item 6 — delegation through the Luhmann pool.** Split into the defects
