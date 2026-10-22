@@ -1083,7 +1083,7 @@ func TestRecall_ChatFunnel(t *testing.T) {
 	}
 
 	// One chat-jsonl turn, three paragraphs; only the middle one matches.
-	turn := `{"type":"user","content":"The orchard notes cover apples and pears in careful detail.\n\nWe also discussed zebras and giraffes roaming the savanna grasslands.\n\nFinally the talk turned to oranges and citrus cultivation methods."}`
+	turn := `{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"The orchard notes cover apples and pears in careful detail.\n\nWe also discussed zebras and giraffes roaming the savanna grasslands.\n\nFinally the talk turned to oranges and citrus cultivation methods."}}`
 	fp := filepath.Join(db.dbPath, "session-abc.jsonl")
 	if err := os.WriteFile(fp, []byte(turn+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1128,7 +1128,7 @@ func TestChatSubchunkResolve(t *testing.T) {
 	if err := db.fts.AddChunker("chat-jsonl", JSONLChunker{}); err != nil {
 		t.Fatalf("register chat-jsonl: %v", err)
 	}
-	turn := `{"type":"user","content":"Alpha paragraph here.\n\nBeta paragraph here.\n\nGamma paragraph here."}`
+	turn := `{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"Alpha paragraph here.\n\nBeta paragraph here.\n\nGamma paragraph here."}}`
 	fp := filepath.Join(db.dbPath, "sess.jsonl")
 	if err := os.WriteFile(fp, []byte(turn+"\n"), 0o644); err != nil {
 		t.Fatal(err)

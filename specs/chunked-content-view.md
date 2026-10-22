@@ -94,12 +94,12 @@ content view should make this structure visible.
 
 ### Role in chunk attrs
 
-`extractJSONLTextFast` also extracts the `type` and `isMeta`
-fields from the JSONL line and stores a `role` chunk attr:
+The chat chunker stores a `role` chunk attr, derived from the transcript
+reader's record ([indexing.md](indexing.md), "chat-jsonl chunker"):
 
-- `type: "user"`, `isMeta` absent or false → `role=human`
-- `type: "user"`, `isMeta: true` → `role=skill`
-- `type: "assistant"` → `role=assistant`
+- an assistant turn → `role=assistant`
+- a skill injection or an agent report → `role=skill`
+- any other user turn → `role=human`
 
 The attr rides the existing microfts2 chunk `Attrs` mechanism.
 

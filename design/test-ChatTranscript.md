@@ -46,3 +46,39 @@ declares `--thinking` / `--all`.
 **Expected:** the set includes `thinking`, `all`, `with-tools`.
 **Refs:** crc-CLITree.md, crc-CLI.md
 
+
+## Test: the renderer's output, option by option
+**Purpose:** R1045, R1047, R1049, R3035. The exact output for one transcript
+holding every case the renderer distinguishes, now read through the transcript
+reader (R3553). Before that move only `--thinking` was tested; on 2026-10-22,
+injecting a space join of a user turn's lines, a dropped sidechain filter and an
+unconditional tool line turned nothing red.
+**Input:** a person turn; a sidechain turn; an assistant turn with text,
+thinking and a tool call; a tool-result turn; a turn end; a person turn of two
+text blocks.
+**Expected:** by default the two person turns and the assistant text, the
+two-block turn on two lines; `--with-tools` adds `⚙ Bash ls -la`; `--all` adds the
+sidechain turn; thinking and tools never appear by default.
+**Refs:** crc-CLI.md, crc-TranscriptReader.md
+**Code:** chats_render_test.go
+**Fire alarm:** join a user turn's text blocks with a space; the default render differs.
+**Inject:** chats.go:chatText
+**Pulled:** 2026-10-22 — rang: default render differs
+**Fire alarm:** drop the sidechain filter; the default render shows SIDECHAIN.
+**Inject:** chats.go:RenderChatLines
+**Pulled:** 2026-10-22 — rang: default render differs
+**Fire alarm:** show tool calls without `--with-tools`; "tool line shown without --with-tools".
+**Inject:** chats.go:RenderChatLines
+**Pulled:** 2026-10-22 — rang: "tool line shown without --with-tools"
+
+## Test: a session's turn count
+**Purpose:** a chat session's turn count is every user and assistant record
+outside sidechains, tool-result carriers included and turn ends not. The label
+and the sidechain rule are TestReadChatLabel's.
+**Input:** the renderer's transcript.
+**Expected:** 4 turns.
+**Refs:** crc-CLI.md, crc-TranscriptReader.md
+**Code:** chats_render_test.go
+**Fire alarm:** count turn ends as turns; the count reads 5.
+**Inject:** chats.go:readChatLabel
+**Pulled:** 2026-10-22 — rang: turns = 5, want 4

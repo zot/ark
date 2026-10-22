@@ -228,6 +228,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Librarian.md → `librarian.go`, `embed.go`, `connections.go`, `recall.go`
 - [x] crc-LlamaLibs.md → `llamalibs.go`, `dllpath_windows.go`, `dllpath_other.go`
 - [x] crc-RecallWatcher.md → `recall_watcher.go`, `recall_watcher_cli.go`, `recall_routing.go`
+- [x] crc-TranscriptReader.md → `transcript.go`
 - [x] crc-RecallAgentBuilder.md → `recall_agent_builder.go`, `recall_agent_handlers.go`, `recall_next.go`, `server.go`, `cmd/ark/main.go`, `.claude/skills/recall/SKILL.md`, `.claude/skills/bloodhound/SKILL.md`
 - [x] crc-RecallAgent.md → `.claude/agents/ark-recall-agent.md`, `.claude/skills/ark/recall-agent-guard.sh`, `.claude/skills/ark/ark-recall.md`
 - [ ] crc-Monitor.md → `monitoring.go`, `cmd/ark/main.go`, `server.go`
@@ -379,6 +380,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-ark-tag-click.md → `install/html/content-markdown.html`, `install/html/content-plain.html`
 
 ### Test Designs
+- [x] test-TranscriptReader.md → `transcript_test.go`, `chat_chunker_test.go`, `role_test.go`
 - [x] test-FileScanActor.md → `filescan_test.go`
 - [x] test-BuiltinApps.md → `builtinapps_test.go`
 - [x] test-AppActivation.md → `appactivation_test.go`, `cmd/ark/bundlecheck_test.go`, `cmd/ark/conflicts_test.go`, `cmd/ark/update_test.go`
@@ -431,7 +433,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-ProxyThenLocal.md → `cmd/ark/main_test.go`, `store_test.go`
 - [x] test-AbsClientPath.md → `cmd/ark/absclientpath_test.go`
 - [x] test-ScheduleSuppression.md → `scheduler_test.go`
-- [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`
+- [x] test-ChatTranscript.md → `cmd/ark/chats_test.go`, `chats_render_test.go`
 - [x] test-InboxTree.md → `cmd/ark/message_cli_test.go`
 - [x] test-MessageCreated.md → `cmd/ark/message_cli_test.go`, `tagblock_test.go`
 - [x] test-PidPath.md → `pid_path_test.go`
@@ -1234,3 +1236,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O224: Something outside a test sandbox wrote ~/.claude/skills links into a temp ark db (14 links into /tmp/.../db/skills, stamped 2026-10-08 13:47, target deleted), so Claude Code silently lost the ark and ui-* skills. Writer not yet identified; likely a temp --db with a real HOME (arkHomeDir ignores --db).
 - A79: R3544-R3546 (make release empties release/<version>/, names binaries via ark _release-asset, writes SHA256SUMS) — Makefile release infrastructure, not Go code (mirrors A69); the naming half is enforced in Go by R3547
 - [ ] O225: `checkpointBaseline` (cmd/ark/checkpoint.go, R3240) destroys before it verifies. It removes the old repository and checkout, re-inits, commits the baseline, and only then imports the side-branch bundles; a failed import is reported, but the old repository is already gone and the deferred `os.RemoveAll(bundleDir)` deletes the bundles too, so the error cannot be recovered from. R3240's "any step's failure aborts before the next destructive step" cannot cover the import, which runs after every destructive step. Measured 2026-10-21 (carves/windows-support.md 7.6): a `local` branch holding phantom artifacts exports to a bundle that fails import with `artifact hash error`, and the ark app's `local` history was lost this way on 2026-10-19. Repair: build the new repository beside the old one, import every bundle into it, and swap it into place only when all succeed; on any failure leave the old repository and checkout untouched and report it. The repair rewrites R3240's order (back-linked there). Frictionless's `install/mcp` `checkpoint_baseline` has the same order and also discards the import's exit status; that half is Frictionless's.
+- [ ] O226: `ark luhmann inspect-exit` (R2796) labels a crash when "the most recent record is an error tail", but no Claude Code transcript record carries a top-level `isError`/`error` field (measured 2026-10-22 over 22,609 records), so error-tail detection has never fired; a crash is now only "no clean close". `last_error` is always empty. Repair needs a measured signal for a subagent that died (an error tool_result, an API error record, a truncated final line) and a test against a real transcript of one; R2796's crash clause changes with it.
+- T289: R243 retired by R3567 (2026-10-22 chat chunker moved onto the transcript reader; harness records no longer indexed (Bill))
+- T290: R2271 retired by R3567 (2026-10-22 chat chunker moved onto the transcript reader; harness records no longer indexed (Bill))
+- T291: R2272 retired by R3567 (2026-10-22 chat chunker moved onto the transcript reader; harness records no longer indexed (Bill))
+- [ ] D16: R3566 (a scheduled check that raises an alert when the share of narration among thinking blocks drops to nothing) has no code: it is built under carves/notify.md Item 6, which needs the alert store and `ark notify` (Items 1-2) and is the first listener for a scheduled fire. The reader already supplies what it needs (narration and thinking counts per read).

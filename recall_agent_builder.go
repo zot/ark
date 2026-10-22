@@ -700,73 +700,33 @@ func (b *RecallAgentBuilder) ContextTokens(nonce uint32) (int, bool) {
 // tokens_at_close the context gate acts on (R2796).
 // CRC: crc-RecallAgentBuilder.md | R2777, R2796
 func SubagentContextTokens(jsonl string) (int, bool) {
-	data, err := os.ReadFile(jsonl)
-	if err != nil {
+	// R3553, R3560: the latest assistant turn whose context fill is nonzero.
+	// Some assistant records carry no usage (tool-use-only intermediates), so
+	// zeros are skipped rather than reported.
+	latest, found := 0, false
+	if _, err := ReadTranscript(jsonl, func(r TranscriptRecord) bool {
+		if r.Kind == TurnAssistant && r.Usage != nil && r.Usage.Context > 0 {
+			latest, found = r.Usage.Context, true
+		}
+		return true
+	}); err != nil {
 		return 0, false
 	}
-	// Scan from end so we find the latest assistant turn fast.
-	lines := strings.Split(string(data), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := lines[i]
-		if line == "" {
-			continue
-		}
-		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
-				Usage struct {
-					CacheCreation int `json:"cache_creation_input_tokens"`
-					CacheRead     int `json:"cache_read_input_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-		if rec.Type != "assistant" {
-			continue
-		}
-		total := rec.Message.Usage.CacheCreation + rec.Message.Usage.CacheRead
-		if total == 0 {
-			// Some assistant records carry no usage block (e.g.,
-			// tool-use-only intermediate records). Keep scanning.
-			continue
-		}
-		return total, true
-	}
-	return 0, false
+	return latest, found
 }
 
 // sumSubagentTokens reads a subagent JSONL transcript and totals
 // usage.input_tokens / usage.output_tokens across "type":"assistant"
 // records. R2761, R2762
 func sumSubagentTokens(jsonl string) (in, out int) {
-	data, err := os.ReadFile(jsonl)
-	if err != nil {
-		return 0, 0
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
-			continue
+	// R3553, R3560
+	ReadTranscript(jsonl, func(r TranscriptRecord) bool {
+		if r.Kind == TurnAssistant && r.Usage != nil {
+			in += r.Usage.Input
+			out += r.Usage.Output
 		}
-		var rec struct {
-			Type    string `json:"type"`
-			Message struct {
-				Usage struct {
-					Input  int `json:"input_tokens"`
-					Output int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-		if rec.Type != "assistant" {
-			continue
-		}
-		in += rec.Message.Usage.Input
-		out += rec.Message.Usage.Output
-	}
+		return true
+	})
 	return in, out
 }
 

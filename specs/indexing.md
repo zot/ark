@@ -23,38 +23,40 @@ registered by name in the database.
 
 Indexes Claude Code conversation logs (JSONL, one JSON record per line).
 
-**Emission invariant.** Every non-empty line that isn't explicitly
-filtered produces exactly one chunk. The chunker's job is to group
-content for indexing and embedding — it must not silently drop
-user-searchable content. If a line can't be cleanly extracted (partial
-JSON at the tail of a growing file, malformed JSON, recognized JSON
-that doesn't match the text extractor), the chunk's content is the
-raw line bytes. Searchable beats invisible.
+Each line is read through the transcript reader
+([transcript-reader.md](transcript-reader.md)), the one part of ark that decodes
+Claude Code's JSON.
 
-**Explicit filters** — these records are skipped because their content
-is already represented elsewhere in the index or is operational
-metadata:
+**What is indexed.** One chunk per user or assistant turn that has text. The
+chunk's content is the turn's text, thinking and narration blocks, one per line;
+a string `content` is one text block. Thinking is the `thinking` field, never its
+`signature`.
 
-- `tool_use` blocks (input contains file contents and code edits
-  whose authoritative copies live in the indexed files)
-- `tool_result` blocks (command output and file reads, also already
-  indexed in their source form or obsolete)
-- top-level `planContent` (duplicate of message content)
-- record types: `progress`, `file-history-snapshot`,
-  `queue-operation`, `system` (operational metadata, not user-meaningful)
+**What is not.**
 
-**Extraction**, when the line isn't filtered:
+- `tool_use` blocks (input contains file contents and code edits whose
+  authoritative copies live in the indexed files) and `tool_result` blocks
+  (command output and file reads, also indexed in their source form or
+  obsolete).
+- A turn with no text.
+- Every record type the reader does not use: attachments, API request copies,
+  progress, file-history snapshots, queue operations, system records and other
+  bookkeeping. They are harness context rather than conversation. Until
+  2026-10-22 attachments and API request copies were indexed by accident,
+  because the old scanner took the first `content` key anywhere in a line; they
+  were 24,416 of 146,991 chat chunks, mostly repeated system reminders and skill
+  listings competing with real conversation in every search. Dropping them was
+  Bill's decision, 2026-10-22.
 
-- `type:text` blocks: the `text` field; multiple text blocks in one
-  message join with newlines.
-- `type:thinking` blocks: the `thinking` field (not the `signature`).
-- `message.content` when it's a string: the entire string.
-- Anything else (parseable JSON that doesn't match the above, partial
-  or malformed JSON): the raw line as chunk content.
+**A line still being written.** A partial trailing line that has not yet
+received its newline is not yet a record. It is indexed as its raw bytes, so the
+content is searchable while the turn is in progress, and replaced when the line
+completes (see Append handling). This is the only case of raw bytes in a chunk.
 
-Chunk range is `N-N` (1-based line number) for traceability. The
-chunk's attrs carry `timestamp` and `role` when extractable from the
-JSON.
+Chunk range is `N-N` (1-based line number) for traceability. A chunk's attrs
+carry `timestamp`, and `role`: `assistant` for an assistant turn; `skill` for a
+skill injection or an agent report; `human` for any other user turn, including a
+person's mid-turn message and a task notification.
 
 **Append handling.** When a JSONL file grows (the common case during
 an active Claude Code session), the chunker handles incremental

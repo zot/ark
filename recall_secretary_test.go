@@ -4,8 +4,8 @@ package ark
 
 import (
 	"context"
-	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +15,12 @@ import (
 
 // --- Recall Secretary seam 3a tests ---
 
-// TestUserProse verifies genuine-user extraction. R3009 keys on the positive
-// human-origin marker (origin.kind == "human"), not origin-absence: a genuine
-// turn is stamped "human" and yields its prose string; an unstamped turn, an
-// injected notification, tool-results, and empty content are all rejected. Used
-// by the R2891 conversation-injection path.
+// TestUserProse verifies genuine-user extraction, now through the transcript
+// reader's Prose (R3553). R3009 keys on the positive human-origin marker
+// (origin.kind == "human"), not origin-absence: a genuine turn is stamped
+// "human" and yields its prose; an unstamped turn, an injected notification,
+// tool-results, and empty content are all rejected. Used by the R2891
+// conversation-injection path and by recall's arming.
 func TestUserProse(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -35,15 +36,25 @@ func TestUserProse(t *testing.T) {
 		{"empty", "human", ``, "", false},
 	}
 	for _, tc := range cases {
-		got, ok := userProse(tc.origin, json.RawMessage(tc.content))
-		if ok != tc.ok || got != tc.want {
-			t.Errorf("%s: userProse(%q,%q) = (%q,%v) want (%q,%v)", tc.name, tc.origin, tc.content, got, ok, tc.want, tc.ok)
+		line := `{"type":"user"`
+		if tc.origin != "" {
+			line += `,"origin":{"kind":"` + tc.origin + `"}`
+		}
+		if tc.content != "" {
+			line += `,"message":{"role":"user","content":` + tc.content + `}`
+		}
+		line += `}`
+		rec, used := ParseTranscriptLine([]byte(line), 1, nil)
+		got, ok := rec.Prose()
+		if !used || ok != tc.ok || got != tc.want {
+			t.Errorf("%s: Prose(%s) = (%q,%v) used=%v want (%q,%v)", tc.name, line, got, ok, used, tc.want, tc.ok)
 		}
 	}
 }
 
 // TestAssistantText verifies assistant-text extraction from both the
-// bare-string and content-array shapes; tool_use blocks are skipped. R2891
+// bare-string and content-array shapes, now through the transcript reader's
+// Text (R3553); tool_use blocks are skipped. R2891
 func TestAssistantText(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -57,8 +68,14 @@ func TestAssistantText(t *testing.T) {
 		{"empty", ``, ""},
 	}
 	for _, tc := range cases {
-		if got := assistantText(json.RawMessage(tc.content)); got != tc.want {
-			t.Errorf("%s: assistantText(%q) = %q want %q", tc.name, tc.content, got, tc.want)
+		line := `{"type":"assistant"`
+		if tc.content != "" {
+			line += `,"message":{"role":"assistant","content":` + tc.content + `}`
+		}
+		line += `}`
+		rec, _ := ParseTranscriptLine([]byte(line), 1, nil)
+		if got := rec.Text(); got != tc.want {
+			t.Errorf("%s: Text(%s) = %q want %q", tc.name, line, got, tc.want)
 		}
 	}
 }
@@ -310,5 +327,37 @@ func TestListenFooterDescribesWhatArrived(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// R2777, R3560: a subagent's context fill is the *latest* assistant turn that
+// reports one, skipping turns with no usage, and its token totals sum every
+// assistant turn. Neither was tested before the transcript reader moved them
+// (found 2026-10-22 by injecting "first instead of latest" and "drop output",
+// which turned nothing red).
+func TestSubagentTokenReaders(t *testing.T) {
+	turn := func(in, out, create, read int) string {
+		return `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"x"}],"usage":{` +
+			`"input_tokens":` + itoa(in) + `,"output_tokens":` + itoa(out) +
+			`,"cache_creation_input_tokens":` + itoa(create) + `,"cache_read_input_tokens":` + itoa(read) + `}}}`
+	}
+	body := strings.Join([]string{
+		turn(1, 10, 500, 500), // context 1000
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}`,
+		turn(2, 20, 0, 25000), // context 25000: the latest nonzero
+		turn(3, 30, 0, 0),     // no context: skipped, but its tokens still count
+	}, "\n") + "\n"
+	path := filepath.Join(t.TempDir(), "agent.jsonl")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := SubagentContextTokens(path); !ok || got != 25000 {
+		t.Errorf("SubagentContextTokens = (%d, %v), want (25000, true): the latest nonzero fill", got, ok)
+	}
+	if in, out := sumSubagentTokens(path); in != 6 || out != 60 {
+		t.Errorf("sumSubagentTokens = (%d, %d), want (6, 60)", in, out)
+	}
+	if _, ok := SubagentContextTokens(filepath.Join(t.TempDir(), "missing.jsonl")); ok {
+		t.Error("a missing transcript reported a context fill")
 	}
 }

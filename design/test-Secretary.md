@@ -24,14 +24,14 @@ session's own secretary would subscribe to `<S>-<nonce>`, a tube the watcher
 never publishes to, which is silent (R3322).
 **Refs:** crc-RecallAgentBuilder.md, R3322, R3032
 
-## Test: userProse — genuine vs. injected vs. tool-result
-**Purpose:** Verify genuine-user extraction for conversation injection. R3009 keys on the positive human-origin marker (`origin.kind == "human"`), not origin-absence: a `"human"`-stamped prose string yields the text; an unstamped turn, a `task-notification` origin, array (tool-result) content, and empty content are all rejected. (Used by the R2891 injection path.)
-**Input:** `userProse("human", `"hello there"`)` → text; `userProse("", `"hello there"`)`, `userProse("task-notification", `"x"`)`, `userProse("human", `[{"type":"tool_result"}]`)`, `userProse("human", ``)` → all rejected.
+## Test: Prose — genuine vs. injected vs. tool-result
+**Purpose:** Verify genuine-user extraction for conversation injection, through the transcript reader's `TranscriptRecord.Prose()` (R3553). R3009 keys on the positive human-origin marker (`origin.kind == "human"`), not origin-absence: a `"human"`-stamped prose string yields the text; an unstamped turn, a `task-notification` origin, array (tool-result) content, and empty content are all rejected. (Used by the R2891 injection path.)
+**Input:** user lines with origin `human` and content `"hello there"` → text; no origin, origin `task-notification`, origin `human` with tool-result content, and origin `human` with no content → all rejected.
 **Expected:** `("hello there", true)`, `("", false)`, `("", false)`, `("", false)`.
 **Refs:** crc-RecallAgentBuilder.md, R2891
 
-## Test: assistantText — string and content-array shapes
-**Purpose:** Verify assistant-text extraction (R2891): a bare string, the concatenated `text` blocks of an array, tool_use blocks skipped.
+## Test: Text — string and content-array shapes
+**Purpose:** Verify assistant-text extraction (R2891), through `TranscriptRecord.Text()` (R3553): a bare string, the concatenated `text` blocks of an array, tool_use blocks skipped.
 **Input:** string content; `[{text:"a"},{text:"b"}]`; `[{text:"keep"},{tool_use}]`; `[{tool_use}]`; empty.
 **Expected:** `"plain reply"`, `"a b"`, `"keep"`, `""`, `""`.
 **Refs:** crc-RecallAgentBuilder.md, R2891
@@ -59,7 +59,7 @@ never publishes to, which is silent (R3322).
   (R2888/R2889) — needs a builder + tmp-doc + pubsub fixture.
 - `recentConversation` last-N-turns ordering against a real session JSONL
   (R2891) — needs a configured chat-jsonl source + a session transcript.
-  The pure parsers (`userProse`, `assistantText`) it composes are covered.
+  The transcript reader's `Prose()` and `Text()` it composes are covered.
 
 ## Test: `recall next` echoes only the address the caller typed
 **Purpose:** R3322 says a secretary never types its routing address. The server
@@ -99,3 +99,22 @@ finding; every footer ends with the instruction to listen again.
 with the footer calling them ambient recall.
 **Inject:** recall_next.go:recallListenPrompt
 **Pulled:** 2026-10-22 — rang: "footer has \"ambient recall\", which this batch does not warrant" on both finding cases
+
+## Test: the subagent token readers
+**Purpose:** R2777, R3560. A subagent's context fill is the latest assistant turn
+that reports one, and its token totals sum every assistant turn. Neither was
+tested before they moved onto the transcript reader; found 2026-10-22, when
+injecting "first instead of latest" and "drop the output tokens" turned nothing
+red.
+**Input:** a transcript of three assistant turns (context fills 1000, 25000 and
+none) around a tool-result turn; a missing file.
+**Expected:** context fill 25000; totals (6 in, 60 out); the missing file
+reports no fill.
+**Refs:** crc-RecallAgentBuilder.md, crc-TranscriptReader.md, R2777, R3560
+**Code:** recall_secretary_test.go
+**Fire alarm:** stop at the first nonzero fill; the context reads 1000.
+**Inject:** recall_agent_builder.go:SubagentContextTokens
+**Pulled:** 2026-10-22 — rang: SubagentContextTokens = (1000, true), want 25000
+**Fire alarm:** drop the output tokens from the sum; the totals read (6, 0).
+**Inject:** recall_agent_builder.go:sumSubagentTokens
+**Pulled:** 2026-10-22 — rang: sumSubagentTokens = (6, 0), want (6, 60)

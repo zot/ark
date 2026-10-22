@@ -2,7 +2,11 @@ package ark
 
 import "testing"
 
-func TestExtractJSONLRole(t *testing.T) {
+// The chunk role, now derived from the transcript reader's record (R3553).
+// Cases measured 2026-10-22: an agent report carries isMeta and stays "skill";
+// a person's mid-turn message and a task notification also carry isMeta and are
+// no longer "skill"; an unused record has no role.
+func TestChatChunkRole(t *testing.T) {
 	tests := []struct {
 		line string
 		want string
@@ -10,6 +14,9 @@ func TestExtractJSONLRole(t *testing.T) {
 		{`{"type":"user","message":{"content":"hello"}}`, "human"},
 		{`{"type":"assistant","message":{"content":"hi"}}`, "assistant"},
 		{`{"type":"user","isMeta":true,"message":{"content":"skill stuff"}}`, "skill"},
+		{`{"type":"user","isMeta":true,"origin":{"kind":"peer"},"message":{"content":"a report"}}`, "skill"},
+		{`{"type":"user","isMeta":true,"origin":{"kind":"human"},"message":{"content":"mid-turn"}}`, "human"},
+		{`{"type":"user","isMeta":true,"origin":{"kind":"task-notification"},"message":{"content":"done"}}`, "human"},
 		{`{"type":"system","message":{}}`, ""},
 		{`{"type":"progress"}`, ""},
 		// Nested "type":"text" must not shadow the top-level "type":"assistant"
@@ -17,9 +24,9 @@ func TestExtractJSONLRole(t *testing.T) {
 		{`{"message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"ok"}]},"type":"assistant"}`, "assistant"},
 	}
 	for _, tt := range tests {
-		got := extractJSONLRole([]byte(tt.line))
-		if got != tt.want {
-			t.Errorf("extractJSONLRole(%q) = %q, want %q", tt.line, got, tt.want)
+		rec, _ := ParseTranscriptLine([]byte(tt.line), 1, nil)
+		if got := chatChunkRole(rec); got != tt.want {
+			t.Errorf("chatChunkRole(%s) = %q, want %q", tt.line, got, tt.want)
 		}
 	}
 }

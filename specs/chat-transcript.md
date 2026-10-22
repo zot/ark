@@ -3,6 +3,10 @@
 Display conversation transcripts from Claude Code JSONL session logs.
 Language: Go. Environment: ark CLI (no server needed).
 
+The transcripts are read through [transcript-reader.md](transcript-reader.md),
+the one part of ark that decodes Claude Code's JSON; this spec covers how they
+are rendered.
+
 ## ark chats
 
 ```

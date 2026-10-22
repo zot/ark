@@ -3,7 +3,6 @@ package main
 // CRC: crc-CLI.md | Seq: seq-cli-dispatch.md
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -5387,36 +5386,22 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 	if jsonl == "" {
 		return inspectExitResult{Label: "unknown"}
 	}
-	f, err := os.Open(jsonl)
-	if err != nil {
-		return inspectExitResult{Label: "unknown"}
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	// R3553: the transcript is read through ark's one reader. lastError stays
+	// empty: no Claude Code record carries a top-level error (measured
+	// 2026-10-22), so crash-by-error-tail has nothing to read.
 	var lastKind, lastError string
 	closeSeen := false
-	for scanner.Scan() {
-		var rec map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			continue
-		}
-		if t, ok := rec["type"].(string); ok {
-			lastKind = t
-		}
-		if rec["isError"] == true {
-			if s, ok := rec["error"].(string); ok {
-				lastError = s
-			} else {
-				lastError = "unspecified"
+	if _, err := ark.ReadTranscript(jsonl, func(r ark.TranscriptRecord) bool {
+		lastKind = r.Kind.String()
+		// R2796: the close marker is the agent's own `recall close` call.
+		for _, c := range r.ToolCalls() {
+			if strings.Contains(c.Command, "ark connections recall close") {
+				closeSeen = true
 			}
 		}
-		// R2796: the close marker is the agent's own `recall close` call. In a
-		// Claude Code transcript a call is a tool_use block inside an assistant
-		// record's message.content; nothing about it sits at the top level.
-		if recallCloseCalled(rec) {
-			closeSeen = true
-		}
+		return true
+	}); err != nil {
+		return inspectExitResult{Label: "unknown"}
 	}
 	tokensAtClose, _ := ark.SubagentContextTokens(jsonl) // R2796: the R2777 value
 	label := "crash"
@@ -5444,27 +5429,6 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 		LastError:      lastError,
 		TokensAtClose:  tokensAtClose,
 	}
-}
-
-// recallCloseCalled reports whether a transcript record is an assistant turn
-// that runs `ark connections recall close` (R2796).
-func recallCloseCalled(rec map[string]any) bool {
-	if rec["type"] != "assistant" {
-		return false
-	}
-	msg, _ := rec["message"].(map[string]any)
-	content, _ := msg["content"].([]any)
-	for _, c := range content {
-		block, _ := c.(map[string]any)
-		if block["type"] != "tool_use" {
-			continue
-		}
-		input, _ := block["input"].(map[string]any)
-		if cmd, _ := input["command"].(string); strings.Contains(cmd, "ark connections recall close") {
-			return true
-		}
-	}
-	return false
 }
 
 // recallOutcomeIs walks recall.jsonl backwards and returns true when

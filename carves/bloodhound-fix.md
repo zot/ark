@@ -28,7 +28,7 @@ Opened by Bill, 2026-10-22.
         `--tube`.**~~ **LANDED (2026-10-22 — `#155`.)** Seen 2026-10-20 and 2026-10-22. See
         Item 6.
 - [x] ~~**Item 7 — sweep the trajectory for bloodhound stragglers.**~~ **LANDED (2026-10-22 — `#154`.)** No skill. See Item 7.
-- [ ] **Item 8 — one reader for Claude Code transcripts.** **OPEN (#158.)**
+- [x] ~~**Item 8 — one reader for Claude Code transcripts.**~~ **LANDED (2026-10-23 — `#158`.)**
       `/mini-spec`. The vehicle for Item 2. See Item 8.
 - **Item 9 — seeds.** What reaches the secretary before it searches. See Item 9.
   - [ ] **9.1 — three seed defects.** **OPEN (#107.)** Excluded paths leak in;
@@ -36,6 +36,8 @@ Opened by Bill, 2026-10-22.
         `/mini-spec`. See Item 9.
   - [ ] **9.2 — a hunt's seeds include its own session.** **OPEN (#27.)**
         `/mini-spec`. See Item 9.
+- [ ] **Item 10 — re-index the chat sources.** **OPEN (#160.)** So the
+      harness chunks #158 stopped producing leave the index. See Item 10.
 
 ## Item 1
 
@@ -269,6 +271,29 @@ The chat half is already servable per hunt with
 filter itself, and whether that exclusion should be a default rather than per
 hunt. Related: 6.3's pool hunts arrived with *empty* seed sets, which is the
 opposite failure and may share a cause.
+
+## Item 10
+
+#158 stopped indexing attachments and API request copies (R3567), but an index
+built before it still holds them: about 24,400 chunks of system reminders and
+skill listings, competing with conversation in every search. Appends only chunk
+new lines, so they leave only when each chat file is chunked again.
+
+A full `ark rebuild` would do it, and would take a very long time because every
+chunk is embedded again (Bill, 2026-10-22). Bill's approach instead: `ark remove`
+the chat files (`~/.claude/projects/**/*`) and let the next scan, which still
+covers them as a source, add them back through the new chunker.
+
+To settle before running it, each by checking rather than assuming:
+
+- Does the next scan re-add a removed file that its source still covers, or does
+  removal mark it excluded?
+- Are the re-added chunks' embeddings reused by content (embed dedup) or
+  computed again? Conversation text is unchanged, so reuse would make this cheap.
+- What else is keyed to chat chunks or files: `@ext` tags and routings,
+  curation and recall records, discussed tags, pinned chunks. Removing a file may
+  drop them.
+- The live session's own transcript is being appended to while this runs.
 
 ## Overlaps
 

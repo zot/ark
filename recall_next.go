@@ -3,11 +3,8 @@ package ark
 // CRC: crc-RecallAgentBuilder.md | Seq: seq-recall-agent.md#3 | R2857, R2858, R2902
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -556,38 +553,24 @@ func (b *RecallAgentBuilder) recentConversation(session string, n int) string {
 	if err != nil || len(paths) == 0 {
 		return ""
 	}
-	data, err := os.ReadFile(paths[0])
-	if err != nil {
-		return ""
-	}
 	type entry struct{ role, text string }
 	var entries []entry
-	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" {
-			continue
-		}
-		var rec struct {
-			Type   string `json:"type"`
-			Origin struct {
-				Kind string `json:"kind"`
-			} `json:"origin"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal([]byte(line), &rec) != nil {
-			continue
-		}
-		switch rec.Type {
-		case "user":
-			if txt, ok := userProse(rec.Origin.Kind, rec.Message.Content); ok {
+	// R3553, R3557: what a person typed, and the assistant's text; subagent
+	// reports and other non-human user turns are left out.
+	if _, err := ReadTranscript(paths[0], func(r TranscriptRecord) bool {
+		switch r.Kind {
+		case TurnUser:
+			if txt, ok := r.Prose(); ok {
 				entries = append(entries, entry{"user", txt})
 			}
-		case "assistant":
-			if txt := assistantText(rec.Message.Content); txt != "" {
+		case TurnAssistant:
+			if txt := r.Text(); txt != "" {
 				entries = append(entries, entry{"assistant", txt})
 			}
 		}
+		return true
+	}); err != nil {
+		return ""
 	}
 	if len(entries) == 0 {
 		return ""
@@ -609,59 +592,6 @@ func (b *RecallAgentBuilder) recentConversation(session string, n int) string {
 		fmt.Fprintf(&sb, "**%s:** %s\n\n", e.role, truncateUTF8(strings.TrimSpace(e.text), 400))
 	}
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-// userProse returns the prose of a genuine user message (content is a
-// JSON string, origin.kind == "human" — mirrors isGenuineUserMessage) and ok.
-// R3009: keys on the positive human marker, not origin-absence, so genuine
-// turns (now stamped origin.kind="human") are not dropped from injected context.
-func userProse(originKind string, content json.RawMessage) (string, bool) {
-	if originKind != "human" {
-		return "", false
-	}
-	c := bytes.TrimSpace(content)
-	if len(c) == 0 || c[0] != '"' {
-		return "", false
-	}
-	var str string
-	if json.Unmarshal(c, &str) != nil {
-		return "", false
-	}
-	return str, true
-}
-
-// assistantText extracts the text of an assistant record: a bare string
-// content, or the concatenated "text" blocks of an array content (tool_use
-// blocks are skipped). Returns "" when there is no text.
-func assistantText(content json.RawMessage) string {
-	c := bytes.TrimSpace(content)
-	if len(c) == 0 {
-		return ""
-	}
-	if c[0] == '"' {
-		var str string
-		if json.Unmarshal(c, &str) == nil {
-			return str
-		}
-		return ""
-	}
-	if c[0] == '[' {
-		var blocks []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(c, &blocks) != nil {
-			return ""
-		}
-		var parts []string
-		for _, bl := range blocks {
-			if bl.Type == "text" && strings.TrimSpace(bl.Text) != "" {
-				parts = append(parts, bl.Text)
-			}
-		}
-		return strings.Join(parts, " ")
-	}
-	return ""
 }
 
 // --- CLI-bloodhound consumer verbs (bloodhound-CLI S3: R3021, R3022, R3029) ---

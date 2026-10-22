@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/zot/microfts2"
 
@@ -5464,12 +5463,20 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 		}
 
 		atEOF := i == len(content)
-		text := extractJSONLTextFast(line)
+		// R3553, R3564: the line is read through the transcript reader, with no
+		// fast path of its own. Records ark
+		// does not use (attachments, API request copies, bookkeeping) yield
+		// no text and are not indexed.
+		rec, used := ParseTranscriptLine(line, lineNum, nil)
+		var text string
+		if used {
+			text = chatChunkText(rec)
+		}
 		var chunkText []byte
 		switch {
-		case len(text) > 0:
-			chunkText = text
-		case atEOF:
+		case text != "":
+			chunkText = []byte(text)
+		case atEOF && !used:
 			// Partial trailing line — no terminating newline yet. Emit a
 			// chunk with the raw bytes so the content is searchable;
 			// AppendAware drop-and-replace will correct it once the line
@@ -5487,12 +5494,12 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 			Locator: microfts2.EncodeByteRangeLocator(lineStart, lineEnd),
 			Content: chunkText,
 		}
-		// R1507-R1508: extract role and skill attrs from JSONL metadata.
+		// R1507-R1508: role and skill attrs, and the timestamp.
 		var attrs []microfts2.Pair
-		if ts := extractJSONLTimestamp(line); ts != nil {
-			attrs = append(attrs, microfts2.Pair{Key: []byte("timestamp"), Value: ts})
+		if !rec.Time.IsZero() {
+			attrs = append(attrs, microfts2.Pair{Key: []byte("timestamp"), Value: []byte(strconv.FormatInt(rec.Time.UnixNano(), 10))})
 		}
-		if role := extractJSONLRole(line); role != "" {
+		if role := chatChunkRole(rec); role != "" {
 			attrs = append(attrs, microfts2.Pair{Key: []byte("role"), Value: []byte(role)})
 			if role == "skill" {
 				if name := extractSkillName(chunkText); name != "" {
@@ -5506,6 +5513,46 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 		}
 	}
 	return nil
+}
+
+// chatChunkText is a chat turn's chunk text: its text, thinking and narration
+// blocks, one per line. Tool calls and tool results are not indexed. The rule
+// the byte scanner applied, kept when the chunker moved onto the transcript
+// reader (measured identical on every user and assistant turn, 2026-10-22).
+// CRC: crc-DB.md | R240, R3553, R3567
+func chatChunkText(rec TranscriptRecord) string {
+	if rec.Kind != TurnUser && rec.Kind != TurnAssistant {
+		return ""
+	}
+	var parts []string
+	for _, b := range rec.Blocks {
+		switch b.Kind {
+		case BlockText, BlockThinking, BlockNarration:
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// chatChunkRole is a chat chunk's role attribute: "assistant" for an assistant
+// turn; "skill" for a user turn carrying an injection, a skill or an agent
+// report; "human" for any other user turn. Matches the scanner's rule except
+// where the reader knows better: a person's mid-turn message and a task
+// notification, both of which carry isMeta, are no longer "skill".
+// CRC: crc-DB.md | R1507
+func chatChunkRole(rec TranscriptRecord) string {
+	switch rec.Kind {
+	case TurnAssistant:
+		return "assistant"
+	case TurnUser:
+		if rec.Speaker == SpeakerSkill || rec.Speaker == SpeakerAgentReport {
+			return "skill"
+		}
+		return "human"
+	}
+	return ""
 }
 
 // CRC: crc-DB.md | R2273, R2274
@@ -5597,126 +5644,6 @@ func adjustChunkRangeLines(rangeStr string, baseLine int) string {
 	return strconv.Itoa(startN+baseLine) + "-" + strconv.Itoa(endN+baseLine)
 }
 
-// JSONLChunkFuncOld is the json.Unmarshal-based chunker, kept for comparison.
-func JSONLChunkFuncOld(_ string, content []byte, yield func(microfts2.Chunk) bool) error {
-	lineNum := 0
-	start := 0
-	for i := 0; i <= len(content); i++ {
-		if i < len(content) && content[i] != '\n' {
-			continue
-		}
-		lineNum++
-		line := content[start:i]
-		start = i + 1
-
-		if len(line) == 0 {
-			continue
-		}
-
-		text := extractJSONLText(line)
-		if text == "" {
-			continue
-		}
-
-		r := fmt.Sprintf("%d-%d", lineNum, lineNum)
-		if !yield(microfts2.Chunk{Range: []byte(r), Content: []byte(text)}) {
-			return nil
-		}
-	}
-	return nil
-}
-
-// extractJSONLTimestamp finds "timestamp":"..." in a JSONL line, parses it
-// as RFC3339, and returns Unix nanoseconds as a byte string (matching the
-// format microfts2.chunkTimestamp expects via strconv.ParseInt).
-func extractJSONLTimestamp(line []byte) []byte {
-	valByte, pos := findKeyValue(line, []byte("timestamp"))
-	if pos < 0 || valByte != '"' {
-		return nil
-	}
-	// Extract the string value (pos points to the opening quote)
-	start := pos + 1
-	end := bytes.IndexByte(line[start:], '"')
-	if end < 0 {
-		return nil
-	}
-	tsStr := string(line[start : start+end])
-	t, err := time.Parse(time.RFC3339Nano, tsStr)
-	if err != nil {
-		t, err = time.Parse(time.RFC3339, tsStr)
-		if err != nil {
-			return nil
-		}
-	}
-	return []byte(strconv.FormatInt(t.UnixNano(), 10))
-}
-
-// extractJSONLTextFast extracts searchable text using a DFT byte scanner.
-// Scans for the "content" key, then handles two cases:
-//   - string value: the entire string is the chunk text
-//   - array value: extracts "text" and "thinking" fields from blocks
-//
-// extractJSONLRole derives a role from the JSONL record's top-level
-// "type" and "isMeta" fields. Returns "human", "assistant", "skill", or "".
-// Uses depth-aware scanning because nested content blocks also have
-// "type" keys (e.g. "type":"text") that would shadow the top-level one.
-// CRC: crc-DB.md | R1507
-func extractJSONLRole(line []byte) string {
-	typ := findTopLevelString(line, `"type":`)
-	switch typ {
-	case "assistant":
-		return "assistant"
-	case "user":
-		// isMeta is always top-level, but a simple contains check is safe
-		// because no nested object uses this key.
-		if bytes.Contains(line, []byte(`"isMeta":true`)) {
-			return "skill"
-		}
-		return "human"
-	default:
-		return ""
-	}
-}
-
-// findTopLevelString finds a key at brace depth 1 and returns its string value.
-// The key must include the colon, e.g. `"type":`. Returns "" if not found.
-func findTopLevelString(line []byte, key string) string {
-	keyBytes := []byte(key)
-	depth := 0
-	for i := 0; i < len(line); i++ {
-		switch line[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-		case '"':
-			if depth == 1 && bytes.HasPrefix(line[i:], keyBytes) {
-				// Found at top level — extract the string value after the key.
-				valStart := i + len(keyBytes)
-				if valStart < len(line) && line[valStart] == '"' {
-					valStart++ // skip opening quote
-					valEnd := scanStringEnd(line, valStart)
-					if valEnd >= 0 {
-						return string(line[valStart:valEnd])
-					}
-				}
-				return ""
-			}
-			// Skip past this string.
-			end := scanStringEnd(line, i+1)
-			if end < 0 {
-				return ""
-			}
-			i = end // loop increments past closing quote
-		case '[':
-			depth++
-		case ']':
-			depth--
-		}
-	}
-	return ""
-}
-
 // extractSkillName parses the skill name from extracted chunk text.
 // Looks for "Base directory for this skill: PATH" and returns the
 // last path component.
@@ -5736,322 +5663,6 @@ func extractSkillName(text []byte) string {
 		return path[i+1:]
 	}
 	return path
-}
-
-func extractJSONLTextFast(line []byte) []byte {
-	// Quick skip: check for known non-message types before full scan.
-	if bytes.Contains(line, []byte(`"type":"progress"`)) ||
-		bytes.Contains(line, []byte(`"type":"file-history-snapshot"`)) ||
-		bytes.Contains(line, []byte(`"type":"queue-operation"`)) ||
-		bytes.Contains(line, []byte(`"type":"system"`)) ||
-		bytes.Contains(line, []byte(`"type":"last-prompt"`)) {
-		return nil
-	}
-
-	// Find "content" key and its value
-	contentVal, contentStart := findKeyValue(line, []byte("content"))
-	if contentStart < 0 {
-		return nil
-	}
-
-	// Case 1: "content":"string"
-	if contentVal == '"' {
-		valStart := contentStart + 1
-		valEnd := scanStringEnd(line, valStart)
-		if valEnd < 0 {
-			return nil
-		}
-		return unescapeJSON(line[valStart:valEnd])
-	}
-
-	// Case 2: "content":[...blocks...]
-	if contentVal != '[' {
-		return nil
-	}
-
-	// Scan blocks inside the array for "text" and "thinking" values
-	var parts []byte
-	i := contentStart + 1 // past '['
-	for i < len(line) {
-		if line[i] == ']' {
-			break
-		}
-		if line[i] == '"' {
-			keyStart := i + 1
-			keyEnd := scanStringEnd(line, keyStart)
-			if keyEnd < 0 {
-				break
-			}
-			key := line[keyStart:keyEnd]
-			i = keyEnd + 1
-
-			// Skip to colon
-			for i < len(line) && line[i] != ':' && line[i] != ',' && line[i] != '}' {
-				i++
-			}
-			if i >= len(line) || line[i] != ':' {
-				continue
-			}
-			i++ // past colon
-			for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
-				i++
-			}
-
-			isText := bytes.Equal(key, []byte("text"))
-			isThinking := bytes.Equal(key, []byte("thinking"))
-
-			if (isText || isThinking) && i < len(line) && line[i] == '"' {
-				valStart := i + 1
-				valEnd := scanStringEnd(line, valStart)
-				if valEnd < 0 {
-					break
-				}
-				val := unescapeJSON(line[valStart:valEnd])
-				if len(val) > 0 {
-					if len(parts) > 0 {
-						parts = append(parts, '\n')
-					}
-					parts = append(parts, val...)
-				}
-				i = valEnd + 1
-			} else {
-				i = skipJSONValue(line, i)
-			}
-		} else {
-			i++
-		}
-	}
-	return parts
-}
-
-// findKeyValue scans for a JSON key and returns the first byte of its value
-// and the position of that byte. Returns (-1, -1) if not found.
-func findKeyValue(data, key []byte) (byte, int) {
-	target := make([]byte, 0, len(key)+2)
-	target = append(target, '"')
-	target = append(target, key...)
-	target = append(target, '"')
-
-	i := 0
-	for i < len(data) {
-		if data[i] == '"' {
-			// Check if this is our key
-			if bytes.HasPrefix(data[i:], target) {
-				i += len(target)
-				// Skip to colon
-				for i < len(data) && (data[i] == ' ' || data[i] == '\t') {
-					i++
-				}
-				if i >= len(data) || data[i] != ':' {
-					continue
-				}
-				i++ // past colon
-				for i < len(data) && (data[i] == ' ' || data[i] == '\t') {
-					i++
-				}
-				if i < len(data) {
-					return data[i], i
-				}
-				return 0, -1
-			}
-			// Not our key — skip past this string
-			end := scanStringEnd(data, i+1)
-			if end < 0 {
-				return 0, -1
-			}
-			i = end + 1
-		} else {
-			i++
-		}
-	}
-	return 0, -1
-}
-
-// scanStringEnd finds the closing quote of a JSON string, handling escapes.
-// start points to the first character after the opening quote.
-// Returns the index of the closing quote, or -1 if not found.
-func scanStringEnd(data []byte, start int) int {
-	i := start
-	for i < len(data) {
-		if data[i] == '\\' {
-			i += 2 // skip escaped char
-		} else if data[i] == '"' {
-			return i
-		} else {
-			i++
-		}
-	}
-	return -1
-}
-
-// skipJSONValue skips over a JSON value starting at position i.
-// Handles strings, numbers, booleans, null, arrays, and objects.
-func skipJSONValue(data []byte, i int) int {
-	if i >= len(data) {
-		return i
-	}
-	switch data[i] {
-	case '"':
-		end := scanStringEnd(data, i+1)
-		if end < 0 {
-			return len(data)
-		}
-		return end + 1
-	case '{', '[':
-		// Track nesting with a counter (no stack needed — just depth)
-		open := data[i]
-		close := byte('}')
-		if open == '[' {
-			close = ']'
-		}
-		depth := 1
-		i++
-		for i < len(data) && depth > 0 {
-			if data[i] == '"' {
-				end := scanStringEnd(data, i+1)
-				if end < 0 {
-					return len(data)
-				}
-				i = end + 1
-			} else if data[i] == open {
-				depth++
-				i++
-			} else if data[i] == close {
-				depth--
-				i++
-			} else {
-				i++
-			}
-		}
-		return i
-	default:
-		// number, bool, null — scan to next structural char
-		for i < len(data) && data[i] != ',' && data[i] != '}' && data[i] != ']' {
-			i++
-		}
-		return i
-	}
-}
-
-// unescapeJSON handles basic JSON string escapes.
-func unescapeJSON(data []byte) []byte {
-	if bytes.IndexByte(data, '\\') < 0 {
-		return data // fast path: no escapes
-	}
-	out := make([]byte, 0, len(data))
-	i := 0
-	for i < len(data) {
-		if data[i] == '\\' && i+1 < len(data) {
-			switch data[i+1] {
-			case '"', '\\', '/':
-				out = append(out, data[i+1])
-			case 'n':
-				out = append(out, '\n')
-			case 't':
-				out = append(out, '\t')
-			case 'r':
-				out = append(out, '\r')
-			case 'b':
-				out = append(out, '\b')
-			case 'f':
-				out = append(out, '\f')
-			case 'u':
-				if i+5 < len(data) {
-					r := hexToRune(data[i+2 : i+6])
-					if r >= 0 {
-						var buf [4]byte
-						n := utf8.EncodeRune(buf[:], r)
-						out = append(out, buf[:n]...)
-						i += 6
-						continue
-					}
-				}
-				out = append(out, data[i], data[i+1])
-			default:
-				out = append(out, data[i], data[i+1])
-			}
-			i += 2
-		} else {
-			out = append(out, data[i])
-			i++
-		}
-	}
-	return out
-}
-
-// hexToRune converts 4 hex bytes to a rune. Returns -1 on invalid input.
-func hexToRune(h []byte) rune {
-	if len(h) != 4 {
-		return -1
-	}
-	var r rune
-	for _, b := range h {
-		r <<= 4
-		switch {
-		case b >= '0' && b <= '9':
-			r |= rune(b - '0')
-		case b >= 'a' && b <= 'f':
-			r |= rune(b - 'a' + 10)
-		case b >= 'A' && b <= 'F':
-			r |= rune(b - 'A' + 10)
-		default:
-			return -1
-		}
-	}
-	return r
-}
-
-// extractJSONLText extracts searchable text using json.Unmarshal (old, slow).
-func extractJSONLText(line []byte) string {
-	var record struct {
-		Type    string `json:"type"`
-		Message struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal(line, &record); err != nil {
-		return ""
-	}
-
-	// Skip non-message record types
-	switch record.Type {
-	case "progress", "file-history-snapshot", "queue-operation", "system", "last-prompt":
-		return ""
-	}
-
-	if len(record.Message.Content) == 0 {
-		return ""
-	}
-
-	// Content can be a string or an array of blocks
-	var str string
-	if json.Unmarshal(record.Message.Content, &str) == nil {
-		return str
-	}
-
-	var blocks []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		Thinking string `json:"thinking"`
-	}
-	if json.Unmarshal(record.Message.Content, &blocks) != nil {
-		return ""
-	}
-
-	var parts []string
-	for _, b := range blocks {
-		switch b.Type {
-		case "text":
-			if b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		case "thinking":
-			if b.Thinking != "" {
-				parts = append(parts, b.Thinking)
-			}
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 // chunkForVerse resolves a CHAPTER.VERSE reference to the single paragraph

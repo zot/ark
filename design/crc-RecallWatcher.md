@@ -107,16 +107,14 @@ composes and writes each curation doc via the in-process
   recognition under its own:
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
     (R2729, R2730).
-  - Scan `newBytes` line-by-line; parse each line as JSON and
-    inspect top-level `type`/`subtype`, plus `message.content` and
-    `origin.kind` for user records (R2731, R2732):
-    - On a *genuine* `type=user` record — string content and the
-      positive `origin.kind == "human"` marker (`isGenuineUserMessage`;
-      excludes tool-results (array content), injected notifications
-      (`origin.kind` like `task-notification`), and local-command
-      caveats (no origin) — absence of origin is not genuine, R3009) →
+  - Read `newBytes` through TranscriptReader (`ReadTranscriptData`, R3553);
+    the watcher decodes no JSON itself (R2731, R2732):
+    - On a *genuine* user turn — `TranscriptRecord.Prose()`: the
+      positive human origin marker and some text (excludes
+      tool-results, injected notifications, and local-command caveats;
+      absence of origin is not genuine, R3009) →
       cancel `pendingTimer`, set `armReady` (R2732, R2733, R3009).
-    - On `type=system, subtype=turn_duration` → only if
+    - On a turn end (`TurnEnd`, Claude Code's `turn_duration`) → only if
       `armReady`: cancel any armed timer and arm a fresh one for
       `activation_delay` seconds (clearing `armReady`) whose expiry
       posts the fire closure. If not `armReady`, ignore — an
@@ -125,8 +123,8 @@ composes and writes each curation doc via the in-process
   - **Bloodhound recognition** (R2934, R2935, R2936, R3279) — gated on
     `ark-bloodhound-result` alone, independent of the ambient bullets
     above *and* of whether a session secretary is standing:
-    `scanBloodhounds(newBytes)` parses each
-    `type:"assistant"` line's text (reusing `assistantText`) and
+    `scanBloodhounds(newBytes)` takes each assistant turn's text
+    (`TranscriptRecord.Text()`, through `assistantLineTexts`) and
     regex-matches `<BLOODHOUND(\s[^>]*)?>(.*?)</BLOODHOUND>` (non-greedy,
     DOTALL) — each capture is one payload, and the opening tag's **attribute
     run** is parsed by `parseBloodhoundAttrs` into the `notags` flag (R3110)

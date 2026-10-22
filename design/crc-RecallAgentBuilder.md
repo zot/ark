@@ -341,10 +341,10 @@ for these verbs — `ark serve` must be running.
 ### Context introspection
 - ContextTokens(nonce) → (tokens int, found bool) (R2777) —
   uses `findSubagentJSONL(nonce)` (shared with token-sum
-  lookup), reads the JSONL backwards, returns the
-  `cache_creation_input_tokens + cache_read_input_tokens` sum
-  from the most recent `"type":"assistant"` record carrying a
-  usage object. The lotto-tube recall agent (Phase 2) calls
+  lookup), reads it through TranscriptReader
+  (`SubagentContextTokens`, R3553), and returns the context fill of the
+  most recent assistant turn that has one (cache creation + cache read,
+  R3560). The lotto-tube recall agent (Phase 2) calls
   this to self-recycle when context grows past a configurable
   limit. `(0, false)` on discovery failure so callers
   distinguish "couldn't measure" from a real 0.

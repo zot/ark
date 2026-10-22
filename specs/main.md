@@ -333,7 +333,7 @@ It skips everything else:
 - `tool_use` blocks (input contains file contents, code edits — machine payload)
 - `tool_result` blocks (command output, file reads)
 - `planContent` top-level field (duplicate of content already in message)
-- `progress`, `file-history-snapshot`, `queue-operation`, `system` record types
+- every record type other than user and assistant turns (indexing.md)
 - `signature` fields on thinking blocks (cryptographic, not searchable)
 - All envelope metadata (`uuid`, `sessionId`, `cwd`, `usage`, etc.)
 
@@ -354,9 +354,9 @@ From records with `"content":"string"` (simple text content):
 ### Chunk metadata (attrs)
 
 Each chunk carries metadata as key-value attrs:
-- `role` — derived from the record's top-level `type` and `isMeta`
-  fields: `human` (type=user, no isMeta), `assistant` (type=assistant),
-  or `skill` (type=user, isMeta=true). Used by the content view to
+- `role` — `assistant` for an assistant turn; `skill` for a skill
+  injection or an agent report; `human` for any other user turn
+  (indexing.md). Used by the content view to
   render conversation structure with role indicators.
 - `skill` — for skill chunks only, the last path component from the
   `Base directory for this skill: PATH` line (e.g. `ark`, `mini-spec`).
@@ -364,8 +364,8 @@ Each chunk carries metadata as key-value attrs:
 
 ### Skipped record types
 
-Entire records are skipped for these `type` values:
-- `progress`, `file-history-snapshot`, `queue-operation`, `system`, `last-prompt`
+Every record type other than user and assistant turns is skipped. The canonical
+rules are in [indexing.md](indexing.md), "chat-jsonl chunker".
 
 ### Skipped fields within message records
 

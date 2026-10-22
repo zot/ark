@@ -54,9 +54,9 @@ is in `seq-recall-agent.md`.
          ├── 2.5  append `added` to pendingChunks                 (R2730)
          │
          ├── 2.6  for each line in newBytes:                      (R2731, R2732)
-         │           obj = json.Unmarshal(line)
-         │           if obj.type == "user" && genuine(obj):        (R2732, R3009)
-         │             // genuine = string content && origin.kind=="human"
+         │           rec = TranscriptReader record             (R3553)
+         │           if rec is a user turn && rec.Prose() ok:      (R2732, R3009)
+         │             // Prose = human origin marker && some text
          │             //   (excludes tool-results, notifications, caveats;
          │             //    origin-absence is NOT genuine, R3009)
          │             cancel pendingTimer; armReady = true        (R2733)
@@ -212,8 +212,8 @@ pass. A watermark is recognized while `@ark-bloodhound-result=<S>` is
 subscribed — **the secretary is not part of the recognition gate** (R3279),
 because a session without one can borrow Luhmann's pool (R3280):
 
-- `scanBloodhounds(newBytes)` walks each `type:"assistant"` line, pulls
-  its text via `assistantText`, and regex-matches
+- `scanBloodhounds(newBytes)` walks each assistant turn through
+  TranscriptReader, takes its text (`TranscriptRecord.Text()`), and regex-matches
   `<BLOODHOUND>(.*?)</BLOODHOUND>` (non-greedy, DOTALL). Each capture is
   one payload — deterministic, once-only (newBytes is the newly-appended
   slice).

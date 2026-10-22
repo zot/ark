@@ -1,8 +1,6 @@
 package ark
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -20,11 +18,6 @@ import (
 // (R3291) — which is the whole reason the UI gets a binding instead of a
 // reimplementation in Lua.
 
-// chatMaxLine bounds one JSONL record. Conversation records carrying large
-// tool results routinely exceed bufio's default, and a truncated record would
-// silently drop a turn.
-const chatMaxLine = 10 * 1024 * 1024
-
 // chatLabelMax is how wide a session label is allowed to be before it is
 // truncated. Long enough to tell two mornings apart, short enough to stay one
 // terminal row alongside the date and turn count.
@@ -38,26 +31,6 @@ const chatListDefaultLimit = 20
 // Enumeration keys on it, so a chat source is one holding files with this
 // strategy rather than one matched by directory name.
 const ChatStrategy = "chat-jsonl"
-
-// jsonlRecord is a minimal parse of a JSONL conversation record.
-type jsonlRecord struct {
-	Type        string          `json:"type"`
-	IsSidechain bool            `json:"isSidechain"`
-	Message     json.RawMessage `json:"message"`
-}
-
-type messageContent struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
-}
-
-type contentBlock struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	Thinking string          `json:"thinking,omitempty"` // R3035: chain-of-thought block
-	Name     string          `json:"name,omitempty"`
-	Input    json.RawMessage `json:"input,omitempty"`
-}
 
 // ChatRenderOptions controls what a transcript shows.
 // CRC: crc-CLI.md | R1045, R1047, R1049, R3035
@@ -97,88 +70,56 @@ func RenderChatFile(w io.Writer, path string, opts ChatRenderOptions) error {
 // sidechain (subagent) records filtered out unless requested
 func RenderChatLines(w io.Writer, r io.Reader, opts ChatRenderOptions) error {
 	lineLen := opts.lineLength()
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 1024*1024), chatMaxLine)
-
-	for scanner.Scan() {
-		var rec jsonlRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			continue
-		}
-
+	_, err := ReadTranscriptStream(r, func(rec TranscriptRecord) bool { // R3553
 		// Skip sidechains (subagent traffic)
-		if rec.IsSidechain && !opts.Sidechain {
-			continue
+		if rec.Sidechain && !opts.Sidechain {
+			return true
 		}
-
-		if rec.Type != "user" && rec.Type != "assistant" {
-			continue
-		}
-
-		var msg messageContent
-		if err := json.Unmarshal(rec.Message, &msg); err != nil {
-			continue
-		}
-
-		if rec.Type == "user" {
-			text := extractText(msg.Content)
-			if text != "" {
+		switch rec.Kind {
+		case TurnUser:
+			if text := chatText(rec); text != "" {
 				writeWrapped(w, "❯", text, lineLen)
 				fmt.Fprintln(w)
 			}
-			continue
-		}
-
-		for _, b := range extractBlocks(msg.Content) {
-			switch b.Type {
-			case "text":
-				if b.Text != "" {
-					writeWrapped(w, "●", b.Text, lineLen)
-					fmt.Fprintln(w)
-				}
-			case "thinking":
-				// R3035: chain-of-thought, off by default (verbose). The
-				// corpus already indexes it; this restores display parity.
-				if opts.WithThinking && b.Thinking != "" {
-					writeWrapped(w, "✻", b.Thinking, lineLen)
-					fmt.Fprintln(w)
-				}
-			case "tool_use":
-				if opts.WithTools {
-					fmt.Fprintf(w, "  ⚙ %s %s\n", b.Name, summarizeToolInput(b.Input))
+		case TurnAssistant:
+			for _, b := range rec.Blocks {
+				switch b.Kind {
+				case BlockText:
+					if b.Text != "" {
+						writeWrapped(w, "●", b.Text, lineLen)
+						fmt.Fprintln(w)
+					}
+				case BlockThinking, BlockNarration:
+					// R3035: chain-of-thought, off by default (verbose). The
+					// corpus already indexes it; this restores display parity.
+					// Narration renders as it always did, as thinking; whether
+					// it should show differently is bloodhound-fix Item 2's.
+					if opts.WithThinking && b.Text != "" {
+						writeWrapped(w, "✻", b.Text, lineLen)
+						fmt.Fprintln(w)
+					}
+				case BlockToolCall:
+					if opts.WithTools {
+						fmt.Fprintf(w, "  ⚙ %s %s\n", b.Tool, summarizeToolInput(b.Input))
+					}
 				}
 			}
 		}
-	}
-	return scanner.Err()
+		return true
+	})
+	return err
 }
 
-// extractText gets the text content from a user message.
-func extractText(content json.RawMessage) string {
-	// Try as string first
-	var s string
-	if err := json.Unmarshal(content, &s); err == nil {
-		return strings.TrimSpace(s)
-	}
-	// Try as array of content blocks
-	var blocks []contentBlock
-	if err := json.Unmarshal(content, &blocks); err == nil {
-		var parts []string
-		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
+// chatText is a user turn's text as a transcript shows it: its text blocks one
+// per line, trimmed.
+func chatText(rec TranscriptRecord) string {
+	var parts []string
+	for _, b := range rec.Blocks {
+		if b.Kind == BlockText && b.Text != "" {
+			parts = append(parts, b.Text)
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
 	}
-	return ""
-}
-
-// extractBlocks parses content as an array of content blocks.
-func extractBlocks(content json.RawMessage) []contentBlock {
-	var blocks []contentBlock
-	json.Unmarshal(content, &blocks)
-	return blocks
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // writeWrapped writes text with a marker on the first line and 2-space indent
@@ -222,11 +163,7 @@ func writeWrapped(w io.Writer, marker, text string, lineLen int) {
 }
 
 // summarizeToolInput returns a brief summary of tool input for display.
-func summarizeToolInput(input json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(input, &m); err != nil {
-		return ""
-	}
+func summarizeToolInput(m map[string]any) string {
 	// Show the most useful field
 	for _, key := range []string{"command", "file_path", "pattern", "path", "prompt", "description", "query", "skill", "subject"} {
 		if v, ok := m[key]; ok {
@@ -391,32 +328,16 @@ func chatSourceOf(path string, dirs map[string]string) (string, bool) {
 // view: a session's opening line is the human's, not a subagent's.
 // CRC: crc-CLI.md | R3284, R3286
 func readChatLabel(path string) (label string, turns int) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", 0
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), chatMaxLine)
-	for scanner.Scan() {
-		var rec jsonlRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			continue
-		}
-		if rec.IsSidechain || (rec.Type != "user" && rec.Type != "assistant") {
-			continue
+	ReadTranscript(path, func(rec TranscriptRecord) bool { // R3553
+		if rec.Sidechain || rec.Kind == TurnEnd {
+			return true
 		}
 		turns++
-		if label != "" || rec.Type != "user" {
-			continue
+		if label == "" && rec.Kind == TurnUser {
+			label = truncateLabel(chatText(rec))
 		}
-		var msg messageContent
-		if err := json.Unmarshal(rec.Message, &msg); err != nil {
-			continue
-		}
-		label = truncateLabel(extractText(msg.Content))
-	}
+		return true
+	})
 	return label, turns
 }
 

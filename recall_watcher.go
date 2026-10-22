@@ -4,7 +4,6 @@ package ark
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -232,36 +231,21 @@ const (
 // the order they appeared. R2731, R2732
 func scanNewBytes(newBytes []byte) []jsonlSignal {
 	var sigs []jsonlSignal
-	for line := range bytesIterLines(newBytes) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var rec struct {
-			Type    string `json:"type"`
-			Subtype string `json:"subtype"`
-			Origin  struct {
-				Kind string `json:"kind"`
-			} `json:"origin"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue // unparseable line — skip silently (could be a partial trailing line)
-		}
-		switch {
-		case rec.Type == "user":
+	ReadTranscriptData(newBytes, func(r TranscriptRecord) bool { // R3553
+		switch r.Kind {
+		case TurnUser:
 			// Only a *genuine* human message arms the watcher (R2732).
-			// Tool-results and harness-injected lines are also
-			// `type:"user"` — counting them lets the watcher re-fire on
-			// its own consumers' wake turns (the recall ping-pong).
-			if isGenuineUserMessage(rec.Origin.Kind, rec.Message.Content) {
+			// Tool-results and harness-injected lines are also user
+			// records — counting them lets the watcher re-fire on its own
+			// consumers' wake turns (the recall ping-pong).
+			if _, ok := r.Prose(); ok {
 				sigs = append(sigs, signalUser)
 			}
-		case rec.Type == "system" && rec.Subtype == "turn_duration":
+		case TurnEnd:
 			sigs = append(sigs, signalTurnDuration)
 		}
-	}
+		return true
+	})
 	return sigs
 }
 
@@ -274,29 +258,18 @@ func scanNewBytes(newBytes []byte) []jsonlSignal {
 // scanners that have no use for it.
 func assistantLineTexts(newBytes []byte) func(yield func(string, string) bool) {
 	return func(yield func(string, string) bool) {
-		for line := range bytesIterLines(newBytes) {
-			if len(bytes.TrimSpace(line)) == 0 {
-				continue
+		ReadTranscriptData(newBytes, func(r TranscriptRecord) bool { // R3553
+			if r.Kind != TurnAssistant {
+				return true
 			}
-			var rec struct {
-				Type    string `json:"type"`
-				Cwd     string `json:"cwd"`
-				Message struct {
-					Content json.RawMessage `json:"content"`
-				} `json:"message"`
-			}
-			if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
-				continue
-			}
-			if text := assistantText(rec.Message.Content); text != "" && !yield(text, rec.Cwd) {
-				return
-			}
-		}
+			text := r.Text()
+			return text == "" || yield(text, r.Cwd)
+		})
 	}
 }
 
 // scanBloodhounds walks newBytes for directed-search watermarks in assistant
-// output: each `type:"assistant"` line's text (decoded via assistantText) is
+// output: each `type:"assistant"` line's text (TranscriptRecord.Text, through assistantLineTexts) is
 // regex-matched for `<BLOODHOUND …>…</BLOODHOUND>`, and every capture is one
 // request. Deterministic and once-only by construction — newBytes is the
 // newly-appended slice, so a given line is scanned exactly once (two identical
@@ -386,29 +359,6 @@ func scanRecallTagsDirective(newBytes []byte) (suppress, found bool) {
 		}
 	}
 	return suppress, found
-}
-
-// isGenuineUserMessage reports whether a `type:"user"` record is a real
-// human message rather than a tool-result or a harness-injected line.
-// Two structural tells, both from the Claude Code JSONL:
-//   - genuine prose has STRING content; tool-results are arrays of
-//     `{type:"tool_result", ...}` parts.
-//   - a genuine typed turn carries the positive marker
-//     `origin.kind == "human"`. Absence of an origin is NOT genuine:
-//     tool-results and local-command caveats also lack it, and injected
-//     user-records (e.g. background-task completions) carry a different
-//     kind like "task-notification". Anthropic doesn't publish this
-//     format, so we key on the one known human marker (conservative
-//     allowlist); if it changes, arming goes quiet and the -vv
-//     "turn_duration ignored" log is the tripwire.
-//
-// CRC: crc-RecallWatcher.md | R2732, R3009
-func isGenuineUserMessage(originKind string, content json.RawMessage) bool {
-	if originKind != "human" {
-		return false // only a positively-marked human turn arms recall
-	}
-	c := bytes.TrimSpace(content)
-	return len(c) > 0 && c[0] == '"' // JSON string ⇒ genuine prose; '[' ⇒ tool-result
 }
 
 // bytesIterLines returns a function that yields each newline-terminated
