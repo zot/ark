@@ -128,3 +128,22 @@ and stop work items.
 instruction's index precedes the work marker ("bloodhound add" / "stand up another" /
 "exit-record").
 **Refs:** crc-LuhmannCLI.md
+
+## Test: inspect-exit reads the transcript Claude Code writes
+**Purpose:** R2796 classifies a secretary's exit from its transcript. Claude Code
+nests a tool call as a `tool_use` block in an assistant record's
+`message.content`, and usage as `message.usage`. Measured 2026-10-22: the
+classifier read a top-level `tool_result` and top-level `usage`, which never
+exist, so it saw no close and 0 tokens, and every bloodhound pool exit was a
+crash; three ordinary hunts would trip the crash-storm pause.
+**Input:** a transcript written in that shape, with or without a
+`recall close` call and with a given context fill; an empty ark dir.
+**Expected:** closed below the limit → `quit-early`; closed at the limit →
+`healthy`; never closed → `crash`; `tokens_at_close` is the fill written (the
+R2777 value).
+**Refs:** crc-LuhmannCLI.md, R2796, R2777
+**Code:** cmd/ark/inspect_exit_test.go
+**Fire alarm:** restore HEAD's `classifySubagentExit`; every case reads `crash`
+with `tokens_at_close = 0`.
+**Inject:** cmd/ark/main.go:classifySubagentExit
+**Pulled:** 2026-10-22 — rang: label "crash" and tokens_at_close 0 in all three cases

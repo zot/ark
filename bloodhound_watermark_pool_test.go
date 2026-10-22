@@ -511,3 +511,77 @@ func TestGatesAreIndependentOfTheSecretary(t *testing.T) {
 		})
 	}
 }
+
+// The watermark doc's write fires the Fixer's request trigger like any CLI
+// request. Earlier tests called the handlers by hand, so none saw the trigger
+// re-record the hunt — origin dropped, path queued twice (measured live
+// 2026-10-22). This one delivers the real event through the real dispatch.
+// Refs: R3552, R3281
+func TestFixerTriggerLeavesWatermarkHuntAsRecorded(t *testing.T) {
+	hub := &fakeLuhmannHub{owner: "L"}
+	w := newPoolWatcher(t, hub)
+	if !w.subscribeFixer() {
+		t.Fatal("subscribeFixer failed")
+	}
+	const sess, bid = "sess-A", uint64(5)
+	req := bloodhoundReq{payload: "where does a pool-served finding land? pointers"}
+	if err := w.enqueueWatermarkHunt(sess, bid, req); err != nil {
+		t.Fatalf("enqueueWatermarkHunt: %v", err)
+	}
+
+	path := bloodhoundCLIPrefix + watermarkHuntID(sess, bid)
+	delivered := 0
+	for _, ev := range w.db.pubsub.Listen(bloodhoundCLIFixerSession, 2*time.Second) {
+		if ev.Tag == bloodhoundCLIRequestTag && ev.Path == path {
+			delivered++
+		}
+		w.dispatchFixerEvent(ev)
+	}
+	if delivered == 0 {
+		t.Fatal("no request event reached the Fixer; the test would prove nothing")
+	}
+
+	w.pool.mu.Lock()
+	rec := w.pool.requests[path]
+	queued := 0
+	for _, p := range w.pool.pending {
+		if p == path {
+			queued++
+		}
+	}
+	w.pool.mu.Unlock()
+	if rec == nil || rec.origin != sess || rec.bid != bid || rec.clue != req.payload || !rec.raw {
+		t.Errorf("after the Fixer trigger, record = %+v, want raw with origin=%s bid=%d and the clue", rec, sess, bid)
+	}
+	if queued != 1 {
+		t.Errorf("path pending %d times, want exactly once", queued)
+	}
+	standUps := 0
+	for _, q := range hub.queued {
+		if q.Kind == "directive" && q.Directive == "stand-up" {
+			standUps++
+		}
+	}
+	if standUps != 1 {
+		t.Errorf("%d stand-up directives pushed, want exactly one", standUps)
+	}
+}
+
+// In production the Fixer drains on its own goroutine, so its request trigger
+// can run before enqueueWatermarkHunt has recorded the hunt. The guard must hold
+// then too: an unrecorded watermark path is still not the Fixer's to record.
+// Refs: R3552
+func TestFixerTriggerIgnoresWatermarkBeforeItIsRecorded(t *testing.T) {
+	hub := &fakeLuhmannHub{owner: "L"}
+	w := newPoolWatcher(t, hub)
+	path := bloodhoundCLIPrefix + watermarkHuntID("sess-A", 6)
+	w.dispatchFixerEvent(Event{Tag: bloodhoundCLIRequestTag, Path: path})
+
+	w.pool.mu.Lock()
+	rec, pending := w.pool.requests[path], len(w.pool.pending)
+	w.pool.mu.Unlock()
+	if rec != nil || pending != 0 || len(hub.queued) != 0 {
+		t.Errorf("Fixer trigger acted on an unrecorded watermark path: record=%+v pending=%d directives=%d",
+			rec, pending, len(hub.queued))
+	}
+}

@@ -186,6 +186,16 @@ choice:
    push a *stand up another secretary* directive onto Luhmann's `next` if the
    pool has room.
 
+**A watermark is one hunt, however it reaches the pool.** The watcher writes a
+pool-bound watermark's request doc in the CLI request format, so the Fixer's
+request trigger fires for it like any CLI request. The trigger recognizes the
+watermark by its request id and leaves it alone: the watermark path has already
+recorded it, with the session it came from. Treated as a CLI hunt, it loses the
+session, so the finding goes to the CLI result tag and the session's `listen`
+hears nothing; and it is queued twice, so it is routed to two secretaries and
+each route stacks another address and crank handle onto the same doc. Both
+happened on 2026-10-22, and on 2026-07-31 before it.
+
 **The pool path is always raw — never Luhmann-curated.** The return routes
 straight back to the emitting session's `@ark-bloodhound-result=<S>`, skipping
 the Luhmann `next` curation push exactly as `--raw` does. This is not a

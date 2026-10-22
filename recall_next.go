@@ -58,7 +58,10 @@ const recallNextKeepalive = 90 * time.Second
 // a comment mid-function to disentangle. The caller's own identity never
 // reaches here; `handleRecallNext` uses it to re-register the parent registry
 // (R3319) and nothing in the loop consults it.
-func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, tube string, contextLimit int) (body string, exit bool, err error) {
+// requested is the address the caller typed, usually empty: prompts echo it in
+// their "run next again" line, so a secretary is never told to type the
+// resolved address R3322 derives for it.
+func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, tube, requested string, contextLimit int) (body string, exit bool, err error) {
 	// R2902: key the curate subscription on the durable tube
 	// (`secretary-work-<tube>`), not the volatile `recall-<nonce>`, so
 	// two secretary generations across a restart share one stable, unique
@@ -106,13 +109,13 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, tube 
 		// pending bloodhound task before any curation doc. Small doc, so it
 		// returns inline (no file materialization, no Read keyhole).
 		if _, _, content, ok := b.lowestPendingBloodhound(tube); ok {
-			return recallSearchTaskPrompt(tube, nonce, content), false, nil
+			return recallSearchTaskPrompt(requested, nonce, content), false, nil
 		}
 		// R3030, R3032: a CLI-bloodhound request doc the watcher routed to this
 		// pool secretary via @ark-secretary-work=<composite>. Same crank-handle
 		// return as an in-session bloodhound task (the enhanced doc IS one).
 		if content, ok := b.lowestPendingCLIHunt(tube); ok {
-			return recallSearchTaskPrompt(tube, nonce, content), false, nil
+			return recallSearchTaskPrompt(requested, nonce, content), false, nil
 		}
 		// R3302/R3303: one lookup serves both roles, because the watcher
 		// addresses the work. A session's own secretary is sent its session's
@@ -139,11 +142,11 @@ func (b *RecallAgentBuilder) RecallNext(ctx context.Context, nonce uint32, tube 
 			if werr != nil {
 				return "", false, werr
 			}
-			return recallDocPrompt(fire, docSession, tube, nonce, path), false, nil
+			return recallDocPrompt(fire, docSession, requested, nonce, path), false, nil
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return recallKeepalivePrompt(tube, nonce), false, nil
+			return recallKeepalivePrompt(requested, nonce), false, nil
 		}
 		window := min(recallNextListenWindow, remaining)
 		if !b.waitForWork(ctx, subSession, window) {

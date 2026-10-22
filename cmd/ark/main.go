@@ -5395,7 +5395,6 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
 	var lastKind, lastError string
-	var tokensAtClose int
 	closeSeen := false
 	for scanner.Scan() {
 		var rec map[string]any
@@ -5412,21 +5411,14 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 				lastError = "unspecified"
 			}
 		}
-		// Crude marker for close: a tool_result whose tool_use_id
-		// matches a recent ark connections recall close invocation.
-		if t, _ := rec["type"].(string); t == "tool_result" {
-			if input, ok := rec["input"].(map[string]any); ok {
-				if cmd, ok := input["command"].(string); ok && strings.Contains(cmd, "ark connections recall close") {
-					closeSeen = true
-				}
-			}
-		}
-		if usage, ok := rec["usage"].(map[string]any); ok {
-			cc, _ := usage["cache_creation_input_tokens"].(float64)
-			cr, _ := usage["cache_read_input_tokens"].(float64)
-			tokensAtClose = int(cc + cr)
+		// R2796: the close marker is the agent's own `recall close` call. In a
+		// Claude Code transcript a call is a tool_use block inside an assistant
+		// record's message.content; nothing about it sits at the top level.
+		if recallCloseCalled(rec) {
+			closeSeen = true
 		}
 	}
+	tokensAtClose, _ := ark.SubagentContextTokens(jsonl) // R2796: the R2777 value
 	label := "crash"
 	cleanExit := closeSeen || recallOutcomeIs(arkDir, nonce, "result-emitted", "silent-close", "no-subscriber")
 	if cleanExit {
@@ -5452,6 +5444,27 @@ func classifySubagentExit(arkDir, jsonl string, nonce int) inspectExitResult {
 		LastError:      lastError,
 		TokensAtClose:  tokensAtClose,
 	}
+}
+
+// recallCloseCalled reports whether a transcript record is an assistant turn
+// that runs `ark connections recall close` (R2796).
+func recallCloseCalled(rec map[string]any) bool {
+	if rec["type"] != "assistant" {
+		return false
+	}
+	msg, _ := rec["message"].(map[string]any)
+	content, _ := msg["content"].([]any)
+	for _, c := range content {
+		block, _ := c.(map[string]any)
+		if block["type"] != "tool_use" {
+			continue
+		}
+		input, _ := block["input"].(map[string]any)
+		if cmd, _ := input["command"].(string); strings.Contains(cmd, "ark connections recall close") {
+			return true
+		}
+	}
+	return false
 }
 
 // recallOutcomeIs walks recall.jsonl backwards and returns true when

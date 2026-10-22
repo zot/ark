@@ -262,10 +262,13 @@ and unknown items carry the negative marker rather than a false green.
   - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)** The Go-side
         audit: Unix-only `os/exec`, file modes, path separators as data,
         case-insensitivity, CRLF. See Item 7.
-  - [ ] **7.6 — verify the ark app's checkpoint repo after 7.3.** **OPEN (not
-        queued), NOT VERIFIED.** Filed by Bill, 2026-10-21. A failed
-        `checkpoint baseline` during 7.3 may have lost the `local` branch.
-        Confirm or rule out, and fix if real. See Item 7.
+  - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
+        **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
+        the loss is accepted, since the app's source is in git. The cause
+        predates 7.3 (phantom artifacts left by the July #63 incident), and
+        the baseline flow destroys the old repo before it knows the restore
+        will work. That fault is filed separately; it is not Windows-specific.
+        See Item 7.
 
 Not a defect, recorded so nobody repairs it: the `/tmp/add`, `/tmp/append`, and
 `/tmp/remove` strings in `cmd/ark/main.go` and `message_cli.go` are HTTP route
@@ -992,6 +995,53 @@ plus whatever `local` commits came after it, if any survive). Then find out why
 the bundle import failed. That second half is #63's machinery (`baseline`'s
 export/re-import of `local`), so it reopens #63 if it is a code fault rather
 than a one-off. The skill depends on where the fault turns out to be.
+
+**Result (measured 2026-10-21).** The damage is real, and it started in July.
+
+- `apps/ark/checkpoint.fossil` is a new project created 2026-10-19 14:39
+  (project code `73e08ab7…`, not the old `7722ee95…`). It holds trunk only,
+  with two check-ins (the initial empty one and `=== BASELINE ===`). It is
+  sound: `fossil test-integrity` reports 0 errors and it has no phantoms. No
+  bundle file was left behind.
+- The 09-24 copy (`fossil cat -r 3b69a35621 apps/ark/checkpoint.fossil` from
+  `ark-code.fossil`) still has `local`, with four check-ins from 07-23 to
+  07-25. It also holds **14 phantom artifacts**: rows in `phantom`, with blob
+  size -1. One of them is curation.lua `95dc2022…`, from #37's 07-23
+  check-in. They date from the July #63 incident, whose bundle import left
+  `local` as "a content-less skeleton" (ark-code.fossil, 2026-07-23).
+- Re-running baseline's own sequence on a scratch copy of the 09-24 repo
+  (export `local` with `--standalone`, `init`, commit, `bundle import --force
+  --publish`) fails with the same `artifact hash error on 95dc2022…`. A branch
+  with phantoms exports to a bundle that cannot be imported, so the 10-19
+  baseline was bound to fail whatever 7.3 did.
+
+What was lost is a checkpoint journal: the four 07-23..07-25 `local`
+check-ins, whose content is in git (#39 `1d20cb7`, #37 `d239a17`, #65
+`8cd17fa`), plus any `checkpoint local` run between 09-24 and 10-19, of
+which no copy exists. DECIDED (Bill, 2026-10-21): keep the new repo and
+accept the loss, because both Frictionless and ark keep their apps in git.
+Restoring the 09-24 branch would bring the phantoms back with it.
+
+**The fault that matters is in the flow, not the repo.** Ark records users'
+work in fossil, so users must be able to rely on it (Bill, 2026-10-21). Both
+implementations destroy before they verify:
+
+- `cmd/ark/checkpoint.go` `checkpointBaseline` (R3240) exports the bundles,
+  removes the old repo and its checkout, re-inits, and only then imports. An
+  import failure is reported, but by then the old repo is gone, and the
+  deferred `os.RemoveAll(bundleDir)` deletes the bundles as well. The error
+  arrives after the damage is done and can't be undone.
+- Frictionless's `install/mcp` `checkpoint_baseline` (also deployed as
+  `~/.ark/mcp`) does the same, except that it sends the import's stderr to
+  `/dev/null`, ignores its exit code, deletes the bundle, and prints
+  "preserved branches restored" anyway.
+
+The fix is to change the order. Build the new repo beside the old one, import
+every bundle into it, and swap it into place only after all of them succeed.
+On any failure, leave the old repo and checkout untouched and say so. A trial
+import is what detects phantoms, so this order also covers damage like
+July's. Filed for ark's Go flow as design gap O225 (back-linked from R3240),
+and reported to Frictionless for its script.
 
 <a id="12"></a>
 

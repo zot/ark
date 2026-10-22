@@ -238,7 +238,11 @@ because a session without one can borrow Luhmann's pool (R3280):
     secretary's `@ark-secretary-work=<pool-sec>`, or push a *stand up
     another secretary* directive onto Luhmann's `next` when the pool has
     room. The return is **raw** — relayed to `@ark-bloodhound-result=<S>`
-    with no Luhmann curation push (R3281).
+    with no Luhmann curation push (R3281). The doc's write fires the Fixer's request
+    trigger, which sees the `wm-` request id and does nothing, since
+    `enqueueWatermarkHunt` has already recorded the hunt with its origin and
+    queued it; so the hunt is queued, stood up for and routed once, whichever
+    goroutine runs first (R3552).
   - **Neither available** — emit the not-served `## Finding:` doc on
     `@ark-bloodhound-result=<S>` naming the failed condition (R3282). Never
     a silent drop.

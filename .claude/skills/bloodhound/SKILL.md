@@ -148,9 +148,22 @@ the reliable anchor the hound keys on. It fills in the CLI craft from its crank
 handle. **The watermark displays to the user by design** — they get to follow
 the hunt (and judge whether you're on the trail). Write it readable.
 
-**Async by default** — fire the hound and keep reasoning; leads surface in a
-later turn, like recall. For "need it now," emit the watermark and explicitly
-block on the result.
+**Put the watermark in your message to the user — the last text of your turn,
+never between tool calls.** The watcher reads the session transcript, and the
+transcript is not always what you wrote. Text you emit mid-turn, before a tool
+call, may be stored only as a paraphrase in a summarized thinking block
+(signed `narration`), and a paraphrase carries no `<BLOODHOUND>` tags. The
+watcher then has nothing to find, and nothing reports it: no hunt id, no
+finding, no "not served". Measured 2026-10-22, about a third of recent
+assistant text was stored that way, while the final message of a turn was
+verbatim in all but 9 of 14,078 turns. A lost hunt you can't explain is most
+likely this, so check where you emitted it before suspecting the machinery.
+
+**Async by default** — end your turn with the watermark; the finding arrives
+through `listen` and surfaces in a later turn, like recall. There is no way to
+emit mid-turn and block on the result in the same turn, so for "need it now",
+say so in the message, end the turn, and pick the finding up when `listen`
+completes.
 
 ### Three layers, and only the last one has judgment
 

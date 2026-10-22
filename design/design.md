@@ -420,7 +420,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Anchor.md → `locator_test.go`
 - [x] test-SurfaceCooldown.md → `store_test.go`
 - [x] test-Secretary.md → `recall_secretary_test.go`
-- [x] test-LuhmannCLI.md → `luhmann_next_test.go`
+- [x] test-LuhmannCLI.md → `luhmann_next_test.go`, `cmd/ark/inspect_exit_test.go`
 - [x] test-LuhmannSend.md → `luhmann_send_test.go`
 - [x] test-LuhmannEvents.md → `luhmann_events_test.go`
 - [x] test-BloodhoundCLIFixer.md → `bloodhound_cli_test.go`
@@ -1233,3 +1233,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O223: R3516 (setup activates every bundled app) has no unit test: extractBundleAssets needs a bundled binary. Verified by a live ark setup run (the Windows standard-user run for #138).
 - [ ] O224: Something outside a test sandbox wrote ~/.claude/skills links into a temp ark db (14 links into /tmp/.../db/skills, stamped 2026-10-08 13:47, target deleted), so Claude Code silently lost the ark and ui-* skills. Writer not yet identified; likely a temp --db with a real HOME (arkHomeDir ignores --db).
 - A79: R3544-R3546 (make release empties release/<version>/, names binaries via ark _release-asset, writes SHA256SUMS) — Makefile release infrastructure, not Go code (mirrors A69); the naming half is enforced in Go by R3547
+- [ ] O225: `checkpointBaseline` (cmd/ark/checkpoint.go, R3240) destroys before it verifies. It removes the old repository and checkout, re-inits, commits the baseline, and only then imports the side-branch bundles; a failed import is reported, but the old repository is already gone and the deferred `os.RemoveAll(bundleDir)` deletes the bundles too, so the error cannot be recovered from. R3240's "any step's failure aborts before the next destructive step" cannot cover the import, which runs after every destructive step. Measured 2026-10-21 (carves/windows-support.md 7.6): a `local` branch holding phantom artifacts exports to a bundle that fails import with `artifact hash error`, and the ark app's `local` history was lost this way on 2026-10-19. Repair: build the new repository beside the old one, import every bundle into it, and swap it into place only when all succeed; on any failure leave the old repository and checkout untouched and report it. The repair rewrites R3240's order (back-linked there). Frictionless's `install/mcp` `checkpoint_baseline` has the same order and also discards the import's exit status; that half is Frictionless's.

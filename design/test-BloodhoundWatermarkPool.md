@@ -43,6 +43,46 @@ both globs and `clueOf` recovers the clue with the metadata stripped; the pool
 records `origin`/`bid`/`clue` and `raw == true` for the path.
 **Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
 
+## Test: the Fixer's request trigger leaves a watermark hunt as recorded
+**Purpose:** writing the watermark's request doc fires the Fixer's request
+trigger like any CLI request (R3552). Every earlier test called the handlers by
+hand with a hand-built `cliRequest`, so none could see the trigger re-record the
+hunt: origin dropped (the return then wakes the CLI path, R3281) and the path
+queued twice (one hunt routed to two secretaries, its doc stacked with two
+addresses). Measured live 2026-10-22 and 2026-07-31.
+**Input:** a watcher over a live test DB with a seated fake hub and an empty
+pool, the Fixer subscribed with production's own `subscribeFixer`; enqueue one
+watermark hunt, then drain the Fixer's events and dispatch each with
+production's `dispatchFixerEvent`.
+**Expected:** at least one request event was delivered (else the test proves
+nothing); the pool's record for the path still carries the origin, bid and
+clue; the path is pending exactly once; exactly one stand-up directive was
+pushed to the hub.
+**Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
+**Code:** bloodhound_watermark_pool_test.go
+**Fire alarm:** disable the request trigger's `wm-` id guard, so it records the
+watermark as a CLI hunt; the origin comes back empty, pending holds the path
+twice, and two stand-ups are pushed.
+**Inject:** recall_watcher_cli.go:onBloodhoundCLIRequest
+**Pulled:** 2026-10-22 — rang: origin empty and bid 0, the path pending 2 times, 2 stand-ups (the live signature)
+
+## Test: the Fixer's request trigger ignores a watermark it has not seen recorded
+**Purpose:** in production the Fixer drains on its own goroutine, so its request
+trigger can run before `enqueueWatermarkHunt` records the hunt (R3552). The guard
+must hold then too. Found by a past-the-list injection 2026-10-22: a first
+version of the fix relied on recording before the write, and moving the record
+back after the write turned nothing red, because the event-path test only
+delivers after enqueue returns.
+**Input:** a watcher with a seated fake hub and an empty pool; dispatch a request
+event for a `wm-` path through `dispatchFixerEvent` with nothing recorded.
+**Expected:** no record, nothing pending, no directive pushed.
+**Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
+**Code:** bloodhound_watermark_pool_test.go
+**Fire alarm:** disable the `wm-` id guard; the trigger records the path as a CLI
+hunt, queues it and pushes a stand-up.
+**Inject:** recall_watcher_cli.go:onBloodhoundCLIRequest
+**Pulled:** 2026-10-22 — rang: a CLI-shaped record (raw false, no origin) created for the unrecorded path
+
 ## Test: relayRawResult routes by origin
 **Purpose:** the destination branch is the whole point of the fallback (R3281).
 A watermark-origin hunt must be delivered to the emitting session's finding

@@ -236,8 +236,10 @@ func (srv *Server) handleRecallNext(w http.ResponseWriter, r *http.Request) {
 	// request already carries, so no agent ever types a routing address. Doing
 	// it in the handler keeps the loop verb knowing only about routing — it
 	// receives a concrete address either way and never learns who called.
+	requested := tube
 	tube = resolveTube(tube, clientSession, uint32(n), srv.recallWatcher.IsPoolNonce(n))
-	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), tube, limit)
+	// R3322: the prompts' next-command echoes only what the caller typed.
+	body, exit, rerr := srv.recallAgentBuilder.RecallNext(r.Context(), uint32(n), tube, requested, limit)
 	if rerr != nil {
 		// Client disconnect or transient — nothing to deliver.
 		return

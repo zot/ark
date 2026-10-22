@@ -3,10 +3,14 @@ package ark
 // CRC: crc-RecallAgentBuilder.md, crc-RecallWatcher.md | Test: test-Secretary.md
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zot/microfts2"
 )
 
 // --- Recall Secretary seam 3a tests ---
@@ -207,5 +211,49 @@ func TestIsPoolNonceNilSafe(t *testing.T) {
 	}
 	if (&RecallWatcher{}).IsPoolNonce(7) {
 		t.Error("a watcher with no rosters must report no pool membership")
+	}
+}
+
+// R3322: a secretary is never told to type its routing address. RecallNext
+// routes on the resolved tube but its "run next again" line echoes only what
+// the caller typed. Measured 2026-10-22: every prompt echoed the resolved
+// composite as `--tube`, the template forbids passing one, and a pool
+// secretary alternated between the two forms and quit.
+func TestRecallNextEchoesOnlyTheRequestedTube(t *testing.T) {
+	_, db := setupRecall(t)
+	if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+		t.Fatalf("AddChunker(markdown): %v", err)
+	}
+	db.SetPubSub(NewPubSub(time.Minute, 32))
+	b := NewRecallAgentBuilder(db)
+	const sess = "sess-A"
+	subscribeFinding(t, db, sess) // R2947: a task waits for its listen
+	for i, tc := range []struct {
+		requested string
+		want      string
+	}{
+		{"", "~/.ark/ark connections recall next 3 again"},
+		{"override-X", "~/.ark/ark connections recall next --tube override-X 3 again"},
+	} {
+		bid := uint64(i + 1)
+		if err := b.RecallBloodhoundOpen(sess, bid, bloodhoundReq{payload: "where is it? pointers"}, ""); err != nil {
+			t.Fatal(err)
+		}
+		body, exit, err := b.RecallNext(context.Background(), 3, sess, tc.requested, 0)
+		if err != nil || exit {
+			t.Fatalf("RecallNext: exit=%v err=%v", exit, err)
+		}
+		if !strings.Contains(body, "Search task") {
+			t.Fatalf("expected the pending search task, got:\n%s", body)
+		}
+		if !strings.Contains(body, tc.want) {
+			t.Errorf("requested=%q: prompt lacks %q; got tail:\n%s", tc.requested, tc.want, body[max(0, len(body)-200):])
+		}
+		if tc.requested == "" && strings.Contains(body, "--tube") {
+			t.Errorf("prompt tells the secretary to pass --tube although it typed none")
+		}
+		if err := SyncVoid(db, func(db *DB) error { return db.RemoveTmpFile(bloodhoundTaskPath(sess, bid)) }); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

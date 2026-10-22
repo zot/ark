@@ -692,6 +692,14 @@ func (b *RecallAgentBuilder) ContextTokens(nonce uint32) (int, bool) {
 	if jsonl == "" {
 		return 0, false
 	}
+	return SubagentContextTokens(jsonl)
+}
+
+// SubagentContextTokens is ContextTokens' measurement on a transcript path:
+// the R2777 value, shared so `ark luhmann inspect-exit` reports the same
+// tokens_at_close the context gate acts on (R2796).
+// CRC: crc-RecallAgentBuilder.md | R2777, R2796
+func SubagentContextTokens(jsonl string) (int, bool) {
 	data, err := os.ReadFile(jsonl)
 	if err != nil {
 		return 0, false

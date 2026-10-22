@@ -252,18 +252,27 @@ func (w *RecallWatcher) startFixer() {
 	if w == nil || w.db == nil || w.db.pubsub == nil {
 		return
 	}
+	if !w.subscribeFixer() {
+		return
+	}
+	go w.fixerLoop()
+	go w.pruneLoop() // R3019: autoscale down — retire secretaries idle past cooldown
+}
+
+// subscribeFixer subscribes the Fixer session to the request and return tags.
+// Reports false if a tag fails to parse. R3023, R3024
+func (w *RecallWatcher) subscribeFixer() bool {
 	var subs []*TagSub
 	for _, tag := range []string{bloodhoundCLIRequestTag, bloodhoundCLIReturnTag} {
 		p, err := ParseMatchSyntax(tag)
 		if err != nil {
 			log.Printf("bloodhound-cli: bad match %q: %v", tag, err)
-			return
+			return false
 		}
 		subs = append(subs, &TagSub{Kind: TagSubChunk, Predicate: p})
 	}
 	w.db.pubsub.Subscribe(bloodhoundCLIFixerSession, subs)
-	go w.fixerLoop()
-	go w.pruneLoop() // R3019: autoscale down — retire secretaries idle past cooldown
+	return true
 }
 
 // pruneLoop periodically retires idle-past-cooldown pool secretaries. Runs for
@@ -322,13 +331,19 @@ func (w *RecallWatcher) fixerLoop() {
 	for {
 		events := w.db.pubsub.Listen(bloodhoundCLIFixerSession, bloodhoundCLIListenWindow)
 		for _, ev := range events {
-			switch ev.Tag {
-			case bloodhoundCLIRequestTag:
-				w.onBloodhoundCLIRequest(ev.Path)
-			case bloodhoundCLIReturnTag:
-				w.onBloodhoundCLIReturn(ev.Path)
-			}
+			w.dispatchFixerEvent(ev)
 		}
+	}
+}
+
+// dispatchFixerEvent sends one Fixer event to the request or return handler.
+// R3023, R3024
+func (w *RecallWatcher) dispatchFixerEvent(ev Event) {
+	switch ev.Tag {
+	case bloodhoundCLIRequestTag:
+		w.onBloodhoundCLIRequest(ev.Path)
+	case bloodhoundCLIReturnTag:
+		w.onBloodhoundCLIReturn(ev.Path)
 	}
 }
 
@@ -336,6 +351,13 @@ func (w *RecallWatcher) fixerLoop() {
 // on a live Luhmann (R3020), enqueue the request, push a stand-up directive if
 // the pool has room, then pump pending hunts to free secretaries.
 func (w *RecallWatcher) onBloodhoundCLIRequest(path string) {
+	if strings.HasPrefix(cliRequestID(path), watermarkHuntPrefix) {
+		// R3552: a watermark hunt did its own bookkeeping, with its origin, when
+		// it wrote this doc. Recording it here as a CLI hunt would drop the origin
+		// and queue it twice. Decided by the id, so it holds whichever goroutine
+		// runs first.
+		return
+	}
 	if w.luhmann == nil || w.luhmann.LuhmannOwner() == "" {
 		// R3020: no orchestrator = no curator. Leave it pending; the CLI's own
 		// pre-check reports orchestrator-not-running. If Luhmann arrives later,
@@ -375,8 +397,11 @@ func (w *RecallWatcher) onBloodhoundCLIRequest(path string) {
 // can never collide on a request-doc path.
 // CRC: crc-RecallWatcher.md | R3280
 func watermarkHuntID(sessionID string, bid uint64) string {
-	return "wm-" + sessionID + "-" + strconv.FormatUint(bid, 10)
+	return watermarkHuntPrefix + sessionID + "-" + strconv.FormatUint(bid, 10)
 }
+
+// watermarkHuntPrefix marks a request id as a pool-served watermark's. R3552
+const watermarkHuntPrefix = "wm-"
 
 // enqueueWatermarkHunt routes a recognized `<BLOODHOUND>` watermark to Luhmann's
 // pool when the emitting session has no secretary of its own (R3280). It reuses

@@ -60,3 +60,23 @@ never publishes to, which is silent (R3322).
 - `recentConversation` last-N-turns ordering against a real session JSONL
   (R2891) — needs a configured chat-jsonl source + a session transcript.
   The pure parsers (`userProse`, `assistantText`) it composes are covered.
+
+## Test: `recall next` echoes only the address the caller typed
+**Purpose:** R3322 says a secretary never types its routing address. The server
+resolves it, and the prompts' "run next again" line must not hand the resolved
+address back as `--tube`. Measured 2026-10-22: every prompt echoed the resolved
+composite, the agent template forbids passing one, and a pool secretary
+alternated between the two forms and quit.
+**Input:** a builder over a test DB with a live PubSub and a bloodhound-result
+subscriber for the session; a pending search task written by
+`RecallBloodhoundOpen`; `RecallNext` with the resolved tube and a requested tube
+of "" and then "override-X".
+**Expected:** the returned task prompt ends with `next 3 again` when nothing was
+requested (no `--tube` anywhere), and with `next --tube override-X 3 again` when
+the caller passed one.
+**Refs:** crc-RecallAgentBuilder.md, R3322
+**Code:** recall_secretary_test.go
+**Fire alarm:** pass the resolved tube to the task prompt instead of the
+requested one; the prompt says `--tube sess-A` to a caller that typed none.
+**Inject:** recall_next.go:RecallNext
+**Pulled:** 2026-10-22 — rang: "prompt tells the secretary to pass --tube although it typed none"
