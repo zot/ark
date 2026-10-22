@@ -184,10 +184,12 @@ vector sitting near none of them, and the seeds come back vaguely about your
 topic and specifically about nothing. Split them and each gets its own seed.
 
 **Those paragraphs ride in one watermark, not three.** A single block carries as
-many paragraphs as you like, and each becomes its own hunt inside one round trip.
-Splitting them across three blocks costs three of everything and buys nothing —
-if you catch yourself emitting a second watermark in the same breath as the
-first, they were always one block:
+many paragraphs as you like, and it is **one hunt**: the seed search runs once
+per paragraph and unions the hits, so each idea gets its own vector, then one
+secretary works the whole clue and returns one `## Finding:` that answers every
+ask. Splitting them across three blocks costs three of everything and buys
+nothing — if you catch yourself emitting a second watermark in the same breath
+as the first, they were always one block:
 
 ```
 <BLOODHOUND>
@@ -199,13 +201,13 @@ what did we decide about the GPL boundary in vendored code? answer with the sour
 </BLOODHOUND>
 ```
 
-Note that `want` is per-paragraph here, because each paragraph is its own hunt.
-The tag attributes (`filter-files`, `exclude-files`, `notags`) are not — they sit
+Note that `want` is per-paragraph here: the secretary answers each ask in the
+shape its paragraph asked for, within the one finding. The tag attributes (`filter-files`, `exclude-files`, `notags`) are not — they sit
 on the opening tag and scope every paragraph in the block alike. When one ask
 needs a different file scope than the others, that one earns its own watermark.
 
 The CLI half works the same way: `ark bloodhound search --file -` with a heredoc
-takes the identical multi-paragraph clue, one hunt per paragraph.
+takes the identical multi-paragraph clue, as one hunt seeded per paragraph.
 
 **Scope when your own corpus restates the topic.** The general advice below is to
 scope sparingly, and it holds. But a claim you have written up many times —

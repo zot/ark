@@ -518,7 +518,7 @@ func (b *RecallAgentBuilder) recallListenPrompt(session string, events []Event) 
 		sb.WriteString("A `## Finding:` is the answer to a `<BLOODHOUND>` you emitted, headed by your clue. Fold it into your reasoning; show the user only what helps them. ")
 	}
 	if ambient {
-		sb.WriteString("This is ambient recall — material from the corpus related to the current conversation. " +
+		sb.WriteString("This is ambient recall — an automatic hunt the watcher ran on this conversation's behalf, not the answer to a watermark of yours: material from the corpus related to the current conversation. " +
 			"`## Surface:` items are chunks worth showing the user; `## Recommend:` items are tags worth attaching. " +
 			"Decide what genuinely helps the user right now — you have final say; skip anything stale or off-topic. ")
 	}
