@@ -36,8 +36,14 @@ Opened by Bill, 2026-10-22.
         `/mini-spec`. See Item 9.
   - [ ] **9.2 — a hunt's seeds include its own session.** **OPEN (#27.)**
         `/mini-spec`. See Item 9.
-- [ ] **Item 10 — re-index the chat sources.** **OPEN (#160.)** So the
+- [x] ~~**Item 10 — re-index the chat sources.**~~ **LANDED (2026-10-23 — `#160`.)** So the
       harness chunks #158 stopped producing leave the index. See Item 10.
+- [ ] **Item 11 — a chunker version stamp.** **OPEN (not queued.)** A file
+      chunked under older rules is stale, so a rule change re-chunks itself.
+      `/mini-spec`. See Item 11.
+- [ ] **Item 12 — retrieval after a chunker rule change shows the wrong chunk.**
+      **OPEN (not queued), measured 2026-10-23.** In microfts2's `GetChunks`.
+      See Item 12.
 
 ## Item 1
 
@@ -294,6 +300,88 @@ To settle before running it, each by checking rather than assuming:
   curation and recall records, discussed tags, pinned chunks. Removing a file may
   drop them.
 - The live session's own transcript is being appended to while this runs.
+
+**What the code says (read 2026-10-23, not yet run).**
+
+- *Re-adding works.* `ark remove` records nothing, no exclusion or tombstone,
+  and the scan and watcher add any file their include globs cover that is not
+  indexed, so a removed transcript comes back (an active one on its next write).
+- *But it would re-embed, and it strands references.* Chunk ids are sequential,
+  not content hashes. Removing a file deletes the embedding of every chunk no
+  other file shares, and re-adding allocates new ids with no embedding.
+  (Correction, 2026-10-23, after the run: on this index chat chunks have never
+  been embedded, because `search_exclude` covers the chat directory and also
+  gates embedding, PENDING #81; none of the log's 353 embed-queue lines is for a
+  chat file. So re-embedding was not a real cost here. The stranded references
+  below were, and they decided it.) Records that point at a transcript chunk
+  survive its removal under the old id and are not re-attached: `@ext` routings
+  (X records and routed tag values), recall candidates and judgments (RC, RJ),
+  surface cooldowns (RM), and curation pins until the next start.
+  `specs/at-ext-storage.md` says a removed target leaves its routings
+  unresolved; the code does not do that. That gap applies to any file removal,
+  not only this one.
+- *A refresh avoids both.* microfts2's reindex adds the new version before it
+  drops the old one (`reindexPrepared`), so an unchanged chunk's content hash
+  finds its existing id and keeps it, with its embedding and everything that
+  points at it. Only the chunks the new rules no longer produce, the harness
+  ones, become orphans.
+- *Nothing can force one today.* `ark refresh` touches only stale files, and
+  staleness falls back to the content hash (`classifyFile`), so touching a file
+  does not make it stale.
+
+DECIDED (Bill, 2026-10-23): do not use remove and re-add. Re-chunk through the
+refresh path, forced with a new `ark refresh --force [PATTERN...]` (option A),
+which re-indexes matching files whether or not they are stale. The general
+answer, a chunker version stamp, is Item 11.
+
+**Result (run 2026-10-23 18:35).** `ark refresh --force '/home/deck/.claude/projects/**'`
+queued 3,220 files in 3 seconds and re-chunked them off the DB actor; the server
+answered throughout (an `ark status` took 17 s early on, `ark chunks` under a
+second). The index went from 300,683 chunks to 281,918, 18,765 harness chunks
+fewer. Verified by asking for ranges only the old rules produced: on the probe
+file, 10-10 (an attachment) now reports not found and 39-39 returns its own
+text; on eight sampled files where the old and new rules differ, the old-only
+range is gone in all eight. Measuring this went wrong first, twice: counting a
+file's chunks through `ark chunks` reflects the running chunker, not the index
+(Item 12); and a search for attachment text found nothing while those chunks
+were still indexed, probably because search also reads chunk text through the
+positional re-chunk (not verified).
+
+## Item 11
+
+A chunker's rules are the canonical form: change them and every file they
+chunked holds the old form until it is chunked again. #158 changed the chat
+chunker's rules and nothing noticed, which is why Item 10 needed a forced
+refresh. The general fix: each chunker declares a version, each file records the
+version it was chunked with, and a file chunked under an older version counts as
+stale, so the ordinary refresh re-chunks it through the reindex path, keeping
+every unchanged chunk's id and embedding. Costs a field in the file record and a
+migration. Filed by Bill, 2026-10-23, after choosing the forced refresh for now.
+
+## Item 12
+
+microfts2's `GetChunks` (R530, R655), which serves `ark chunks` and the text
+behind search, recall and bloodhound results, takes the file's chunk list from
+the index but each chunk's range and content from re-running the current
+chunker, matched to the index **by position**. When a chunker's rules change,
+every position after the first difference shifts. Measured 2026-10-23 on a chat
+transcript last indexed before #158 (574 chunks in the index, 213 under the new
+rules): asking for the indexed range 10-10 (an attachment) returned a chunk
+labelled 38-38 with another line's text, and ranges 1001-1001 and 1008-1008
+returned nothing at all, silently, because they lie past the new rules' 213th
+chunk.
+
+So until a file is re-chunked, its search hits and recollections can show text
+from the wrong line, or none. Re-chunking the chat sources (Item 10) repairs the
+data; Item 11 would have prevented it. The defect itself: retrieval should match
+by range (or locator) rather than by position, so a mismatch is an honest
+"not found" instead of a wrong answer. That fix is microfts2's.
+
+The measurement that exposed it also misled first: counting a file's chunks
+through `ark chunks` returns the new chunker's count however many the index
+holds, so "the index already matches the new chunker" was the instrument
+reflecting the running code. Asking for a range only the old rules produced is
+the reliable probe.
 
 ## Overlaps
 

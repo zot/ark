@@ -87,7 +87,7 @@ so no agent types a routing address either. Canonical:
 | `nano`             | `nano [-m model] [-c \| -s] [--base-url URL] [--max-steps N] [--approve-all] [--stream] [prompt...]`                 | none                     | embedded shell-agent loop (Ollama-backed)            |
 | `patterns`         | `patterns list [--json]` <br> `patterns show SLUG` <br> `patterns add SLUG --name N --summary S [--tags T] [--body-file F]` | none                     | personal pattern collection; never uses the server   |
 | `rebuild`          | `rebuild`                                                                                                            | refused                  | drops and rebuilds index; refuses if server up; read-only serve during scan |
-| `refresh`          | `refresh [PATTERN...]`                                                                                               | optional                 | re-index stale files                                 |
+| `refresh`          | `refresh [--force] [PATTERN...]`                                                                                      | optional                 | re-index stale files                                 |
 | `remove`           | `remove PATTERN...`                                                                                                  | optional                 | tmp:// requires server                               |
 | `resolve`          | `resolve PATTERN...`                                                                                                 | optional                 | dismisses unresolved files                           |
 | `scan`             | `scan`                                                                                                               | optional                 | walks sources for new files                          |
@@ -1230,11 +1230,20 @@ Embeddings regenerate on the next `ark serve`.
 ### `refresh` — re-index stale files
 
 ```
-ark refresh [PATTERN...]
+ark refresh [--force] [PATTERN...]
 ```
 
-Re-indexes files whose mtime is newer than the index. Optional
-glob patterns scope the refresh.
+Re-indexes stale files: a file whose modification time differs from the index
+and whose content hash differs too (a touched but unchanged file is still
+fresh). Optional glob patterns scope the refresh.
+
+`--force` re-chunks every file the patterns match, stale or not, in place:
+unchanged chunk text keeps its chunk id and embedding, chunks the current
+chunker rules no longer produce are dropped, and new ones are embedded. Use it
+when a chunker's rules changed but the files did not. Requires a pattern;
+`/**` forces the whole index deliberately. Answers at once with how many files
+it queued (`- queued: N file(s) for re-chunking`); the re-chunking runs in the
+background, off the DB actor.
 
 ### `remove` — drop files from index
 

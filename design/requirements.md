@@ -80,6 +80,8 @@
 - **R43:** Refresh re-indexes stale files using microfts2 staleness detection (modtime + content hash)
 - **~~R44:~~** (Retired T24 — no replacement) For each stale file: re-add to microfts2, remove old vectors from microvec, add new vectors
 - **R45:** Missing files are not auto-deleted — added to ark's missing files list for review
+- **R3568:** `ark refresh --force PATTERN...` re-chunks every indexed file the patterns match, stale or not, in place: each is dispatched as its own forced file scan, chunked off the DB actor and stored on it (R3419, R3433), so the server stays responsive and the command answers at once with how many files it queued. A forced scan never takes the append path and never skips an unchanged file (R2864, R3423), since both would leave the chunks the old chunker rules made; a file missing from disk is not removed (R45). Unchanged chunk text keeps its chunk id (microfts2 R673), so its embedding and every record pointing at it survive; chunks the current rules no longer produce are orphaned and cleaned up, and new chunks are embedded.
+- **R3569:** `--force` requires at least one pattern; without one the command refuses and says why, since forcing the whole index is rarely meant. `/**` forces the whole index deliberately.
 
 ### Combined Search
 

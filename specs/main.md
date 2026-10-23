@@ -530,9 +530,18 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
 - `ark scan [--dir <path>]`
   Walk configured directories. Index new files matching include
   rules, flag new unresolved files. Does not re-check existing files.
-- `ark refresh [--dir <path>] [<pattern>...]`
+- `ark refresh [--dir <path>] [--force] [<pattern>...]`
   Re-index stale files. If patterns given, only refresh matching
   files. No patterns = all stale files. Report missing files.
+  `--force` re-chunks every file the patterns match, stale or not, through
+  the same in-place reindex, for when the chunker's rules changed but the
+  files did not. Unchanged chunk text keeps its chunk id, and so its
+  embedding and everything that points at it; only chunks the current rules
+  no longer produce are dropped, and new ones are embedded. `--force`
+  requires a pattern: forcing the whole index is rarely meant, and a
+  pattern of `/**` asks for it on purpose. The re-chunking runs in the
+  background, one file at a time off the DB actor; the command answers at
+  once with how many files it queued.
 - `ark search [--dir <path>] [-k <num>] [--scores] [--after <date>] [--chunks] [--file-content] [filter-stack] <query>...`
   Combined search. `--chunks` emits chunk text as JSONL.
   `--file-content` emits full file content as JSONL. The filter stack

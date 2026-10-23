@@ -58,7 +58,21 @@ func flatCommands() []*ucli.Command {
 		},
 		{Name: "rebuild", Usage: "drop and rebuild the entire index", Action: flatDelegate(cmdRebuild)},
 		{Name: "scan", Usage: "walk source directories, index new files", Action: flatDelegate(cmdScan)},
-		{Name: "refresh", Usage: "re-index stale files", ArgsUsage: "[PATTERN...]", Action: flatDelegate(cmdRefresh)},
+		{
+			// R3568, R3569: --force is declared on the node; flatDelegate passes only
+			// positionals, so a flag parsed inside the handler would never be reached.
+			// CRC: crc-CLI.md | R3568, R3569
+			Name:      "refresh",
+			Usage:     "re-index stale files (--force: re-chunk matching files even if unchanged)",
+			ArgsUsage: "[PATTERN...]",
+			Flags: []ucli.Flag{
+				&ucli.BoolFlag{Name: "force", Usage: "re-chunk every matching file in place, stale or not, keeping unchanged chunks' embeddings; requires a pattern"},
+			},
+			Action: func(_ context.Context, c *ucli.Command) error {
+				cmdRefreshForce(c.Args().Slice(), c.Bool("force"))
+				return nil
+			},
+		},
 		{Name: "remove", Usage: "remove files from the index", ArgsUsage: "<path|pattern>...", Action: flatDelegate(cmdRemove)},
 		{Name: "resolve", Usage: "dismiss unresolved files by pattern", ArgsUsage: "<pattern>...", Action: flatDelegate(cmdResolve)},
 		{Name: "dismiss", Usage: "dismiss missing files", ArgsUsage: "<path|pattern>...", Action: flatDelegate(cmdDismiss)},

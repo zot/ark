@@ -1554,6 +1554,39 @@ func (db *DB) Refresh(patterns []string) error {
 	return nil
 }
 
+// ForceRefresh re-chunks every indexed file the patterns match, stale or not,
+// in place (R3568). It runs on the actor only to list and dispatch: each file is
+// its own forced scan, chunked off the actor and stored on it (R3419, R3433), so
+// the server stays responsive however many files match. Returns how many were
+// queued. It refuses without a pattern (R3569).
+// CRC: crc-DB.md | R3568, R3569
+func (db *DB) ForceRefresh(patterns []string) (int, error) {
+	if len(patterns) == 0 {
+		return 0, errForceRefreshNeedsPattern
+	}
+	paths, err := db.fts.FileIDPaths()
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for _, p := range paths {
+		if strings.HasPrefix(p, "tmp://") {
+			continue
+		}
+		for _, pat := range patterns {
+			if db.matcher.Match(pat, p, "", false) {
+				db.startFileScanWith(db.indexer, p, true)
+				queued++
+				break
+			}
+		}
+	}
+	return queued, nil
+}
+
+// errForceRefreshNeedsPattern is ForceRefresh's refusal. R3569
+var errForceRefreshNeedsPattern = fmt.Errorf("refresh --force needs a pattern: forcing the whole index is rarely meant (use /** to ask for it on purpose)")
+
 // SweepResult lists paths removed during a sweep pass.
 type SweepResult struct {
 	Removed []string
@@ -2067,6 +2100,12 @@ func (db *DB) runScanBounded(fn func()) {
 // small and must complete before dependent writes. On the DB actor.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2 | R3419, R3421, R3433
 func (db *DB) startFileScan(idx *Indexer, path string) {
+	db.startFileScanWith(idx, path, false)
+}
+
+// startFileScanWith is startFileScan, optionally forced: a forced scan re-chunks
+// the whole file in place even when it is unchanged or has only grown (R3568).
+func (db *DB) startFileScanWith(idx *Indexer, path string, force bool) {
 	my := db.stampFileScan(path)
 
 	// Config files stay fully synchronous on the actor (R1052) — dependent content
@@ -2086,7 +2125,7 @@ func (db *DB) startFileScan(idx *Indexer, path string) {
 	// Bound the dispatch: the actor's spawn returns immediately, and the
 	// goroutine acquires scanSem before the heavy prepareScan, so at most
 	// runtime.NumCPU() preparations run at once and the actor never blocks. R3438
-	go db.runScanBounded(func() { db.prepareFileScan(prepIdx, cfg, path, my) })
+	go db.runScanBounded(func() { db.prepareFileScan(prepIdx, cfg, path, my, force) })
 }
 
 // scanConfigOnActor indexes a config file (ark.toml) synchronously on the DB
@@ -2143,7 +2182,7 @@ func (db *DB) scanConfigOnActor(idx *Indexer, path string, my uint64) {
 // startFileScan captured on the actor. idx is copy-bound (idx.fts is a private
 // fts.Copy).
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.3 | R3419, R3426, R3433
-func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64) {
+func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64, force bool) {
 	fi, statErr := os.Stat(path)
 	status, checkErr := idx.fts.CheckFile(path) // private copy — off-actor safe
 	known := checkErr == nil && status.FileID != 0
@@ -2153,7 +2192,9 @@ func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64)
 	// actor. R3419, R3433
 	if statErr != nil {
 		SyncVoid(db, func(db *DB) error {
-			if known {
+			// R45, R3568: a forced refresh reports missing files and never removes
+			// them, so it only retires the entry.
+			if known && !force {
 				db.enqueueWrite(func(ftsCopy *microfts2.DB) {
 					if err := db.indexer.withFTS(ftsCopy).RemoveFile(path); err != nil {
 						log.Printf("watch: remove %s: %v", path, err)
@@ -2181,7 +2222,7 @@ func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64)
 	// R3428-R3431: the gate carries per-chunk reuse + changeNum preemption for the
 	// full-file compute; its map hops run on the DB actor.
 	gate := dbScanGate{db: db, path: path, my: my}
-	prep, err := idx.prepareScan(path, strategy, status.FileID, known, gate)
+	prep, err := idx.prepareScan(path, strategy, status.FileID, known, force, gate)
 	if err != nil {
 		// errScanSuperseded is a clean abandon (a newer scan owns the entry), not a
 		// failure — don't log it. R3430

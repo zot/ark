@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36, R37, R38, R39, R40, R41, R42, R43, R44, R117, R118, R121, R126, R360, R361, R362, R363, R364, R365, R366, R367, R368, R386, R502, R503, R505, R511, R517, R518, R519, R520, R521, R522, R751, R752, R757, R795, R796, R797, R866, R868, R869, R870, R872, R933, R934, R935, R953, R954, R956, R873, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113, R1114, R1115, R1116, R1119, R1120, R1121, R1122, R1123, R1124, R1125, R1126, R1128, R1317, R1318, R1319, R1320, R1321, R1322, R1323, R1324, R1325, R1849, R1850, R1851, R1852, R1853, R1854, R1869, R1890, R1891, R1892, R1893, R1894, R1895, R1896, R1897, R1898, R1899, R1900, R1901, R1904, R1905, R1906, R1907, R1908, R1923, R1926, R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R1983, R1984, R2012, R2016, R2018, R2022, R2024, R2026, R2110, R2111, R2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090, R3091, R3092, R3093, R3095, R3096, R3097, R3098, R3099, R3100, R3104, R3106, R3107, R3244, R3266, R3264, R3265, R3274, R3275, R3388
+**Requirements:** R36-44, R117, R118, R121, R126, R360-368, R386, R502, R503, R505, R511, R517-522, R751, R752, R757, R795-797, R866, R868-870, R872, R873, R933-935, R953, R954, R956, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113-1116, R1119-1126, R1128, R1317-1325, R1849-1854, R1869, R1890-1901, R1904-1908, R1923, R1926, R1983, R1984, R1996, R2000-2008, R2012, R2016, R2018, R2022, R2024, R2026, R2110-2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090-3093, R3095-3100, R3104, R3106, R3107, R3244, R3264-3266, R3274, R3275, R3388, R3568
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -117,7 +117,10 @@ access. (R2915)
   file-level tags + defs are re-extracted from prep.data in
   executeFullRefresh (R1126, R2913). Eliminates splitChunks call (R1124).
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
-  by patterns, refresh each one in parallel. Worker pool (NumCPU goroutines)
+  by patterns, refresh each one in parallel.
+- prepareScan / storeScan with force (R3568): a forced scan never takes the
+  append branch and never skips an unchanged file at store time, so the whole
+  file is re-chunked and stored through ReindexPrepared. Worker pool (NumCPU goroutines)
   reads files and detects appends. Per-chunk tags arrive via the indexed
   callback (re-extracted from each chunk's original content, R2913); file-level tags + defs are
   re-extracted in executeRefresh from prep.data (full) or prep.newBytes

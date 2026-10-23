@@ -1209,6 +1209,7 @@ type removeRequest struct {
 
 type refreshRequest struct {
 	Patterns []string `json:"patterns"`
+	Force    bool     `json:"force"` // R3568
 }
 
 type dismissRequest struct {
@@ -1559,8 +1560,15 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var pending []scheduleItem
+	queued := 0
 	if err := SyncVoid(srv.db, func(db *DB) error {
-		err := db.Refresh(req.Patterns)
+		var err error
+		if req.Force {
+			// R3568: dispatch only; each file's scan chunks off the actor.
+			queued, err = db.ForceRefresh(req.Patterns)
+		} else {
+			err = db.Refresh(req.Patterns)
+		}
 		pending = db.indexer.DrainSchedule()
 		return err
 	}); err != nil {
@@ -1570,7 +1578,7 @@ func (srv *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if len(pending) > 0 {
 		go srv.processScheduleItems(pending)
 	}
-	writeJSON(w, map[string]string{"status": "ok"})
+	writeJSON(w, map[string]any{"status": "ok", "queued": queued})
 }
 
 // statusOp serves GET /status. The simplest operation shape: one query

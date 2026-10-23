@@ -1037,6 +1037,7 @@ func (idx *Indexer) RefreshFile(path, strategy string) error {
 type scanPrep struct {
 	path, strategy string
 	oldID          uint64 // 0 for a fresh add
+	force          bool   // R3568: full in-place reindex even if unchanged or only appended
 	isAppend       bool
 	prepared       *microfts2.PreparedFile   // full add / reindex
 	appendPrep     *microfts2.PreparedAppend // append
@@ -1099,13 +1100,13 @@ func buildEntries(splits []microfts2.SplitChunk, gate scanGate, prepareChunk fun
 // goroutine — the LMDB read (FileInfoByID) is MVCC-safe and runs on a private fts
 // copy. Returns a scanPrep for storeScan.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426, R3428
-func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool, gate scanGate) (*scanPrep, error) {
+func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, force bool, gate scanGate) (*scanPrep, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	prep := &scanPrep{
-		path: path, strategy: strategy, oldID: oldID, data: data,
+		path: path, strategy: strategy, oldID: oldID, force: force, data: data,
 		fullHash: fmt.Sprintf("%x", sha256.Sum256(data)),
 		fileSize: int64(len(data)),
 	}
@@ -1116,8 +1117,9 @@ func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known bool,
 	// Append detection off the same snapshot we hashed: the current file's first
 	// FileLength bytes match the committed content hash AND the file grew. Using
 	// `data` rather than a second read keeps the (length, hash) pair coherent
-	// under a concurrent append. (R360-R362, R3008)
-	if known {
+	// under a concurrent append. (R360-R362, R3008) A forced scan never appends:
+	// it re-chunks the whole file under the current rules (R3568).
+	if known && !force {
 		info, infoErr := idx.fts.FileInfoByID(oldID)
 		if infoErr == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength &&
 			sha256.Sum256(data[:info.FileLength]) == info.ContentHash {
@@ -1201,7 +1203,7 @@ func (idx *Indexer) storeScan(prep *scanPrep) error {
 	// R3423: the file changed on disk between prepare and store to nothing new —
 	// or an interleaving scan already stored this exact content. Skip the
 	// redundant re-chunk.
-	if prep.oldID != 0 && idx.storeContentUnchanged(prep) {
+	if prep.oldID != 0 && !prep.force && idx.storeContentUnchanged(prep) { // R3568: forced, store anyway
 		Logv(1, "index: %s UNCHANGED (skipped — same length and hash)", prep.path)
 		return nil
 	}

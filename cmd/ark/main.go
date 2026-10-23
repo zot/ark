@@ -1161,14 +1161,44 @@ func cmdScan(args []string) {
 
 // CRC: crc-CLI.md | R76
 func cmdRefresh(args []string) {
-	fs := flag.NewFlagSet("refresh", flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: ark refresh [PATTERN...]\n\nRe-index stale files. Optional glob patterns to scope the refresh.")
+	cmdRefreshForce(args, false)
+}
+
+// cmdRefreshForce re-indexes stale files, or, forced, every file the patterns
+// match (R3568). Forcing without a pattern is refused here, before any server
+// round trip (R3569).
+// CRC: crc-CLI.md | R3568, R3569
+func cmdRefreshForce(patterns []string, force bool) {
+	if force && len(patterns) == 0 {
+		fmt.Fprintln(os.Stderr, "ark refresh --force needs a pattern: forcing the whole index is rarely meant. Use /** to ask for it on purpose.")
+		os.Exit(1)
 	}
-	fs.Parse(args)
-
-	patterns := fs.Args()
-
+	if force {
+		// R3568: the server queues one forced scan per matching file and answers
+		// at once; the re-chunking runs in the background, off the DB actor.
+		proxyOrLocal(
+			func(client *http.Client) error {
+				var resp struct {
+					Queued int `json:"queued"`
+				}
+				if err := proxyDecode(client, "POST", "/refresh", map[string]any{"patterns": patterns, "force": true}, &resp); err != nil {
+					return err
+				}
+				fmt.Printf("- queued: %d file(s) for re-chunking\n- runs: in the background, one file at a time off the DB actor; the server stays usable meanwhile\n", resp.Queued)
+				return nil
+			},
+			func(d *ark.DB) error {
+				n, err := d.ForceRefresh(patterns)
+				if err != nil {
+					return err
+				}
+				d.WaitWritesIdle()
+				fmt.Printf("- re-chunked: %d file(s)\n", n)
+				return nil
+			},
+		)
+		return
+	}
 	proxyOrLocal(
 		func(client *http.Client) error {
 			if err := proxyOK(client, "POST", "/refresh", map[string]any{"patterns": patterns}); err != nil {

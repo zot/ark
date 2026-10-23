@@ -403,6 +403,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Store.md → `store_test.go`
 - [x] test-Unresolved.md → `store_test.go`, `cmd/ark/main_test.go`
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`, `ext_test.go`, `ext_insert_test.go`
+- [x] test-Refresh.md → `refresh_force_test.go`
 - [x] test-ChunkRetrieval.md → `search_test.go`
 - [x] test-TagBlock.md → `tagblock_test.go`
 - [x] test-Sweep.md → `db_test.go`
@@ -1241,3 +1242,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T290: R2271 retired by R3567 (2026-10-22 chat chunker moved onto the transcript reader; harness records no longer indexed (Bill))
 - T291: R2272 retired by R3567 (2026-10-22 chat chunker moved onto the transcript reader; harness records no longer indexed (Bill))
 - [ ] D16: R3566 (a scheduled check that raises an alert when the share of narration among thinking blocks drops to nothing) has no code: it is built under carves/notify.md Item 6, which needs the alert store and `ark notify` (Items 1-2) and is the first listener for a scheduled fire. The reader already supplies what it needs (narration and thinking counts per read).
+- [ ] O227: Removing a file strands the records that point at its chunks as a target. Found by reading the code 2026-10-23, not reproduced. `Indexer.RemoveFile` cleans a dying chunk's own tags and its @ext routings as a source, but nothing on the removal path handles it as a target: X routing records keyed by the target chunk id survive, routed V entries (written to V only, never to the target's F, so the F-driven cleanup cannot find them) keep the dead chunk id, RC/RJ recall records and RM surface cooldowns keyed by it survive, and ExtMap's in-memory maps reload the dead X records at restart. `specs/at-ext-storage.md` says a removed target becomes unresolved. Because chunk ids are sequential, re-adding the file never re-attaches them. Repair: on removal, resolve the dying chunk's incoming routings to unresolved and delete RC/RJ/RM keyed by it; test by removing a routed target and asserting no record names its chunk id.
