@@ -66,6 +66,7 @@ type DB struct {
 	writeQueue       []func(*microfts2.DB) // queued write closures
 	writing          bool                  // true while a write goroutine is in flight
 	onWriteComplete  func([]scheduleItem)  // callback for schedule items from write goroutines
+	onFileStored     func(path string)     // R3579: on the actor, after a scan's index writes for path landed
 	writeIdleWaiters []chan struct{}       // R2989: one-shot signals when the write queue drains; actor-only
 
 	// Per-file scan actor registry (R3420). One entry per changed path with an
@@ -2267,6 +2268,10 @@ func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
 			}
 			if act.retire {
 				db.retireFileScanIfCurrent(path, my)
+			}
+			// R3579: the file's new chunks now exist, so it can be embedded.
+			if err == nil && db.onFileStored != nil {
+				db.onFileStored(path)
 			}
 			if act.reEmit {
 				db.reEmitFileChange(path)

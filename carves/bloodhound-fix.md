@@ -48,7 +48,7 @@ Opened by Bill, 2026-10-22.
       Measured 2026-10-23. microfts2's half landed 2026-10-24 (`GetChunks` matches by
       range and reports a stale chunk `Missing`); #161 is ark's half. See Item 12.
 - [ ] **Item 13 — a file added mid-session has no embeddings until the next
-      reconcile.** **OPEN (not queued), measured 2026-10-24.** As specified, but it
+      reconcile.** **OPEN (#164.)** As specified, but it
       blinds the meaning leg to new files. See Item 13.
 - [ ] **Item 14 — `search_exclude` does two jobs.** **OPEN (not queued).** A
       fence around ark's system files and a noise filter for interactive search,
@@ -489,6 +489,20 @@ for embedding at 09:09 the next morning. For those hours the meaning leg of ever
 hunt, and of ambient recall, could not see them. Whether new files should be
 embedded as they arrive, and how that interacts with the write actor and the GPU,
 is a design question; nothing here is a defect against the current spec.
+
+The gap is wider than new files. The 2026-10-24 23:40 pass also queued chunks of
+files *edited* that day (`specs/cli-commands.md`: 2 new of 220), so the meaning
+leg trails whatever is being worked on, which is usually what a hunt is about.
+A full pass costs about 13 seconds, about 11 of them checking all 280k chunks for
+a missing vector, to embed a few dozen.
+
+DECIDED (Bill, 2026-10-24): embed stored files with a pass over just those
+files, once the set has been quiet for 15 seconds, and no later than one minute
+after its first file, so one change every ten seconds cannot delay it
+indefinitely. #164 (R3579, R3580): a file joins the set when its scan's writes
+land, so its chunks exist; `search_exclude` keeps the chat logs out; the limited
+pass shares the one embed-pass guard, and a full pass that finds a pass running
+now waits for it instead of being skipped.
 
 ## Item 14
 

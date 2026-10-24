@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235-1254, R1268-1273, R1277-1279, R1292, R1293, R1295-1301, R1306-1308, R1315, R1316, R1378-1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1604, R1608-1617, R1621, R1622, R1830, R1831, R1846-1848, R1854, R1862-1864, R1913-1916, R1922, R1927-1931, R2158, R2163-2173, R2194-2225, R2228, R2230, R2232-2257, R2313-2321, R2324, R2326-2343, R2409, R2567-2599, R2603, R2609, R2617, R2618, R2620-2626, R2629, R2634, R2639-2644, R2647, R2655-2660, R2662, R2667, R2668, R2670-2674, R2676, R2677, R2681, R2684-2686, R2742, R2743, R2905-2913, R2961-2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079-3082, R3163-3165, R3185-3187, R3192, R3195, R3414, R3415, R3570, R3573, R3575, R3577
+**Requirements:** R1235-1254, R1268-1273, R1277-1279, R1292, R1293, R1295-1301, R1306-1308, R1315, R1316, R1378-1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1604, R1608-1617, R1621, R1622, R1830, R1831, R1846-1848, R1854, R1862-1864, R1913-1916, R1922, R1927-1931, R2158, R2163-2173, R2194-2225, R2228, R2230, R2232-2257, R2313-2321, R2324, R2326-2343, R2409, R2567-2599, R2603, R2609, R2617, R2618, R2620-2626, R2629, R2634, R2639-2644, R2647, R2655-2660, R2662, R2667, R2668, R2670-2674, R2676, R2677, R2681, R2684-2686, R2742, R2743, R2905-2913, R2961-2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079-3082, R3163-3165, R3185-3187, R3192, R3195, R3414, R3415, R3570, R3573, R3575, R3577, R3579, R3580
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -80,6 +80,8 @@ loads on first embedding query and stays warm until TTL expiry.
   context (WithContext(64), no WithEmbeddings) for tokenization only.
   Returns a Tokenizer that wraps the context. Caller must Close().
   Uses modelPath from config. (R1529, R1530)
+- BatchEmbedChunksFor(paths): the same pipeline limited to paths, for files
+  stored since the last pass, instead of every indexed file (R3580).
 - BatchEmbedChunks(): scan files in priority order, read each file's
   F-record chunk list, check EC[chunkID] for each entry, queue missing
   chunkIDs for embedding via tier buckets. Cross-pass dedup: chunkID

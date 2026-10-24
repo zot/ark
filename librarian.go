@@ -2191,6 +2191,24 @@ func embedChunkAction(ch microfts2.ChunkResult, strategy string) (string, embedC
 // before embedding, and an all-@tag chunk (empty after strip) is skipped.
 // CRC: crc-Librarian.md | R1609-R1617, R1913, R1914, R2913
 func (l *Librarian) BatchEmbedChunks() error {
+	return l.batchEmbedChunks(nil)
+}
+
+// BatchEmbedChunksFor runs the chunk embedding pipeline over paths only, for
+// files stored since the last pass, instead of checking every chunk in the
+// index. Paths not indexed, or matching search_exclude, are skipped as in the
+// full pass.
+// CRC: crc-Librarian.md | R3580
+func (l *Librarian) BatchEmbedChunksFor(paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	return l.batchEmbedChunks(paths)
+}
+
+// batchEmbedChunks is the pipeline behind both entries: every indexed file when
+// paths is nil, else just paths (R3580).
+func (l *Librarian) batchEmbedChunks(paths []string) error {
 	if !l.EmbeddingAvailable() || len(l.tiers) == 0 {
 		return nil
 	}
@@ -2203,10 +2221,13 @@ func (l *Librarian) BatchEmbedChunks() error {
 		return fmt.Errorf("load embedding model: %w", err)
 	}
 
-	// Collect all indexed file paths
-	files, err := l.db.Files()
-	if err != nil {
-		return fmt.Errorf("list files: %w", err)
+	// Collect all indexed file paths, or just the ones asked for (R3580)
+	files := paths
+	if files == nil {
+		var err error
+		if files, err = l.db.Files(); err != nil {
+			return fmt.Errorf("list files: %w", err)
+		}
 	}
 	if len(files) == 0 {
 		return nil

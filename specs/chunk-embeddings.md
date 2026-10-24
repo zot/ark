@@ -106,6 +106,33 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
 The GPU compute happens outside the actor (same pattern as tag
 embedding). Only the index writes go through the actor.
 
+## Embedding Edited Files
+
+The pass above runs after a reconcile, which happens at startup and after a
+config change. A file indexed between reconciles, new or edited, is searchable
+by trigram at once, so it gets its embeddings soon after as well, without
+waiting for the next reconcile.
+
+Each file joins a pending set when its index writes land, so its new chunks
+already exist, unless it matches
+`search_exclude` (the same skip as step 2, so the chat logs, which change every
+few seconds, never touch the timer). The set is embedded once it has been
+**quiet for 15 seconds**: no new file has joined it in that time. So that a
+file changing every ten seconds cannot hold it off forever, the set is also
+embedded at most **one minute** after its first file joined, quiet or not.
+
+Embedding the set runs the same pass as above, limited to those files: the
+tag-name and tag-value embeddings first, as after a reconcile, then steps 1 to 8
+over the set's files only. The full pass checks every chunk in the index
+(about 11 seconds on the dev box, 2026-10-24) to embed what is usually a
+handful, which is why the set is not handed to it.
+
+Only one embed pass runs at a time. When the set comes due while a pass is
+running, it waits and is embedded as soon as that pass ends, together with any
+files that joined in the meantime. The full pass after a reconcile waits the same
+way rather than being skipped, and goes first; since it covers every file stored
+before it began, it drops the pending and waiting files.
+
 ## NUL Bytes in Content
 
 The tokenizer underneath embedding (llama.cpp, reached through yzma)

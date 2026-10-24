@@ -2729,6 +2729,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 ### Stale chunks
 - **R3575:** The batch embedding pass skips a missing chunk (R3571) and counts it in its summary; it writes no EC record for it, not even the empty all-tag record (R3004), so each pass queues it again until the file is re-chunked
 - **R3577:** The priority sort (R1611) classes a file as a JSONL conversation log by the strategy it was indexed under (`chat-jsonl`, the test recall uses), not by its `.jsonl` suffix; the suffix may gate the lookup.
+- **R3579:** A file indexed between reconciles is embedded without waiting for the next reconcile. When a scan's index writes for a path land, the path joins a pending set unless it matches `search_exclude`; the set is embedded when 15 seconds pass with no new path joining it, or one minute after its first path joined, whichever comes first, so a file changing every ten seconds cannot defer embedding indefinitely. A path matching `search_exclude` never joins the set and never moves its timer.
+- **R3580:** Embedding the pending set runs the tag-name and tag-value embedding pass, then the chunk embedding pipeline limited to the set's files (the same priority sort, tiers, dedup, stale-chunk skip and centroid update), not the whole index. It shares the single embed-pass guard (R3416): a set that comes due while another pass runs is held and embedded when that pass ends, with any paths that joined meanwhile. A post-reconcile full pass that finds a pass running is likewise deferred to that pass's end rather than skipped, runs before any held set, and on starting drops the pending and held files, which it covers.
 
 ## Feature: PDF Chunker
 **Source:** specs/pdf-chunker.md

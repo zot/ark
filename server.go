@@ -69,6 +69,14 @@ type Server struct {
 	recallWatcher      *RecallWatcher      // R2687: ambient simple-recall subsystem; nil when [recall].enabled is false
 	recallAgentBuilder *RecallAgentBuilder // R2754, R2755-R2758: curation + result doc builders; in-flight per-fire state
 
+	// R3579, R3580: files stored between reconciles, embedded by a limited pass
+	// once quiet. embedHeld collects a due set that found a pass already
+	// running; embedFullPending records a full pass that found the same. All
+	// three are DB-actor state, like embedding.
+	embedWait        embedDebounce
+	embedHeld        map[string]struct{}
+	embedFullPending bool
+
 	// Bloodhound-CLI orchestrator drain tube (S1). The luhmannOwner lease
 	// keeps exactly one session draining `ark luhmann next`; nextQueue is the
 	// watcher→Luhmann handoff of curation tasks + supervisor directives. Both
@@ -308,6 +316,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 
 	srv := &Server{
 		db:        db,
+		embedWait: embedDebounce{quiet: embedQuietWindow, maxWait: embedMaxWait}, // R3579
 		listener:  listener,
 		pidPath:   pidPath,
 		noScan:    opts.NoScan,
@@ -915,6 +924,8 @@ func (srv *Server) reconcile() {
 		db.onWriteComplete = func(items []scheduleItem) {
 			go srv.processScheduleItems(items)
 		}
+		// R3579: a scan whose writes landed feeds the edited-files embed set.
+		db.onFileStored = func(path string) { srv.noteStoredFile(db, path) }
 		srv.doReconcile(db)
 		// The schedule drain from synchronous config indexing moved into
 		// finishReconcile (seq-reconcile.md#2.4): config files are now indexed in
@@ -1029,38 +1040,7 @@ func (srv *Server) finishReconcile(db *DB) {
 			log.Println("reconcile: complete")
 		})
 	})
-	// Batch embed missing embeddings after reconcile. The GPU compute runs
-	// off the write slot in a plain goroutine (holding no write transaction)
-	// so a long embed never freezes interleaving UI writes; the pass's EC/EF
-	// and tag store writes route back onto the write actor in small per-batch
-	// closures (see Librarian.BatchEmbed / BatchEmbedChunks). srv.embedding
-	// guards re-entrancy — read and set here on the db.svc actor (finishReconcile
-	// runs on it), cleared on the actor when the pass ends — so a second
-	// reconcile never launches a concurrent embed goroutine.
-	// CRC: crc-Server.md | Seq: seq-reconcile.md#2.4 | R1292, R1295, R1609, R3414, R3416
-	if srv.librarian != nil && srv.librarian.EmbeddingAvailable() && srv.beginEmbedPass() {
-		go func() {
-			// Clear the guard only after this pass's store writes drain, so the
-			// next pass's Pass-1 EC check sees them committed (the old
-			// one-closure ordering, preserved). The clear is enqueued as a
-			// trailing write closure — it runs after every embed write already
-			// queued (FIFO) and posts endEmbedPass back to the actor. R3416
-			defer func() {
-				SyncVoid(db, func(d *DB) error {
-					d.enqueueWrite(func(_ *microfts2.DB) {
-						svc(d.svc, func() { srv.endEmbedPass() })
-					})
-					return nil
-				})
-			}()
-			if err := srv.librarian.BatchEmbed(); err != nil {
-				log.Printf("reconcile: batch embed tags: %v", err)
-			}
-			if err := srv.librarian.BatchEmbedChunks(); err != nil {
-				log.Printf("reconcile: batch embed chunks: %v", err)
-			}
-		}()
-	}
+	srv.launchFullEmbed(db)
 	log.Println("reconcile: queued")
 }
 
@@ -1077,10 +1057,130 @@ func (srv *Server) beginEmbedPass() bool {
 	return true
 }
 
-// endEmbedPass releases the embed-pass slot. Must run on the db.svc actor.
-// CRC: crc-Server.md | R3416
+// endEmbedPass releases the embed-pass slot, then starts whatever waited for it:
+// a full pass first, which covers any held files, else the held files. Must run
+// on the db.svc actor.
+// CRC: crc-Server.md | R3416, R3580
 func (srv *Server) endEmbedPass() {
 	srv.embedding = false
+	switch {
+	case srv.embedFullPending:
+		srv.launchFullEmbed(srv.db)
+	case len(srv.embedHeld) > 0:
+		paths := make([]string, 0, len(srv.embedHeld))
+		for p := range srv.embedHeld {
+			paths = append(paths, p)
+		}
+		srv.embedHeld = nil
+		srv.launchLimitedEmbed(srv.db, paths)
+	}
+}
+
+// launchFullEmbed starts the post-reconcile embed pass over the whole index. On
+// the db.svc actor. A pass already running defers it to that pass's end, and a
+// full pass starting drops the pending and held files, since it covers every
+// file stored before it began.
+// CRC: crc-Server.md | Seq: seq-reconcile.md#2.4 | R1292, R1295, R1609, R3414, R3416, R3580
+func (srv *Server) launchFullEmbed(db *DB) {
+	if srv.librarian == nil || !srv.librarian.EmbeddingAvailable() {
+		return
+	}
+	if !srv.beginEmbedPass() {
+		srv.embedFullPending = true
+		return
+	}
+	srv.embedFullPending = false
+	srv.embedWait.clear()
+	srv.embedHeld = nil
+	srv.runEmbedPass(db, "reconcile", nil)
+}
+
+// noteStoredFile is the scan machinery's report that path's index writes have
+// landed (R3579). A path search_exclude covers is never embedded, so it neither
+// joins the pending set nor moves its timer — the chat logs change every few
+// seconds. On the db.svc actor.
+// CRC: crc-Server.md | R3579
+func (srv *Server) noteStoredFile(db *DB, path string) {
+	if srv.librarian == nil || !srv.librarian.EmbeddingAvailable() {
+		return
+	}
+	if matchesAnyGlob(path, db.Config().SearchExclude) {
+		return
+	}
+	if arm, delay := srv.embedWait.note(path, time.Now()); arm {
+		srv.armEmbedWait(db, delay)
+	}
+}
+
+// armEmbedWait arms the debounce's one outstanding timer, which posts its
+// firing back to the actor that owns the set. R3579
+func (srv *Server) armEmbedWait(db *DB, delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		svc(db.svc, func() {
+			paths, again := srv.embedWait.fire(time.Now())
+			if again > 0 {
+				srv.armEmbedWait(db, again)
+				return
+			}
+			if len(paths) > 0 {
+				srv.launchLimitedEmbed(db, paths)
+			}
+		})
+	})
+}
+
+// launchLimitedEmbed embeds just paths. On the db.svc actor. A pass already
+// running holds them until it ends (R3580).
+// CRC: crc-Server.md | R3580
+func (srv *Server) launchLimitedEmbed(db *DB, paths []string) {
+	if !srv.beginEmbedPass() {
+		if srv.embedHeld == nil {
+			srv.embedHeld = make(map[string]struct{}, len(paths))
+		}
+		for _, p := range paths {
+			srv.embedHeld[p] = struct{}{}
+		}
+		return
+	}
+	log.Printf("embed: %d file(s) stored since the last pass", len(paths))
+	srv.runEmbedPass(db, "stored files", paths)
+}
+
+// runEmbedPass runs one embed pass — tag embeddings, then chunk embeddings for
+// paths, or for the whole index when paths is nil — off the write slot in a
+// plain goroutine (holding no write transaction), so a long embed never freezes
+// interleaving UI writes; the pass's EC/EF and tag store writes route back onto
+// the write actor in small per-batch closures. The caller has claimed the
+// embed-pass guard on the db.svc actor.
+// CRC: crc-Server.md | Seq: seq-reconcile.md#2.4 | R1292, R1295, R1609, R3414, R3416, R3580
+func (srv *Server) runEmbedPass(db *DB, label string, paths []string) {
+	go func() {
+		// Clear the guard only after this pass's store writes drain, so the
+		// next pass's Pass-1 EC check sees them committed (the old
+		// one-closure ordering, preserved). The clear is enqueued as a
+		// trailing write closure — it runs after every embed write already
+		// queued (FIFO) and posts endEmbedPass back to the actor. R3416
+		defer func() {
+			SyncVoid(db, func(d *DB) error {
+				d.enqueueWrite(func(_ *microfts2.DB) {
+					svc(d.svc, func() { srv.endEmbedPass() })
+				})
+				return nil
+			})
+		}()
+		if err := srv.librarian.BatchEmbed(); err != nil {
+			log.Printf("%s: batch embed tags: %v", label, err)
+		}
+		var err error
+		if paths == nil {
+			err = srv.librarian.BatchEmbedChunks()
+		} else {
+			err = srv.librarian.BatchEmbedChunksFor(paths)
+		}
+		if err != nil {
+			log.Printf("%s: batch embed chunks: %v", label, err)
+		}
+	}()
 }
 
 // processScheduleItems runs EnsureUpcoming for accumulated schedule items

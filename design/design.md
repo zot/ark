@@ -235,7 +235,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
-- [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`
+- [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`, `embed_debounce.go`
 - [x] crc-HTTPOperation.md → `httpop.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/bundlecheck.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
@@ -444,6 +444,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-RecallScope.md → `recall_scope_test.go`
 - [x] test-StaleChunk.md → `stale_chunk_test.go`, `cmd/ark/chunks_stale_test.go`
 - [x] test-EmbedPriority.md → `embed_priority_test.go`
+- [x] test-EmbedDebounce.md → `embed_debounce_test.go`
 - [x] test-OffActorReads.md → `contentview_race_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [ ] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`
@@ -1274,3 +1275,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O229: A hunt's two scope-enforcement points disagree on several positive globs. The seed admits a path matching any of them (R3185's union), but `scopeDirective` renders each as its own `-with -files` row, and rows intersect, so a two-glob hunt's secretary searches the intersection. R3192 requires one meaning at both points. Found 2026-10-24 reading the code, not observed in a hunt. The repair may need a union form on the CLI, and may then edit R3189's filter-string wording.
 - [ ] O230: Recall's tag axis stops after 50 values (the `taken` counter in `Librarian.Recall`, recall.go), and no test guards it. Found 2026-10-24 while pulling #159's alarms: deleting `taken++`, so every scoring value is taken, left the whole suite green. A regression would surface only as noisier, slower recall, with each weakly matching value spreading its tiny score over its chunks. #159 turned the cap from a cut of the sorted list into a counter beside a `continue` (only values that reach the scope count, R3570), which is easier to break. Test: 51 values that all score against the clue, the weakest the only path to one chunk; assert that chunk is never credited by the tag axis. Fire alarm: delete `taken++`. R2905, R3570.
 - [ ] O231: specs/features.md, a public summary spec, cites four fossil-only working notes under `.scratch/`: the Recall, Luhmann orchestrator and Managed PTY inventory rows and the Recall section's prose. A cloner holds none of them, so each is a pointer that cannot resolve. Found 2026-10-24.
+- [ ] O232: The hook that feeds the edited-files embed set is untested end to end: finishFileScan calling DB.onFileStored after a successful store, and the server noting the path, is wiring no unit test reaches, because it needs a whole *DB with a running write actor (the harness #121 would provide). The debounce timing and the pass-guard bookkeeping are unit-tested (test-EmbedDebounce.md). Verify live after a restart: edit an indexed file and look for "embed: N file(s) stored since the last pass" in ark.log 15 seconds later. R3579.

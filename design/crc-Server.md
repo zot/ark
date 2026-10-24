@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61-70, R89-102, R132-134, R152-156, R160, R164, R165, R170, R171, R175-177, R202, R204, R210-213, R229, R257, R261-272, R338, R339, R342-359, R387-391, R393-395, R410-412, R414-417, R419, R420, R437-441, R541-546, R563-571, R620, R623, R641, R648, R657-662, R685-691, R735-737, R748-750, R758-764, R767-777, R789, R790, R799, R804, R805, R812, R813, R835-848, R893-898, R914, R917, R919-921, R923, R927-932, R961-963, R975, R990-992, R994, R1014, R1015, R1069-1093, R1098, R1111, R1112, R1151-1199, R1216-1221, R1225-1234, R1243, R1248, R1249, R1266, R1267, R1292, R1295, R1297, R1300, R1378, R1383, R1402-1405, R1423-1432, R1469, R1485-1489, R1495, R1496, R1499, R1501, R1504-1506, R1509-1513, R1556-1564, R1703, R1739, R1740, R1761, R1783-1785, R1859, R1860, R1889, R1979-1982, R2065, R2073-2076, R2078-2080, R2085, R2086, R2089, R2091, R2117, R2129, R2258-2270, R2277, R2280, R2282, R2288-2294, R2296-2301, R2305, R2308, R2313, R2322-2325, R2355, R2356, R2358, R2360, R2361, R2363, R2364, R2379, R2386, R2389-2391, R2393, R2395-2402, R2404-2406, R2408, R2410-2415, R2421, R2426, R2432-2456, R2472, R2480, R2628-2630, R2660, R2661, R2687, R2688, R2694, R2695, R2700, R2701, R2713-2715, R2780, R2787, R2788, R2794, R2795, R2805, R2842, R2843, R2955, R2984-2989, R2998-3001, R3049, R3057, R3077, R3094, R3165, R3231, R3246-3250, R3257, R3259-3262, R3291, R3325, R3329, R3332, R3366, R3370, R3371, R3378, R3379, R3390, R3393, R3395, R3397, R3399, R3414, R3416-3418, R3433, R3434, R3436, R3439-3441, R3446, R3515, R3522, R3524, R3572, R3574
+**Requirements:** R4, R61-70, R89-102, R132-134, R152-156, R160, R164, R165, R170, R171, R175-177, R202, R204, R210-213, R229, R257, R261-272, R338, R339, R342-359, R387-391, R393-395, R410-412, R414-417, R419, R420, R437-441, R541-546, R563-571, R620, R623, R641, R648, R657-662, R685-691, R735-737, R748-750, R758-764, R767-777, R789, R790, R799, R804, R805, R812, R813, R835-848, R893-898, R914, R917, R919-921, R923, R927-932, R961-963, R975, R990-992, R994, R1014, R1015, R1069-1093, R1098, R1111, R1112, R1151-1199, R1216-1221, R1225-1234, R1243, R1248, R1249, R1266, R1267, R1292, R1295, R1297, R1300, R1378, R1383, R1402-1405, R1423-1432, R1469, R1485-1489, R1495, R1496, R1499, R1501, R1504-1506, R1509-1513, R1556-1564, R1703, R1739, R1740, R1761, R1783-1785, R1859, R1860, R1889, R1979-1982, R2065, R2073-2076, R2078-2080, R2085, R2086, R2089, R2091, R2117, R2129, R2258-2270, R2277, R2280, R2282, R2288-2294, R2296-2301, R2305, R2308, R2313, R2322-2325, R2355, R2356, R2358, R2360, R2361, R2363, R2364, R2379, R2386, R2389-2391, R2393, R2395-2402, R2404-2406, R2408, R2410-2415, R2421, R2426, R2432-2456, R2472, R2480, R2628-2630, R2660, R2661, R2687, R2688, R2694, R2695, R2700, R2701, R2713-2715, R2780, R2787, R2788, R2794, R2795, R2805, R2842, R2843, R2955, R2984-2989, R2998-3001, R3049, R3057, R3077, R3094, R3165, R3231, R3246-3250, R3257, R3259-3262, R3291, R3325, R3329, R3332, R3366, R3370, R3371, R3378, R3379, R3390, R3393, R3395, R3397, R3399, R3414, R3416-3418, R3433, R3434, R3436, R3439-3441, R3446, R3515, R3522, R3524, R3572, R3574, R3579, R3580
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -23,6 +23,9 @@ Optionally starts the embedded ui-engine alongside.
 - scheduler: *EventScheduler — time-based event queue
 - librarian: *Librarian — sidecar expansion request queue for spectral search
 - embedding: bool — re-entrancy guard for the post-reconcile embed pass; checked and set on the DB actor so only one pass runs at a time (R3416)
+- embedWait: embedDebounce — files stored since the last pass, awaiting a limited embed pass, with its quiet/max-wait timing; DB-actor state (R3579)
+- embedHeld: set — a due set that found a pass running, embedded when it ends; DB-actor state (R3580)
+- embedFullPending: bool — a full pass that found a pass running, run first when it ends; DB-actor state (R3580)
 - recallWatcher: *RecallWatcher — ambient simple-recall subsystem; nil when `[recall].enabled` is false (R2687, R2688)
 
 ## Does
@@ -709,7 +712,20 @@ Optionally starts the embedded ui-engine alongside.
   and set on the DB actor in doReconcile and cleared on the actor
   when the pass ends, so a second reconcile does not launch a
   concurrent embed goroutine. The embedding model loads eagerly
-  when the goroutine starts. (R1292, R1295, R3414, R3416)
+  when the goroutine starts. (R1292, R1295, R3414, R3416) A full pass
+  that finds a pass running is deferred to its end (embedFullPending)
+  rather than skipped, and on starting clears the edited-files set and
+  any held files, which it covers (R3580).
+- Embed stored files (R3579, R3580): DB.onFileStored reports, on the DB
+  actor, each path whose scan writes landed (finishFileScan). A path
+  outside search_exclude joins embedWait (embed_debounce.go), which arms
+  at most one timer: due 15s after the latest path, but no later than
+  one minute after the first. The timer posts back to the actor; firing
+  early it re-arms for the remainder, firing due it takes the set and
+  starts a limited pass (Librarian.BatchEmbed + BatchEmbedChunksFor)
+  through the same guard. A set due while a pass runs is held
+  (embedHeld); endEmbedPass starts the deferred full pass first, else
+  the held files.
 - HandleEmbedMatch: POST /search/expand/embed — embedding
   similarity search. Accepts {query, k}, delegates to
   Librarian.EmbedSimilarTagValues. Returns 503 if embedding
