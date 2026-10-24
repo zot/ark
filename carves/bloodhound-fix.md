@@ -23,7 +23,8 @@ Opened by Bill, 2026-10-22.
   - [x] ~~**6.1 — pool-served hunts do not reach the emitting session.**~~ **LANDED (2026-10-22 — `#153`.)** Probably one defect with #106. See Item 6.
   - [ ] **6.2 — a stopped Luhmann session leaves its seat process running.**
         **OPEN (not queued), NOT VERIFIED** beyond HollowRpg's report. See Item 6.
-  - [ ] **6.3 — pool-served hunts arrive with an empty seed set.** **OPEN (#159.)** May be #107. See Item 6.
+  - [x] ~~**6.3 — a scoped hunt's seed is cut before its scope.**~~ **LANDED (2026-10-24 — `#159`.)**
+        Measured 2026-10-24; not pool-specific, and not #107. All three legs cut inside the scope (the trigram leg through microfts2 70dbbcd). See Item 6.
   - [x] ~~**6.4 — the secretary loop quits while idle, and keepalives suggest
         `--tube`.**~~ **LANDED (2026-10-22 — `#155`.)** Seen 2026-10-20 and 2026-10-22. See
         Item 6.
@@ -41,9 +42,12 @@ Opened by Bill, 2026-10-22.
 - [ ] **Item 11 — a chunker version stamp.** **OPEN (not queued.)** A file
       chunked under older rules is stale, so a rule change re-chunks itself.
       `/mini-spec`. See Item 11.
-- [ ] **Item 12 — retrieval after a chunker rule change shows the wrong chunk.**
-      **OPEN (not queued), measured 2026-10-23.** In microfts2's `GetChunks`.
-      See Item 12.
+- [ ] **Item 12 — retrieval after a chunker rule change shows the wrong chunk.** **OPEN (#161.)**
+      Measured 2026-10-23. microfts2's half landed 2026-10-24 (`GetChunks` matches by
+      range and reports a stale chunk `Missing`); #161 is ark's half. See Item 12.
+- [ ] **Item 13 — a file added mid-session has no embeddings until the next
+      reconcile.** **OPEN (not queued), measured 2026-10-24.** As specified, but it
+      blinds the meaning leg to new files. See Item 13.
 
 ## Item 1
 
@@ -167,6 +171,20 @@ so it searched the scope by hand, although a plain `ark search` found a dozen
 hits in that scope. #107 (seed quality: excluded paths reaching the seed set,
 the seeder matching its own scaffolding) is about the seeds being wrong, not
 absent. Whether this is the same fault or a new one is not known.
+
+*Measured 2026-10-24, and the item was misnamed.* All four empty seeds that day
+(not three, and from the session's own secretary, not the pool) carried a scope,
+`~/work/HollowStuff/HollowRpg/published/**`; hunts with no scope seeded normally.
+Each of the seed's three search legs took a corpus-wide top 50 and only then
+dropped out-of-scope chunks, which R3186 rejects one level up. `published/` is
+symlinks whose targets are indexed under their own paths with the same text, so
+those twins, older drafts and months of chat filled every leg's cut. Reproduced
+through `POST /recall` with the same clue: 10 hits unscoped, 2 of 10 scoped.
+R3570 puts the scope inside each leg. The meaning leg and the tag axis are fixed;
+the trigram leg passes the scope as `WithOnly`, but microfts2's `SearchFuzzy`
+applied that after its own top-k (O228); microfts2 fixed it the same day, so all three legs now cut inside the scope. The same reading
+found O229: the secretary's scope directive intersects several positive globs
+where the seed unions them.
 
 **6.4.** The secretary's loop gives up while idle. On 2026-10-20 one returned
 after seven idle keepalives; on 2026-10-22 one returned after eleven (about
@@ -382,6 +400,28 @@ through `ark chunks` returns the new chunker's count however many the index
 holds, so "the index already matches the new chunker" was the instrument
 reflecting the running code. Asking for a range only the old rules produced is
 the reliable probe.
+
+*microfts2 fixed it 2026-10-24* (its `fa68efb`): retrieval pairs by range, and a
+chunk the current chunker does not produce comes back flagged `Missing` with
+empty content, so a stale file now shows as misses rather than wrong text. Ark's
+callers have to honor the flag (#161). Reading them found a consequence of the
+old behavior: the embedding pass indexes a file's chunks by position, and the
+chunk cache used to skip stale entries silently, so after the first stale chunk
+every later one was embedded with a neighbor's text. Today a Missing entry would
+instead be marked as an all-tag chunk with no vector.
+
+## Item 13
+
+Chunk embeddings are computed only after a reconcile (specs/chunk-embeddings.md,
+"Batch Embedding Pipeline"), which runs at startup and after a config change. A
+file the watcher indexes in between is searchable by trigram at once but has no
+vectors until the next restart. Measured 2026-10-24 in the server log: every hour
+with chunk-embed queueing matches a startup reconcile, none falls between them,
+and HollowRpg's `published/` books, created at 18:42 on 2026-10-20, were queued
+for embedding at 09:09 the next morning. For those hours the meaning leg of every
+hunt, and of ambient recall, could not see them. Whether new files should be
+embedded as they arrive, and how that interacts with the write actor and the GPU,
+is a design question; nothing here is a defect against the current spec.
 
 ## Overlaps
 

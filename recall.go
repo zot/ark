@@ -8,11 +8,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/zot/microfts2"
+	"go.etcd.io/bbolt"
 )
 
 // RecallOpts configures top-K retrieval, content loading, and the
@@ -294,6 +296,7 @@ type chunkScoresAcc struct {
 type recallScope struct {
 	active  bool
 	allowed map[uint64]bool
+	only    map[uint64]struct{} // allowed, in the shape microfts2.WithOnly takes (R3570)
 	empty   bool
 	verdict map[uint64]bool
 }
@@ -317,14 +320,17 @@ func (op *recallOp) resolveRecallScope(filterFiles, excludeFiles []string) recal
 		return recallScope{active: true, allowed: map[uint64]bool{}, empty: len(filterFiles) > 0, verdict: map[uint64]bool{}}
 	}
 	allowed := make(map[uint64]bool)
+	only := make(map[uint64]struct{})
 	for fileID, path := range paths {
 		if scopeAdmitsPath(path, filterFiles, excludeFiles) {
 			allowed[fileID] = true
+			only[fileID] = struct{}{}
 		}
 	}
 	return recallScope{
 		active:  true,
 		allowed: allowed,
+		only:    only,
 		empty:   len(filterFiles) > 0 && len(allowed) == 0,
 		verdict: make(map[uint64]bool),
 	}
@@ -360,13 +366,24 @@ func scopeAdmitsPath(path string, filterFiles, excludeFiles []string) bool {
 // rejected, since an unplaceable chunk cannot be shown to be in scope.
 // CRC: crc-Librarian.md | R3186
 func (s *recallScope) admits(op *recallOp, chunkID uint64) bool {
+	return s.admitsWith(chunkID, op.db.ChunkFileID)
+}
+
+// admitsIn is admits read through the caller's txn, for the meaning leg's
+// embedding walk, which already holds one (R3570).
+// CRC: crc-Librarian.md | R3186, R3570
+func (s *recallScope) admitsIn(op *recallOp, txn *bbolt.Tx, chunkID uint64) bool {
+	return s.admitsWith(chunkID, func(id uint64) (uint64, bool) { return op.db.chunkFileID(txn, id) })
+}
+
+func (s *recallScope) admitsWith(chunkID uint64, fileOf func(uint64) (uint64, bool)) bool {
 	if !s.active {
 		return true
 	}
 	if v, ok := s.verdict[chunkID]; ok {
 		return v
 	}
-	fileID, ok := op.db.ChunkFileID(chunkID)
+	fileID, ok := fileOf(chunkID)
 	v := ok && s.allowed[fileID]
 	s.verdict[chunkID] = v
 	return v
@@ -566,11 +583,16 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		}
 		inputQueries = append(inputQueries, iq)
 
-		// Vector-EC pass
+		// Vector-EC pass. A scoped walk skips out-of-scope chunks before
+		// scoring, so its top 50 come from within the scope (R3570).
 		if len(queryVec) > 0 {
-			scores, err := l.SearchChunks(queryVec, 50) // substrateInternalK = 50
+			req := AboutRequest{QueryVec: queryVec, K: 50} // substrateInternalK = 50
+			if scope.active {
+				req.Admit = func(txn *bbolt.Tx, chunkID uint64) bool { return scope.admitsIn(op, txn, chunkID) }
+			}
+			res, err := l.SearchChunksMulti([]AboutRequest{req})
 			if err == nil {
-				for _, cs := range scores {
+				for _, cs := range res[0].TopK {
 					if selfChunks[cs.ChunkID] {
 						continue
 					}
@@ -589,7 +611,12 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		// Trigram-EC pass: candidates from SearchFuzzy are re-scored as
 		// Jaccard(Tq, Tc) with a query-coverage floor. R2643, R2644
 		if queryText != "" && op.db.search != nil {
-			hits, err := op.db.SearchFuzzy(queryText, SearchOpts{K: 50})
+			fuzzyOpts := SearchOpts{K: 50}
+			if scope.active {
+				// R3570: search within the scope's files, not the corpus.
+				fuzzyOpts.SetExtraOpts(microfts2.WithOnly(scope.only))
+			}
+			hits, err := op.db.SearchFuzzy(queryText, fuzzyOpts)
 			if err == nil {
 				queryTris := queryTrigramSet(queryText)
 				for _, h := range hits {
@@ -656,14 +683,24 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 				scoredVals = append(scoredVals, tagValScore{ta.Tag, ta.Value, vec, tri, best})
 			}
 			sort.Slice(scoredVals, func(i, j int) bool { return scoredVals[i].best > scoredVals[j].best })
-			if len(scoredVals) > 50 { // tag-axis internal K, mirrors the content passes
-				scoredVals = scoredVals[:50]
-			}
+			// Tag-axis internal K, mirrors the content passes. A value counts
+			// toward it only if it reaches a chunk admission keeps, so a scoped
+			// hunt's 50 values are 50 that reach the scope (R3570).
+			taken := 0
 			for _, sv := range scoredVals {
+				if taken == 50 {
+					break
+				}
 				chunkIDs, cerr := l.db.store.TagValueChunks(sv.tag, sv.value)
 				if cerr != nil {
 					continue
 				}
+				if scope.active && !slices.ContainsFunc(chunkIDs, func(cid uint64) bool {
+					return !selfChunks[cid] && scope.admits(op, cid)
+				}) {
+					continue
+				}
+				taken++
 				for _, cid := range chunkIDs {
 					if selfChunks[cid] {
 						continue

@@ -519,6 +519,18 @@ outside the scope would return little or nothing while looking exactly like a
 hunt that found nothing. Admission-time filtering is the difference between a
 narrowed hunt and a silently truncated one.
 
+**Every search leg honors the scope before its own cut.** The substrate's legs
+(meaning, trigram, and the tag axis) each gather a capped candidate set before
+admission, so a leg that took a corpus-wide top-N and left the scope to
+admission would rebuild the rejected post-filter one level down. Each leg
+therefore applies the scope inside its own retrieval: the meaning leg skips
+out-of-scope chunks while it walks the embeddings, the trigram leg searches
+only the files the scope resolved to (the same set admission uses, so the
+globs are read once), and the tag axis counts only values that carry an
+in-scope chunk. Found 2026-10-24: a hunt scoped to six rulebooks
+seeded nothing, because identical copies of those books elsewhere in the corpus,
+and months of chat about them, filled every leg's cut.
+
 The scope governs **search candidates only**. Chunks the caller injects as
 conversation context (`RecallOpts.ConversationChunks`, the `--propose` path) are
 the caller's own material rather than search hits, and are never path-filtered.

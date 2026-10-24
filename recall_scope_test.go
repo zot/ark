@@ -4,6 +4,7 @@ package ark
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,6 +170,157 @@ func TestRecall_PathScopeFiltersAtAdmission(t *testing.T) {
 		if strings.HasPrefix(c.Path, dropDir) {
 			t.Errorf("excluded path %q survived the exclude glob", c.Path)
 		}
+	}
+}
+
+// scopeLegOutranked is how many out-of-scope candidates each per-leg test
+// plants: more than a leg's internal cap (50), so a leg that cut corpus-wide
+// before admission would have no room left for the in-scope one.
+const scopeLegOutranked = 60
+
+// scopeLegContains reports whether chunkID is among a Recall result's chunks.
+func scopeLegContains(res *RecallResult, chunkID uint64) bool {
+	for _, c := range res.Chunks {
+		if c.ChunkID == chunkID {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRecall_TrigramLegScopedBeforeItsCut: the in-scope chunk is outranked by
+// more out-of-scope chunks than the trigram leg keeps, so it seeds only if the
+// leg searches within the scope. An unscoped search of the leg proves the
+// fixture: its 50 do not include the in-scope chunk.
+// Refs: R3186, R3570
+func TestRecall_TrigramLegScopedBeforeItsCut(t *testing.T) {
+	l, db := setupRecall(t)
+	keepDir := filepath.Join(db.dbPath, "keep")
+	for _, d := range []string{keepDir, filepath.Join(db.dbPath, "drop")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range scopeLegOutranked {
+		indexLine(t, db, filepath.Join("drop", fmt.Sprintf("d%02d.txt", i)), fmt.Sprintf("apple banana cherry w%02d", i))
+	}
+	keep, _ := indexLine(t, db, filepath.Join("keep", "k.txt"), "apple banana delta")
+	const query = "apple banana cherry"
+
+	// The fixture check asks the leg itself: Recall's result is capped by its
+	// 2×2 allocation well below K, so an unscoped Recall cannot show the cut.
+	hits, err := db.SearchFuzzy(query, SearchOpts{K: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hits {
+		if strings.HasPrefix(h.Path, keepDir) {
+			t.Fatal("fixture invalid: the in-scope chunk is inside the trigram leg's unscoped 50, so this test cannot tell where the scope applies")
+		}
+	}
+	scoped, err := l.Recall([]ConnectionsInput{{Text: query}}, RecallOpts{K: 3, KeepTagless: true, FilterFiles: []string{keepDir + "/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scopeLegContains(scoped, keep) {
+		t.Fatalf("scoped recall returned %d chunks without the in-scope one: the trigram leg cut corpus-wide before the scope", len(scoped.Chunks))
+	}
+}
+
+// TestRecall_VectorLegScopedBeforeItsCut: as above for the meaning leg. The
+// in-scope chunk shares no text with the query, so only its embedding can
+// reach it, and more than 50 out-of-scope embeddings lie closer.
+// Refs: R3186, R3570
+func TestRecall_VectorLegScopedBeforeItsCut(t *testing.T) {
+	l, db := setupRecall(t)
+	keepDir := filepath.Join(db.dbPath, "keep")
+	for _, d := range []string{keepDir, filepath.Join(db.dbPath, "drop")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query, _ := indexLine(t, db, "query.txt", "what should we cook tonight")
+	if err := db.store.WriteChunkEmbedding(query, vecFrom(1, 0, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range scopeLegOutranked {
+		cid, _ := indexLine(t, db, filepath.Join("drop", fmt.Sprintf("d%02d.txt", i)), fmt.Sprintf("zzq%02d wibble", i))
+		if err := db.store.WriteChunkEmbedding(cid, vecFrom(1, 0.01, 0, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, _ := indexLine(t, db, filepath.Join("keep", "k.txt"), "xxj qqv flob")
+	if err := db.store.WriteChunkEmbedding(keep, vecFrom(1, 1, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixture check asks the leg itself, as in the trigram test.
+	top, err := l.SearchChunks(vecFrom(1, 0, 0, 0), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cs := range top {
+		if cs.ChunkID == keep {
+			t.Fatal("fixture invalid: the in-scope chunk is inside the meaning leg's unscoped 50, so this test cannot tell where the scope applies")
+		}
+	}
+	scoped, err := l.Recall([]ConnectionsInput{{ChunkID: query}}, RecallOpts{K: 3, KeepTagless: true, FilterFiles: []string{keepDir + "/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scopeLegContains(scoped, keep) {
+		t.Fatalf("scoped recall returned %d chunks without the in-scope one: the meaning leg cut corpus-wide before the scope", len(scoped.Chunks))
+	}
+}
+
+// TestRecall_TagAxisScopedBeforeItsCut: as above for the tag axis. The in-scope
+// chunk has no embedding and no shared text, so only its tag value reaches it,
+// and more than 50 out-of-scope values score higher.
+// Refs: R3186, R3570
+func TestRecall_TagAxisScopedBeforeItsCut(t *testing.T) {
+	l, db := setupRecall(t)
+	keepDir := filepath.Join(db.dbPath, "keep")
+	for _, d := range []string{keepDir, filepath.Join(db.dbPath, "drop")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query, _ := indexLine(t, db, "query.txt", "what should we cook tonight")
+	if err := db.store.WriteChunkEmbedding(query, vecFrom(0, 0, 1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	tagChunk := func(name, value string, vec []float32) uint64 {
+		t.Helper()
+		cid, _ := indexLine(t, db, name, "zzz qqq "+value)
+		if err := db.store.UpdateTagValues([]ChunkTagValues{
+			{ChunkID: cid, Values: []TagValue{{Tag: "cuisine", Value: value}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		tvid, ok := db.store.TvidMap().Lookup("cuisine", value)
+		if !ok {
+			t.Fatalf("tvid for cuisine:%s not allocated", value)
+		}
+		if err := db.store.WriteTagValueEmbedding(tvid, vec); err != nil {
+			t.Fatal(err)
+		}
+		return cid
+	}
+	for i := range scopeLegOutranked {
+		tagChunk(filepath.Join("drop", fmt.Sprintf("d%02d.txt", i)), fmt.Sprintf("v%02d", i), vecFrom(0, 0.01, 1, 0))
+	}
+	keep := tagChunk(filepath.Join("keep", "k.txt"), "kept", vecFrom(0, 1, 1, 0))
+
+	// No fixture check here: the tag axis has no door of its own short of
+	// re-implementing its scoring, and an unscoped Recall is capped by its 2×2
+	// allocation well below K, so it cannot show the cut. The in-scope value
+	// ranks below all 60 others by construction; the fire alarm is the proof.
+	scoped, err := l.Recall([]ConnectionsInput{{ChunkID: query}}, RecallOpts{K: 3, FilterFiles: []string{keepDir + "/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scopeLegContains(scoped, keep) {
+		t.Fatalf("scoped recall returned %d chunks without the in-scope one: the tag axis cut its values before the scope", len(scoped.Chunks))
 	}
 }
 

@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235, R1236, R1237, R1238, R1239, R1240, R1241, R1242, R1243, R1244, R1245, R1246, R1247, R1248, R1249, R1250, R1251, R1252, R1253, R1254, R1268, R1269, R1270, R1271, R1272, R1273, R1277, R1278, R1279, R1296, R1297, R1298, R1299, R1300, R1301, R1306, R1307, R1308, R1315, R1316, R1292, R1293, R1295, R1378, R1379, R1380, R1381, R1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1609, R1610, R1611, R1612, R1613, R1614, R1615, R1616, R1617, R1621, R1622, R1830, R1831, R1846, R1847, R1848, R1854, R1862, R1863, R1864, R1915, R1916, R1922, R1913, R1914, R1927, R1928, R1929, R1930, R1931, R2158, R2164, R2165, R2166, R2167, R2168, R2169, R2170, R2171, R2172, R2173, R2163, R2194, R2195, R2196, R2197, R2198, R2199, R2200, R2201, R2202, R2203, R2204, R2205, R2206, R2207, R2208, R2209, R2210, R2211, R2212, R2213, R2214, R2215, R2216, R2217, R2218, R2219, R2220, R2221, R2222, R2223, R2224, R2225, R2228, R2230, R2232, R2233, R2234, R2235, R2236, R2237, R2238, R2239, R2240, R2241, R2242, R2243, R2244, R2245, R2246, R2247, R2248, R2249, R2250, R2251, R2252, R2253, R2254, R2255, R2256, R2257, R2313, R2314, R2315, R2316, R2317, R2318, R2319, R2320, R2321, R2324, R2326, R2327, R2328, R2329, R2330, R2331, R2332, R2333, R2334, R2335, R2336, R2337, R2338, R2339, R2340, R2341, R2342, R2343, R2409, R2567, R2569, R2570, R2571, R2572, R2573, R2574, R2575, R2576, R2577, R2578, R2579, R2580, R2581, R2582, R2583, R2584, R2585, R2586, R2587, R2588, R2589, R2590, R2591, R2592, R2593, R2594, R2595, R2596, R2597, R2598, R2599, R2603, R2609, R2568, R2617, R2618, R2620, R2621, R2622, R2623, R2624, R2625, R2626, R2629, R2634, R2639, R2640, R2641, R1604, R1608, R2642, R2643, R2644, R2655, R2656, R2657, R2658, R2659, R2660, R2662, R2647, R2667, R2668, R2670, R2671, R2672, R2673, R2674, R2676, R2677, R2681, R2684, R2685, R2686, R2742, R2743, R2905, R2906, R2907, R2908, R2909, R2910, R2911, R2912, R2913, R2961, R2962, R2963, R2964, R2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079, R3080, R3081, R3082, R3163, R3164, R3165, R3185, R3186, R3187, R3192, R3195, R3415, R3414
+**Requirements:** R1235-1254, R1268-1273, R1277-1279, R1292, R1293, R1295-1301, R1306-1308, R1315, R1316, R1378-1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1604, R1608-1617, R1621, R1622, R1830, R1831, R1846-1848, R1854, R1862-1864, R1913-1916, R1922, R1927-1931, R2158, R2163-2173, R2194-2225, R2228, R2230, R2232-2257, R2313-2321, R2324, R2326-2343, R2409, R2567-2599, R2603, R2609, R2617, R2618, R2620-2626, R2629, R2634, R2639-2644, R2647, R2655-2660, R2662, R2667, R2668, R2670-2674, R2676, R2677, R2681, R2684-2686, R2742, R2743, R2905-2913, R2961-2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079-3082, R3163-3165, R3185-3187, R3192, R3195, R3414, R3415, R3570
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -120,7 +120,10 @@ loads on first embedding query and stays warm until TTL expiry.
   the walk, every surviving chunk's FileID is resolved via
   fts.ReadCRecord inside one shared txn. Result slice is
   index-parallel to reqs. Skips EC records whose dimension does
-  not match the query. (R1928, R1929, R1930)
+  not match the query. A request's optional `Admit(txn, chunkID)`
+  gates each chunk before it is scored, read through the walk's own
+  txn (a second read txn mid-walk can deadlock against a remap), so
+  the heap fills from admitted chunks only. (R1928, R1929, R1930, R3570)
 - SuggestTagNames(chunkID, k) ([]TagSuggestion, error):
   one View txn. Read EC[chunkID]; if absent or model not
   available, return (nil, nil). Walk the ED prefix once;
@@ -334,6 +337,16 @@ loads on first embedding query and stays warm until TTL expiry.
   identical to a hunt that genuinely found nothing (R3186).
   Injected conversation chunks (`opts.ConversationChunks`, R3082) bypass
   the scope: they are the caller's own context, not search hits (R3187).
+  **Each leg honors the scope before its own cut (R3570)**, since every
+  leg caps its candidates at 50 before admission and a corpus-wide cap
+  would rebuild the post-filter one level down: the meaning leg passes
+  `AboutRequest.Admit` (the same verdict via `admitsIn`, reading through
+  the walk's txn); the trigram leg passes `microfts2.WithOnly` over the
+  scope's resolved file set (`recallScope.only`, the same set admission
+  uses, so the globs are read once); the tag axis counts a value toward
+  its 50 only when one of its chunks is admitted. The trigram leg is
+  correct only as far as microfts2 applies `WithOnly` before its own
+  top-k (O228).
   When positive globs were supplied and the resolved set is **empty**,
   `RecallResult.ScopeEmpty` reports it so the caller can distinguish a
   wrong glob from an empty corpus (R3188) — the substrate states the

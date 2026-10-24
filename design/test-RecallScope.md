@@ -41,6 +41,57 @@ checked in the same test.
 a single chunk owned by the first file indexed, which silently defeats the
 fixture.
 
+**Limit:** with three out-of-scope files the fixture sits far inside every
+leg's internal cap (50), so it cannot see a leg that cuts corpus-wide before
+admission. The three per-leg tests below cover that (R3570).
+
+## Test: trigram leg scoped before its cut
+**Purpose:** the trigram leg searches within the scope rather than taking a
+corpus-wide 50 and leaving the scope to admission (R3186, R3570)
+**Input:** 60 out-of-scope files carrying the whole query, one in-scope file
+carrying less of it; text input (no embeddings reach the trigram leg)
+**Expected:** the leg's own unscoped search (`SearchFuzzy`, K 50) does not
+reach the in-scope chunk (the fixture check); scoped Recall with `K:3` returns it
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** drop the `WithOnly` option from the trigram leg; red reads
+"the trigram leg cut corpus-wide before the scope". (Red from below until
+microfts2 restricted before its own top-k, O228.)
+**Inject:** recall.go:Recall
+**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+
+## Test: meaning leg scoped before its cut
+**Purpose:** the embedding walk skips out-of-scope chunks before scoring, so its
+top 50 come from within the scope (R3186, R3570)
+**Input:** a query chunk with a planted vector; 60 out-of-scope chunks whose
+vectors lie closer to it than the in-scope chunk's; no shared text, so only the
+meaning leg can reach the in-scope chunk
+**Expected:** the leg's own unscoped walk (`SearchChunks`, K 50) does not reach
+the in-scope chunk (the fixture check); scoped Recall with `K:3` returns it
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** stop setting `AboutRequest.Admit` on the scoped walk; red reads
+"the meaning leg cut corpus-wide before the scope"
+**Inject:** recall.go:Recall
+**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+
+## Test: tag axis scoped before its cut
+**Purpose:** a tag value counts toward the axis's 50 only when it reaches an
+in-scope chunk (R3186, R3570)
+**Input:** a query chunk with a planted vector; 60 out-of-scope chunks each
+carrying its own tag value whose EV lies closer than the in-scope chunk's value;
+the in-scope chunk has no embedding and no shared text
+**Expected:** scoped Recall with `K:3` returns the in-scope chunk. There is no
+fixture check: the axis has no door of its own, and an unscoped Recall is capped
+by its 2×2 allocation (about 4 × per-cell, whatever K asks), so it cannot show
+the cut. The value ranks below all 60 by construction, and the alarm is the proof
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** drop the in-scope check from the value loop, so every value
+counts toward the 50; red reads "the tag axis cut its values before the scope"
+**Inject:** recall.go:Recall
+**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+
 ## Test: ScopeEmpty reports a wrong glob
 **Purpose:** separate "your scope matched nothing" from "the corpus has
 nothing" — both return zero chunks, so nothing else distinguishes them (R3188)

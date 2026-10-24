@@ -561,10 +561,15 @@ func (h *chunkScoreHeap) Pop() any {
 // AboutRequest is one query in a multi-query EC walk. There is one
 // shape — top-K — because empirically a cosine-threshold reducer is
 // no-op against the nomic embedding distribution.
-// CRC: crc-Librarian.md | R1928
+// CRC: crc-Librarian.md | R1928, R3570
 type AboutRequest struct {
 	QueryVec []float32
 	K        int
+	// Admit, when set, gates each chunk before it is scored, so the top-K is
+	// taken from the admitted chunks rather than trimmed to them afterwards. It
+	// reads through the walk's own txn: opening another read txn mid-walk can
+	// deadlock against a writer waiting to remap.
+	Admit func(txn *bbolt.Tx, chunkID uint64) bool
 }
 
 // AboutResult is the per-request top-K reduction. Index-parallel to
@@ -630,6 +635,9 @@ func (l *Librarian) SearchChunksMulti(reqs []AboutRequest) ([]AboutResult, error
 		}
 		for i, r := range reqs {
 			if queryNorms[i] == 0 || r.K <= 0 {
+				continue
+			}
+			if r.Admit != nil && !r.Admit(txn, chunkID) { // R3570
 				continue
 			}
 			score := cosineFromBytes(raw, r.QueryVec, queryNorms[i])
