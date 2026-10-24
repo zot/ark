@@ -952,6 +952,11 @@
 - **R487:** `--wrap <name>` wraps output in XML tags, consistent with `ark search` and `ark fetch`
 - **R488:** (inferred) Range labels are opaque — the exact string from search results is passed through to `GetChunks`
 
+### A stale chunk
+- **R3571:** A chunk the file's current chunker no longer produces is reported by retrieval as **missing** (its range and position kept, its text unavailable), and wherever ark reads a chunk from its file a missing chunk is absent: neither its content nor its stored attributes are used — not matched against an anchor, not measured for chunk statistics, not used to suggest a locator or to place a verse reference, not returned as a chunk's attributes, not used for a PDF overlay
+- **R3572:** A reader is shown the stale-chunk placeholder where a missing chunk would be — "This chunk's text is unavailable: the file was indexed under older chunking rules. `ark refresh --force PATH` re-chunks it." — one text shared by every display; `ark chunks` JSONL carries `"missing": true` with empty `content` and no `attrs`, and its `--wrap` element holds the placeholder
+- **R3573:** A search or recall hit whose chunk text comes back unavailable when its text is filled is dropped, not returned with empty text
+
 ## Feature: Parallel Indexing
 **Source:** specs/parallel-indexing.md
 
@@ -2510,6 +2515,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1512:** Each role group has a left border in a role-specific theme color: `--term-text-dim` for human, `--term-accent-bright` for assistant, `--term-border` for skill. The border runs the full height of the group.
 - **R1513:** In single-chunk views (`range=` parameter), the chunk renders with the role's left border color and a small icon but no sticky header and no grouping.
 
+### Stale chunks
+- **R3574:** In the full-file content view a missing chunk (R3571) keeps its `ark-chunk` div, holding the stale-chunk placeholder (R3572) instead of text; a single-chunk view of a missing chunk shows the placeholder rather than falling back to the whole file (R1425 still governs a range the file never had); a PDF page view draws no overlay for a missing chunk (tag, heading, ext-tag or curate region), since its rectangles are stale
+
 ## Feature: chunk-stats
 **Source:** specs/chunk-stats.md
 
@@ -2717,6 +2725,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **~~R1621:~~** (Retired T147 — see R1792) `ark embed --bench chunks` accepts `--parallel N` to set sequences per batch (default 8).
 - **~~R1622:~~** (Retired T148 — see R1792) Bench output reports context size, parallel count, tokens/seq, batch vs single throughput, skip rate, and chunk size distribution (min/max/avg).
+
+### Stale chunks
+- **R3575:** The batch embedding pass skips a missing chunk (R3571) and counts it in its summary; it writes no EC record for it, not even the empty all-tag record (R3004), so each pass queues it again until the file is re-chunked
 
 ## Feature: PDF Chunker
 **Source:** specs/pdf-chunker.md

@@ -498,7 +498,11 @@ for fuller context.
 | `-anchor`    | `false` | Switch to anchor mode: print the opinionated `@ext` target (address) |
 
 Default mode emits JSONL (one chunk per line, fields: path, range,
-score, content). Status mode is right-aligned text.
+content, index, and attrs when the chunk has any). A stale chunk, one the
+file's current chunker no longer produces, carries `"missing": true` with
+empty content and no attrs; under `-wrap` its element holds the stale-chunk
+placeholder instead (chunk-context.md, "A stale chunk"). Status mode is
+right-aligned text.
 
 Anchor mode (`-anchor`) prints a single line — the opinionated, durable
 `@ext` TARGET string for the chunk (`%uuid`, `/path:1-5`,

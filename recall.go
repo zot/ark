@@ -845,6 +845,18 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 	recalled := make([]RecalledChunk, 0, len(surfaced))
 	for _, sc := range surfaced {
 		acc := sc.cand.acc
+		// R3573: a surfaced chunk whose content was asked for and cannot be
+		// read (stale, or its file gone) is dropped, not returned empty.
+		var content string
+		if opts.IncludeContent {
+			if sc.cand.content != "" {
+				content = sc.cand.content // pre-resolved chat sub-chunk text (R2910)
+			} else if txt, ok := cache.ChunkText(sc.cand.path, sc.cand.rangeID); ok {
+				content = string(txt)
+			} else {
+				continue
+			}
+		}
 		// Reuse the cached tag lookup from admit when present
 		// (KeepTagless=false path); otherwise query now. R2647
 		allTags := acc.tags
@@ -857,15 +869,6 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 				Tag:   tv.Tag,
 				Value: tv.Value,
 			})
-		}
-
-		var content string
-		if opts.IncludeContent {
-			if sc.cand.content != "" {
-				content = sc.cand.content // pre-resolved chat sub-chunk text (R2910)
-			} else if txt, ok := cache.ChunkText(sc.cand.path, sc.cand.rangeID); ok {
-				content = string(txt)
-			}
 		}
 
 		recalled = append(recalled, RecalledChunk{

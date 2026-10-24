@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46, R47, R48, R49, R50, R51, R52, R53, R54, R55, R56, R57, R58, R59, R60, R108, R109, R110, R111, R112, R113, R114, R115, R116, R183, R184, R185, R186, R188, R189, R190, R192, R193, R215, R216, R217, R218, R219, R220, R221, R222, R223, R224, R225, R226, R227, R228, R372, R373, R374, R375, R403, R404, R405, R406, R407, R408, R409, R512, R513, R514, R515, R516, R572, R574, R575, R576, R577, R578, R585, R586, R587, R588, R589, R593, R594, R595, R596, R597, R598, R599, R600, R601, R602, R603, R604, R652, R653, R672, R673, R683, R684, R697, R698, R699, R700, R738, R744, R745, R746, R747, R750, R939, R940, R1094, R1095, R1096, R1097, R1139, R1140, R1141, R1230, R1395, R1396, R1397, R1398, R1399, R1400, R1401, R1470, R1471, R1703, R1704, R1705, R1706, R1707, R1708, R1783, R1784, R1785, R1787, R1867, R1868, R1869, R1870, R1871, R1872, R1915, R1916, R1917, R1918, R1921, R1922, R1932, R1933, R1934, R1935, R1939, R2128, R2433, R2434, R2453, R2454, R2455, R2456, R950, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3377, R3359, R3362, R3400, R3401, R3402
+**Requirements:** R46-60, R108-116, R183-186, R188-190, R192, R193, R215-228, R372-375, R403-409, R512-516, R572, R574-578, R585-589, R593-604, R652, R653, R672, R673, R683, R684, R697-700, R738, R744-747, R750, R939, R940, R950, R1094-1097, R1139-1141, R1230, R1395-1401, R1470, R1471, R1703-1708, R1783-1785, R1787, R1867-1872, R1915-1918, R1921, R1922, R1932-1935, R1939, R2128, R2433, R2434, R2453-2456, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3359, R3362, R3377, R3400-3402, R3571, R3573
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -84,6 +84,8 @@ Optionally retrieves chunk text or full file content.
   (existing behavior). If non-nil, uses the provided cache (session
   path). Calls ChunkText per result. The chunker handles
   format-specific extraction (e.g. chat-jsonl text extraction).
+  A result whose ChunkText is unavailable is dropped, not kept with empty
+  text (R3573); the PDF attrs fill skips a missing chunk (R3571).
 - FillFiles(results): deduplicate results by fileid, read full file
   content for each unique file. Best chunk score becomes file score.
 - SearchLikeFile(path, opts): read file content, use as FTS query

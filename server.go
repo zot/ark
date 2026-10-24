@@ -4476,6 +4476,15 @@ func (srv *Server) handleContentFetch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// staleChunkHTML is the stale-chunk placeholder as an ark-chunk body: the
+// same text as StaleChunkPlaceholder, with the command set in <code>.
+// CRC: crc-Server.md | R3572
+func staleChunkHTML(path string) string {
+	return `<p class="ark-stale-chunk"><em>` + template.HTMLEscapeString(staleChunkLead) +
+		` <code>` + template.HTMLEscapeString(staleChunkCommand(path)) + `</code> ` +
+		template.HTMLEscapeString(staleChunkTail) + `</em></p>`
+}
+
 // writeArkChunkOpen writes the opening tag of a chunk div with range,
 // chunkID, and fileID data attributes for the curate-button inline JS.
 // chunkID == 0 emits an empty attribute (the inline JS treats those
@@ -4508,9 +4517,12 @@ type contentRender struct {
 	data       []byte
 	rangeParam string
 	isChunk    bool
-	strategy   string
-	fileID     uint64
-	shell      contentShellData
+	// stale: the `?range=` chunk is in the index but its file's current
+	// chunker no longer produces it, so the view shows the placeholder (R3574).
+	stale    bool
+	strategy string
+	fileID   uint64
+	shell    contentShellData
 
 	// isBible selects the verse-aware XHTML render (R3181). Bible files take
 	// the markdown template like any other content; only the per-chunk render
@@ -4584,6 +4596,12 @@ func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *
 		if chunkData != nil {
 			cr.data = chunkData
 			cr.isChunk = true
+		} else if missing, _ := Sync(srv.db, func(db *DB) (bool, error) {
+			return db.ChunkMissing(path, cr.rangeParam), nil
+		}); missing {
+			// R3574: a stale chunk is shown as the placeholder, not the file.
+			cr.isChunk = true
+			cr.stale = true
 		}
 		// R1425: if range invalid, fall back to full file (data unchanged)
 	}
@@ -4683,7 +4701,10 @@ func (cr *contentRender) markdownBody() string {
 		// Rendered before chunkDiv, not inline in the call: the bible path
 		// populates extOverride for this chunk as a side effect, and chunkDiv
 		// reads it.
-		body := cr.markdownChunk(cr.data, cr.rangeParam, cid)
+		body := staleChunkHTML(cr.path) // R3574
+		if !cr.stale {
+			body = cr.markdownChunk(cr.data, cr.rangeParam, cid)
+		}
 		cr.chunkDiv(&buf, cr.rangeParam, cid, body)
 		return buf.String()
 	}
@@ -4697,7 +4718,10 @@ func (cr *contentRender) markdownBody() string {
 	chunkIDs := cr.rdb.ChunkIDsForPath(cr.path)
 	for i, ch := range chunks {
 		cid := chunkIDAt(chunkIDs, i)
-		body := cr.markdownChunk([]byte(ch.Content), ch.Range, cid)
+		body := staleChunkHTML(cr.path) // R3572
+		if !ch.Missing {
+			body = cr.markdownChunk([]byte(ch.Content), ch.Range, cid)
+		}
 		cr.chunkDiv(&buf, ch.Range, cid, body)
 	}
 	return buf.String()
@@ -4830,6 +4854,12 @@ func (cr *contentRender) chunkedBody(chunks []microfts2.ChunkResult) string {
 	// non-empty role, so it doubles as the "a group is open" flag.
 	prevRole := ""
 	for i, ch := range chunks {
+		if ch.Missing {
+			// R3572: the placeholder, inside whatever role group is open;
+			// its stored role attr is stale, so it neither opens nor closes one.
+			cr.chunkDiv(&buf, ch.Range, chunkIDAt(chunkIDs, i), staleChunkHTML(cr.path))
+			continue
+		}
 		var rendered string
 		if useMarkdown {
 			rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), cr.path), cr.rdb)
@@ -4867,6 +4897,8 @@ func (cr *contentRender) chunkedBody(chunks []microfts2.ChunkResult) string {
 func (cr *contentRender) unchunkedBody() string {
 	var body string
 	switch {
+	case cr.stale:
+		body = staleChunkHTML(cr.path) // R3574
 	case cr.strategy == "chat-jsonl":
 		body = wrapTagElements(renderMarkdownForContent(cr.data, cr.path), cr.rdb)
 	case cr.strategy == "pdf" && cr.isChunk:

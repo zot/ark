@@ -149,6 +149,31 @@ or `--files` (JSONL per file, deduplicated). This enables the
 permission end-run: indexed content emitted without per-file prompts.
 Content is read from disk at query time using offsets from microfts2.
 
+### Stale Chunks (R3571-R3575)
+A chunk the file's current chunker no longer produces comes back from
+microfts2 `GetChunks` with `Missing` set: range and index kept, `Content`
+empty, stored `Attrs` still attached. Ark ignores those Attrs as well as
+the text. The check costs nothing only where a caller already re-chunks the
+file, so it is made there and nowhere else:
+- **Read as absent** (R3571): `DB.chunkContent` (UUID anchor filter) answers
+  not-found; the ext string/regex anchor walk, `ChunkStats`,
+  `SuggestExtLocator` (a missing target is an error naming the stale file)
+  and `chunkForVerse` skip it; `ChunkAttrs` returns nil; the search PDF
+  attrs fill sets none.
+- **Shown as the placeholder** (R3572, R3574): `StaleChunkPlaceholder(path)`
+  is the one text. The content view's chunk loops, the single-chunk view
+  (which checks `DB.ChunkMissing` before its R1425 whole-file fallback),
+  and `ark chunks --wrap` use it; `ark chunks` JSONL carries microfts2's
+  `"missing": true`, its attrs cleared by `FetchChunkContent`. `renderPdfChunksByPage` instead skips a missing
+  chunk: no overlay, since its rects are stale and the page shows the file.
+- **Dropped** (R3573): `Searcher.FillChunksUsing` and Recall's result build
+  (when content is requested) drop a hit whose `ChunkText` is unavailable.
+- **Not embedded** (R3575): `BatchEmbedChunks` skips and counts it, with no
+  EC record, so it is re-queued until the file is re-chunked.
+
+What only the index holds (V records, EC vectors, trigram postings) is not
+checked; those clear when the file is re-chunked.
+
 ### Embedded UI Engine
 Frictionless runs in-process via the `flib` facade package
 (`github.com/zot/frictionless/flib`), which wraps the ui-engine.
@@ -417,6 +442,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-FindConnectionsSubstrate.md → `connections_substrate_test.go`
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-RecallScope.md → `recall_scope_test.go`
+- [x] test-StaleChunk.md → `stale_chunk_test.go`, `cmd/ark/chunks_stale_test.go`
 - [x] test-OffActorReads.md → `contentview_race_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [ ] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`

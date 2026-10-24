@@ -2128,6 +2128,37 @@ func (l *Librarian) createTierCtx(tier EmbedTier) (*embedContext, error) {
 	})
 }
 
+// embedChunkKind is what the batch embedding pass does with one chunk.
+type embedChunkKind int
+
+const (
+	embedChunkText    embedChunkKind = iota // embed the returned text
+	embedChunkTagOnly                       // all-@tag: record the nil sentinel EC
+	embedChunkStale                         // missing: no record, stays queued
+)
+
+// embedChunkAction decides one chunk's fate in the embedding pass.
+//
+// R2913: the meaning axis is tag-free, so ark tags are stripped before
+// embedding (every text strategy, pdf included: a pdf chunk's content is
+// extracted text); retrieval and the trigram index keep the original content.
+// R3004: an all-@tag chunk strips to empty and has no meaning vector; a nil
+// sentinel EC lets the queue check (R1846) treat it as handled, so it isn't
+// re-queued every reconcile (the tag axis carries it).
+// R3575: a missing chunk is not all-@tag, just unknown, so it gets no
+// sentinel and is queued again until its file is re-chunked.
+// CRC: crc-Librarian.md | R2913, R3004, R3575
+func embedChunkAction(ch microfts2.ChunkResult, strategy string) (string, embedChunkKind) {
+	if ch.Missing {
+		return "", embedChunkStale
+	}
+	stripped := string(stripArkTags([]byte(ch.Content), strategy))
+	if stripped == "" {
+		return "", embedChunkTagOnly
+	}
+	return stripped, embedChunkText
+}
+
 // BatchEmbedChunks embeds all chunks missing EC records, using tier
 // contexts for adaptive batching. Called post-reconcile after BatchEmbed.
 // chunkid is the embedding key; chunkids arrive via the indexed
@@ -2298,6 +2329,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 
 	var totalEmbedded int
 	var totalEmptyStripped int // R3004: all-@tag chunks sentineled in Pass 2
+	var totalStale int         // R3575: missing chunks skipped, left queued
 	for tierIdx, refs := range tierRefs {
 		if len(refs) == 0 {
 			continue
@@ -2341,35 +2373,28 @@ func (l *Librarian) BatchEmbedChunks() error {
 					}
 					cachedFileID = ref.fileID
 				}
-				if ref.chunkIdx < len(cachedChunks) {
-					// R2913: the meaning axis is tag-free — strip ark tags
-					// before embedding (every text strategy, pdf included: a
-					// pdf chunk's content is extracted text). An all-@tag chunk
-					// strips to empty and is skipped (the tag axis carries it);
-					// retrieval and the trigram index keep the original content.
-					stripped := string(stripArkTags([]byte(cachedChunks[ref.chunkIdx].Content), cachedStrategy))
+				if ref.chunkIdx >= len(cachedChunks) {
+					continue
+				}
+				switch text, action := embedChunkAction(cachedChunks[ref.chunkIdx], cachedStrategy); action {
+				case embedChunkText:
 					// CRC: crc-Librarian.md | R2992
 					// NUL bytes abort the embedding tokenizer; tokenizeText
 					// replaces them with spaces before tokenizing. Name the
 					// offending chunk here (we have the path/id) so a malformed
 					// source file can be found — NULs seen so far originate
 					// upstream in PDF text extraction (pdftext).
-					if strings.IndexByte(stripped, 0) >= 0 {
+					if strings.IndexByte(text, 0) >= 0 {
 						log.Printf("chunk embed: NUL byte(s) in %s (chunkID=%d) — replaced with spaces before embedding", ref.path, ref.chunkID)
 					}
-					if stripped != "" {
-						texts = append(texts, stripped)
-						valid = append(valid, ref)
-					} else {
-						// R3004: an all-@tag chunk strips to empty and has no
-						// meaning vector. Record a nil sentinel EC so the queue
-						// check (R1846) treats it as handled and it isn't
-						// re-queued every reconcile (the tag axis carries it).
-						// Stored on the actor after this batch's scan (R3415).
-						// CRC: crc-Librarian.md | R3004
-						tagOnlySentinels = append(tagOnlySentinels, ref.chunkID)
-						totalEmptyStripped++
-					}
+					texts = append(texts, text)
+					valid = append(valid, ref)
+				case embedChunkTagOnly:
+					// Stored on the actor after this batch's scan (R3415).
+					tagOnlySentinels = append(tagOnlySentinels, ref.chunkID)
+					totalEmptyStripped++
+				case embedChunkStale:
+					totalStale++
 				}
 			}
 			// Store this batch's tag-only sentinels on the actor. Done before
@@ -2452,8 +2477,8 @@ func (l *Librarian) BatchEmbedChunks() error {
 		})
 	}
 
-	if totalEmbedded > 0 || totalSkipped > 0 || totalDeduped > 0 || totalEmptyStripped > 0 { // R1864, R3004
-		log.Printf("librarian: chunk embed: %d embedded, %d skipped, %d deduped, %d tag-only", totalEmbedded, totalSkipped, totalDeduped, totalEmptyStripped)
+	if totalEmbedded > 0 || totalSkipped > 0 || totalDeduped > 0 || totalEmptyStripped > 0 || totalStale > 0 { // R1864, R3004, R3575
+		log.Printf("librarian: chunk embed: %d embedded, %d skipped, %d deduped, %d tag-only, %d stale (file needs re-chunking)", totalEmbedded, totalSkipped, totalDeduped, totalEmptyStripped, totalStale)
 	}
 	return nil
 }

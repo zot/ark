@@ -2501,7 +2501,7 @@ type ChunkFetchResult struct {
 // path:range. Shared by the CLI local arm and POST /chunks. R2998
 // R486: the target file must be indexed — ChunkInfo/GetChunks return an
 // error when it is not in the database, propagated to the caller here.
-// CRC: crc-DB.md | R486, R2998
+// CRC: crc-DB.md | R486, R2998, R3572
 func (db *DB) FetchChunkContent(path, rng, anchor string, before, after int) (ChunkFetchResult, error) {
 	if anchor != "" {
 		text, ok := db.ChatSubchunk(path, rng, anchor)
@@ -2522,6 +2522,11 @@ func (db *DB) FetchChunkContent(path, rng, anchor string, before, after int) (Ch
 	chunks, err := db.GetChunks(path, rng, before, after)
 	if err != nil {
 		return ChunkFetchResult{}, err
+	}
+	for i := range chunks {
+		if chunks[i].Missing {
+			chunks[i].Attrs = nil // R3572: as stale as its text
+		}
 	}
 	return ChunkFetchResult{Chunks: chunks}, nil
 }
@@ -2834,6 +2839,9 @@ func (db *DB) resolveExtFilePath(parts ExtTargetParts) ExtResolution {
 		if i >= len(info.Chunks) {
 			break
 		}
+		if c.Missing { // R3571: an empty stale chunk must not match ^$
+			continue
+		}
 		if anchorMatches(c.Content, parts.AnchorKind, parts.AnchorText, pattern) {
 			res.Chunks = append(res.Chunks, info.Chunks[i].ChunkID)
 		}
@@ -2894,7 +2902,7 @@ func (db *DB) chunkContent(chunkID uint64) (string, bool) {
 			continue
 		}
 		results, err := db.fts.GetChunks(path, c.Location, 0, 0)
-		if err != nil || len(results) == 0 {
+		if err != nil || len(results) == 0 || results[0].Missing { // R3571
 			return "", false
 		}
 		return results[0].Content, true
@@ -4024,9 +4032,12 @@ func (db *DB) ChunkStats(filterFiles, excludeFiles []string, sizeFn func(string)
 			if chunks == nil {
 				continue
 			}
-			sizes = make([]int, len(chunks))
-			for i, c := range chunks {
-				sizes[i] = sizeFn(c.Content)
+			sizes = make([]int, 0, len(chunks))
+			for _, c := range chunks {
+				if c.Missing { // R3571: unknown size, not size 0
+					continue
+				}
+				sizes = append(sizes, sizeFn(c.Content))
 			}
 		}
 		allSizes = append(allSizes, sizes...)
@@ -4818,15 +4829,47 @@ func (db *DB) FileStrategy(path string) string {
 }
 
 // ChunkAttrs returns the attrs slice for a single chunk. Uses a fresh
-// ChunkCache (same as ChunkText). Returns nil on lookup failure.
-// CRC: crc-DB.md | R1705
+// ChunkCache (same as ChunkText). Returns nil on lookup failure, and for a
+// missing chunk, whose stored attrs are as stale as its text.
+// CRC: crc-DB.md | R1705, R3571
 func (db *DB) ChunkAttrs(path, rangeLabel string) []microfts2.Pair {
 	cache := db.fts.NewChunkCache()
 	chunks, err := cache.GetChunks(path, rangeLabel, 0, 0)
-	if err != nil || len(chunks) == 0 {
+	if err != nil || len(chunks) == 0 || chunks[0].Missing {
 		return nil
 	}
 	return chunks[0].Attrs
+}
+
+// ChunkMissing reports whether the chunk at path:rangeLabel is in the index
+// but no longer produced by the file's current chunker. A failed ChunkText
+// cannot tell that from a range the file never had; this can.
+// CRC: crc-DB.md | R3574
+func (db *DB) ChunkMissing(path, rangeLabel string) bool {
+	chunks, err := db.fts.NewChunkCache().GetChunks(path, rangeLabel, 0, 0)
+	return err == nil && len(chunks) == 1 && chunks[0].Missing
+}
+
+// The stale-chunk placeholder, in parts so the HTML form can set the command
+// in <code> and still say the same thing. R3572
+const (
+	staleChunkLead = "This chunk's text is unavailable: the file was indexed under older chunking rules."
+	staleChunkTail = "re-chunks it."
+)
+
+// staleChunkCommand is the command that repairs path, quoted for a shell
+// when the path needs it.
+func staleChunkCommand(path string) string {
+	if strings.ContainsAny(path, " '\"$`\\") {
+		path = "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+	}
+	return "ark refresh --force " + path
+}
+
+// StaleChunkPlaceholder is what a reader sees where a missing chunk would be.
+// CRC: crc-DB.md | R3572
+func StaleChunkPlaceholder(path string) string {
+	return staleChunkLead + " `" + staleChunkCommand(path) + "` " + staleChunkTail
 }
 
 // ChunkText resolves a chunk range label to its text content.
@@ -5722,6 +5765,9 @@ func (db *DB) chunkForVerse(path string, info microfts2.FRecord, chapter, verse 
 	for i, c := range db.AllChunks(path) {
 		if i >= len(info.Chunks) {
 			break
+		}
+		if c.Missing { // R3571: its chapter/verses attrs are stale
+			continue
 		}
 		if ch, ok := microfts2.PairGet(c.Attrs, "chapter"); !ok || string(ch) != want {
 			continue

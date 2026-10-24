@@ -86,6 +86,16 @@ running the appropriate chunker (determined by the file's strategy).
 If the file has no chunks (ChunkCache returns empty), fall back to
 the raw `<pre>` rendering.
 
+A stale chunk (one the current chunker no longer produces; see
+[chunk-context.md](chunk-context.md#a-stale-chunk)) still gets its
+`ark-chunk` div, holding the stale-chunk placeholder instead of text.
+A single-chunk view of a stale chunk shows the placeholder too, rather
+than falling back to the whole file as it does for a range the file
+never had.
+A PDF's page view draws no overlay for a stale chunk (no tag, heading,
+ext-tag or curate region): its stored rectangles are stale, and the page
+itself already shows the file as it now is.
+
 ## Chat-JSONL Role Rendering
 
 JSONL conversation files have a natural structure: alternating

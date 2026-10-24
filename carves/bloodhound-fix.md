@@ -42,7 +42,7 @@ Opened by Bill, 2026-10-22.
 - [ ] **Item 11 — a chunker version stamp.** **OPEN (not queued.)** A file
       chunked under older rules is stale, so a rule change re-chunks itself.
       `/mini-spec`. See Item 11.
-- [ ] **Item 12 — retrieval after a chunker rule change shows the wrong chunk.** **OPEN (#161.)**
+- [x] ~~**Item 12 — retrieval after a chunker rule change shows the wrong chunk.**~~ **LANDED (2026-10-24 — `#161`.)**
       Measured 2026-10-23. microfts2's half landed 2026-10-24 (`GetChunks` matches by
       range and reports a stale chunk `Missing`); #161 is ark's half. See Item 12.
 - [ ] **Item 13 — a file added mid-session has no embeddings until the next
@@ -376,6 +376,17 @@ version it was chunked with, and a file chunked under an older version counts as
 stale, so the ordinary refresh re-chunks it through the reindex path, keeping
 every unchanged chunk's id and embedding. Costs a field in the file record and a
 migration. Filed by Bill, 2026-10-23, after choosing the forced refresh for now.
+
+It is also the other half of #161 (Bill, 2026-10-24). A stale chunk should be
+treated as missing in everything associated with it, but ark can tell a chunk
+is stale only by re-chunking its file. #161 covers every path that already
+re-chunks: display, anchors, the locator, verse references, statistics, the
+embedding pass, and search and recall hits, which are dropped. What only the
+index holds is left: the stale chunk's tag values, its vector (possibly a
+neighbor's text, from the old positional `GetChunks`), its trigram postings,
+and its recall, cooldown and pin records. These can still affect ranking. This
+item removes them at the source, by re-chunking the file, instead of filtering
+them at every reader.
 
 ## Item 12
 

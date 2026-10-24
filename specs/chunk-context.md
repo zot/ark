@@ -35,8 +35,42 @@ JSONL, one object per line. Each object has:
 - `range` — chunk's range label
 - `content` — chunk text
 - `index` — 0-based position in the file's chunk list
+- `attrs` — the chunk's attributes, when it has any
+- `missing` — present and true when the chunk is stale (below); `content`
+  is then empty and `attrs` absent
 
-Chunks in positional order (ascending index).
+Chunks in positional order (ascending index). With `--wrap`, a stale
+chunk's element holds the placeholder text instead of its content.
+
+## A stale chunk
+
+A chunk can be in the index while the file's current chunker no longer
+produces it: the chunking rules changed after the file was indexed.
+Retrieval reports such a chunk as **missing**. It keeps its place in the
+file's chunk list (its range and position), but its text is unavailable.
+
+Wherever ark reads a chunk from its file, a missing chunk is absent. Its
+content and its stored attributes are not used: not matched against an
+anchor, not measured, not embedded, not used to place a reference, not
+used to draw a PDF overlay. The attributes were recorded for a chunk the
+file no longer has, so they are as stale as its text. A search or recall
+hit whose text comes back unavailable is dropped, not returned empty.
+
+What only the index holds about a missing chunk (its tag values, its
+vector, its trigram postings) is not checked: telling that a chunk is
+missing means re-chunking its file, which is too costly at every read.
+Those go when the file is re-chunked. Until then a stale chunk can still
+affect ranking, but it is never shown or returned.
+
+Anything that displays chunks to a reader shows this placeholder where
+the chunk would be, so the file keeps its shape and the chunk's id, pins
+and tags still have a place to land:
+
+> This chunk's text is unavailable: the file was indexed under older
+> chunking rules. `ark refresh --force PATH` re-chunks it.
+
+`ark refresh --force` re-chunks the file in place, and chunks whose text
+did not change keep their ids.
 
 Supports `--wrap <name>` for XML wrapping, consistent with
 `ark search` and `ark fetch`.

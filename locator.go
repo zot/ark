@@ -135,7 +135,13 @@ func (db *DB) SuggestExtLocator(chunkID uint64) (LocatorSuggestion, error) {
 	var otherContents []string
 	for _, c := range allChunks {
 		if c.Range == info.Range {
+			if c.Missing { // R3571
+				return LocatorSuggestion{}, fmt.Errorf("chunk %d is stale: %s", chunkID, StaleChunkPlaceholder(info.Path))
+			}
 			targetContent = c.Content
+			continue
+		}
+		if c.Missing {
 			continue
 		}
 		otherContents = append(otherContents, c.Content)

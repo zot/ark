@@ -1846,12 +1846,15 @@ func (s *Searcher) ChunksByID(chunkIDs []uint64) ([]SearchResultEntry, error) {
 
 // FillChunksUsing reads chunk text using the provided cache, or creates a
 // fresh per-query cache if cache is nil. The session path provides a non-nil
-// cache so that successive searches reuse cached file reads.
-// CRC: crc-Searcher.md | R652
+// cache so that successive searches reuse cached file reads. A result whose
+// text is unavailable (a stale chunk, or a file gone since indexing) is
+// dropped rather than returned empty.
+// CRC: crc-Searcher.md | R652, R3573
 func (s *Searcher) FillChunksUsing(results []SearchResultEntry, cache *microfts2.ChunkCache) ([]SearchResultEntry, error) {
 	if cache == nil {
 		cache = s.fts.NewChunkCache()
 	}
+	kept := results[:0]
 	for i := range results {
 		r := &results[i]
 		content, ok := cache.ChunkText(r.Path, r.Range)
@@ -1863,12 +1866,13 @@ func (s *Searcher) FillChunksUsing(results []SearchResultEntry, cache *microfts2
 		// emit <pdf-chunk> elements with tag_rects-derived overlays. We
 		// gate on strategy to avoid the extra cost for non-PDF files.
 		if info, err := s.fts.FileInfoByID(r.FileID); err == nil && info.Strategy == "pdf" {
-			if chunks, err := cache.GetChunks(r.Path, r.Range, 0, 0); err == nil && len(chunks) == 1 {
+			if chunks, err := cache.GetChunks(r.Path, r.Range, 0, 0); err == nil && len(chunks) == 1 && !chunks[0].Missing { // R3571
 				r.Attrs = chunks[0].Attrs
 			}
 		}
+		kept = append(kept, *r)
 	}
-	return results, nil
+	return kept, nil
 }
 
 // FillFiles deduplicates results by file and reads full content.
@@ -2534,6 +2538,10 @@ func renderPdfChunksByPage(chunks []microfts2.ChunkResult, path string, fileID u
 	var order []string
 	pages := make(map[string]*pageAgg)
 	for _, ch := range chunks {
+		if ch.Missing {
+			// R3574: its rects are stale; the page already shows the file.
+			continue
+		}
 		pageVal, _ := microfts2.PairGet(ch.Attrs, "page")
 		pageStr := string(pageVal)
 		if pageStr == "" {

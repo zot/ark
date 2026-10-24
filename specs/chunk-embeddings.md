@@ -86,6 +86,10 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
    content (markdown, code), then JSONL conversation logs. Files
    matching `search_exclude` are skipped entirely.
 3. For each file, read chunk content via `AllChunks(path)`.
+   A stale chunk (one the current chunker no longer produces; see
+   [chunk-context.md](chunk-context.md#a-stale-chunk)) is skipped and
+   counted. It gets no embedding record, not even an empty one, so each
+   pass queues it again until the file is re-chunked.
 4. Route each chunk to the smallest tier whose byte limit fits the
    chunk's content length. Chunks exceeding all tiers are skipped
    (logged at verbose level).

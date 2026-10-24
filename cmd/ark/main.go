@@ -3835,7 +3835,11 @@ func emitChunkResult(res ark.ChunkFetchResult, filePath, chunkRange, anchor, wra
 	if wrap != "" {
 		for _, c := range res.Chunks {
 			fmt.Printf("<%s source=%q range=%q>\n", wrap, c.Path, c.Range)
-			writeEscaped(os.Stdout, c.Content, wrap)
+			content := c.Content
+			if c.Missing {
+				content = ark.StaleChunkPlaceholder(c.Path) // R3572
+			}
+			writeEscaped(os.Stdout, content, wrap)
 			fmt.Printf("</%s>\n", wrap)
 		}
 		return
