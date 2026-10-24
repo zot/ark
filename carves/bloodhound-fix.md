@@ -48,6 +48,12 @@ Opened by Bill, 2026-10-22.
 - [ ] **Item 13 — a file added mid-session has no embeddings until the next
       reconcile.** **OPEN (not queued), measured 2026-10-24.** As specified, but it
       blinds the meaning leg to new files. See Item 13.
+- [ ] **Item 14 — `search_exclude` does two jobs.** **OPEN (not queued).** A
+      fence around ark's system files and a noise filter for interactive search,
+      split into settings. It also decides what is embedded, which is
+      [chat-embeddings.md](chat-embeddings.md). `/mini-spec`. See Item 14.
+- [ ] **Item 15 — chasing a promising chat.** **OPEN (not queued).** The judgment
+      belongs to the caller, not the Haiku secretary. See Item 15.
 
 ## Item 1
 
@@ -262,13 +268,16 @@ and its planning notes; the measurements are from 2026-07-31 unless dated.
 
 **9.1, three defects (queue item #107).**
 
-- *Search-excluded paths reach the seed set.* `ark.toml`'s `search_exclude`
-  covers `~/.claude/projects/**`, yet one hunt's 24 seeds held 8 chunks from
-  there. The same query through `ark search` returned 0 from that path. The CLI
-  injects `search_exclude` as a file filter (server.go, R941/R942) and the
-  librarian's seed path filters with `matchesAnyGlob` too, so at least one of the
-  four substrates builds candidates without consulting the setting. Not yet
-  established which: find the substrate before proposing a fix.
+- *Search-excluded paths reach the seed set.* **Not a defect.** One hunt's 24
+  seeds held 8 chunks from `~/.claude/projects/**`, which `search_exclude`
+  covers, while `ark search` returned none from there. Re-measured 2026-10-24:
+  three unrelated clues through `ark connections recall`, the same
+  `Librarian.Recall` an unscoped seed runs, each returned 2 chat chunks in 12-14,
+  and `ark search` on the same text returned 0. No substrate leaks: Recall never
+  reads `search_exclude`, and that is right. DECIDED (Bill, 2026-10-24): the
+  bloodhound and recall must search the chats, and `search_exclude` keeps them
+  out of interactive search as noise, not as a boundary. The setting does a second
+  job that Recall does need to honor, which is Item 14.
 - *The seeder retrieves its own scaffolding.* A seed block opened with two lines
   of `recall_agent_builder.go` at similarity 1.00: the code that builds the
   prompt, matched by the prompt's own boilerplate. The same self-match surfaced
@@ -434,6 +443,45 @@ for embedding at 09:09 the next morning. For those hours the meaning leg of ever
 hunt, and of ambient recall, could not see them. Whether new files should be
 embedded as they arrive, and how that interacts with the write actor and the GPU,
 is a design question; nothing here is a defect against the current spec.
+
+## Item 14
+
+`search_exclude` does two jobs (Bill, 2026-10-24). It **fences ark's system
+files** (the live config lists `~/.ark/schedule/**`), which nothing should serve
+as evidence, and it **filters noise** out of interactive search (the chat logs
+under `~/.claude/projects/**`, whose JSONL chunks flood ordinary results). The
+two want opposite treatment from recall and the bloodhound: the fence holds
+everywhere, while the noise filter must not apply to them, since the chats are
+part of the memory those features exist to reach. Recall today honors neither,
+so the fence is open to it. Not yet measured whether any seed or recollection
+has actually served a fenced file; measure that first.
+
+DECIDED (Bill, 2026-10-24): split it into two settings, each replaceable in
+`ark.toml` and on the CLI. The names, the defaults (whether ark's own system
+paths are built in or listed), what becomes of the existing key, and which
+surfaces honor each are the design. `specs/config.md`, `specs/search-filtering.md` (R938-
+R943) and `specs/cli-commands.md` follow.
+
+**A third job: what gets embedded.** The embedding pass skips files matching
+`search_exclude` too, so the chat logs have no vectors and recall reaches them
+through the trigram legs only. That question, and the knob that separates it from
+the other two, moved to [chat-embeddings.md](chat-embeddings.md) (2026-10-24).
+The settings split here must leave that knob's behaviour to it: changing what
+interactive search hides must not silently change what is embedded.
+
+## Item 15
+
+A hunt's seed often holds a chat chunk that looks like the thread being chased,
+and the place to follow it is that session's neighbourhood, not a fresh corpus
+search. Today the secretary runs its chat pass only when the hunt is
+chat-scoped or the clue says "did we discuss". Widening that trigger to "a chat
+in the seed looks promising" is a judgment the secretary cannot be trusted
+with: every secretary is Haiku, pool secretaries included, and Bill expects one
+told to peek at chats would wade through reams of them (2026-10-24). So the chase
+belongs to the caller, the Opus or Fable assistant that reads the finding.
+Proposed, not decided: leave the crank handle's chat trigger as it is, make a
+seed or finding's chat hits recognizable as leads, and teach the caller in the
+bloodhound skill when to open one. Skill and builder edits; scope not settled.
 
 ## Overlaps
 

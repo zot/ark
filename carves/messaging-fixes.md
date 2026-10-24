@@ -17,7 +17,7 @@ Opened by Bill, 2026-10-22.
 
 ## Status
 
-- [ ] **Item 1 — the guard explains each denial.** **OPEN (#149.)**
+- [ ] **Item 1 — the guard explains each denial and gates on the guide.** **OPEN (#149.)**
       Hook and skill-file edits, no skill. See Item 1.
 - [ ] **Item 2 — a body verb and a confirmation stanza.** **OPEN (#150.)** `/mini-spec`. See Item 2.
 - [ ] **Item 3 — sweep the trajectory for messaging stragglers.** **OPEN (#151.)** No skill. See Item 3.
@@ -75,9 +75,21 @@ The guard's denial names the reason and the alternative, one line per case:
 - anything else → the general refusal.
 
 The onboarding instruction stays, for the first denial in a session only. The
-hook input carries the session id, so the hook can tell. Any change to the
-guard's allow rules is out of scope: the allow rules held in every incident
-above.
+hook input carries the session id, so the hook can tell.
+
+**The guide gate.** Until a session has run the guide fetch (`~/.ark/ark fetch
+--wrap knowledge ~/.ark/skills/ark/hermes-messaging.md`), the guard denies every
+call, and the denial names that exact command. Ark-only and guide-first then
+hold by construction: the first call the guard allows is always the guide, so
+the messenger never has to remember either rule. The same session-id tracking
+serves both. The agent's `SessionStart` prompt hook, which was meant to load the
+guide, goes. Measured 2026-10-24: in both messenger runs that day the transcript
+shows no hook output before the first tool call, and both first calls were
+non-ark shell commands. A subagent's lifecycle hooks do not fire, so the hook
+reads as a mechanism and is none.
+
+Apart from the gate, changes to the guard's allow rules are out of scope: the
+allow rules held in every incident above.
 
 `hermes-messaging.md` should say the same things in the same words, so the
 denial and the skill file agree.

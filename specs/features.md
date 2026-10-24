@@ -20,6 +20,33 @@ a feature's motivation changes, update this file explicitly.
 Language: Go (core) + Lua (apps). Environment: ark CLI binary at
 `~/.ark/ark` with the `~/.ark/` directory as its unified home.
 
+## What ark is
+
+Ark is a shared memory space for human-agent collaboration. The user
+and their agents read and write the same files, so what one party
+learns or decides stays at hand for the other, across sessions and
+across projects. Both parties author it and both can correct it: an
+agent's contribution is the same kind of artifact a person writes,
+visible in the files and editable there. The conversations are part
+of that memory rather than a by-product of building it. Much of the
+reasoning behind a decision is said in a chat and written down
+nowhere else, which is why the chat logs are indexed and why recall
+and the bloodhound search them.
+
+The capabilities below serve that space in different ways:
+
+- **Tags enrich it.** A tag is a named connection among everything
+  that carries it, which either party can add and either can fix.
+- **Search and the bloodhound** look things up on purpose (pull).
+- **Recall** brings the past into the present unasked (push).
+- **Scheduled tags** remind both parties of what matters in it.
+- **Luhmann** makes it more versatile and reactive: an orchestrator
+  session that supervises the secretaries, curates hunts, and answers
+  events as they arrive.
+- **One space for every project.** Each project on the machine
+  indexes into the same space, so work in one project has the
+  knowledge of all the others at hand.
+
 ## Feature Inventory
 
 | Feature                                     | Status                                     | Spec                                                                          |
