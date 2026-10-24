@@ -174,17 +174,18 @@ absent. Whether this is the same fault or a new one is not known.
 
 *Measured 2026-10-24, and the item was misnamed.* All four empty seeds that day
 (not three, and from the session's own secretary, not the pool) carried a scope,
-`~/work/HollowStuff/HollowRpg/published/**`; hunts with no scope seeded normally.
-Each of the seed's three search legs took a corpus-wide top 50 and only then
-dropped out-of-scope chunks, which R3186 rejects one level up. `published/` is
-symlinks whose targets are indexed under their own paths with the same text, so
-those twins, older drafts and months of chat filled every leg's cut. Reproduced
-through `POST /recall` with the same clue: 10 hits unscoped, 2 of 10 scoped.
-R3570 puts the scope inside each leg. The meaning leg and the tag axis are fixed;
-the trigram leg passes the scope as `WithOnly`, but microfts2's `SearchFuzzy`
-applied that after its own top-k (O228); microfts2 fixed it the same day, so all three legs now cut inside the scope. The same reading
-found O229: the secretary's scope directive intersects several positive globs
-where the seed unions them.
+`~/work/HollowStuff/HollowRpg/published/**`; hunts with no scope seeded
+normally.  Each of the seed's three search legs took a corpus-wide top 50 and
+only then dropped out-of-scope chunks, which R3186 rejects one level
+up. `published/` is symlinks whose targets are indexed under their own paths
+with the same text, so those twins, older drafts and months of chat filled every
+leg's cut. Reproduced through `POST /recall` with the same clue: 10 hits
+unscoped, 2 of 10 scoped.  R3570 puts the scope inside each leg. The meaning leg
+and the tag axis are fixed; the trigram leg passes the scope as `WithOnly`, but
+microfts2's `SearchFuzzy` applied that after its own top-k (O228); microfts2
+fixed it the same day, so all three legs now cut inside the scope. The same
+reading found O229: the secretary's scope directive intersects several positive
+globs where the seed unions them.
 
 **6.4.** The secretary's loop gives up while idle. On 2026-10-20 one returned
 after seven idle keepalives; on 2026-10-22 one returned after eleven (about
