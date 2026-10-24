@@ -2728,6 +2728,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Stale chunks
 - **R3575:** The batch embedding pass skips a missing chunk (R3571) and counts it in its summary; it writes no EC record for it, not even the empty all-tag record (R3004), so each pass queues it again until the file is re-chunked
+- **R3577:** The priority sort (R1611) classes a file as a JSONL conversation log by the strategy it was indexed under (`chat-jsonl`, the test recall uses), not by its `.jsonl` suffix; the suffix may gate the lookup.
 
 ## Feature: PDF Chunker
 **Source:** specs/pdf-chunker.md
@@ -4801,6 +4802,7 @@ reason.
 - **R3189:** The globs never become the secretary's judgment: the crank handle carries the scope as a **ready-made `-with -files` / `-without -files` filter string**, already anchored (R3193) and quoted, which the secretary appends to every search verbatim (Baby Food — it transcribes, it does not compose). The directive rides beside the `no-tags` directive under the `## Search task` header. The Haiku is never instructed to add filters of its own, so a mistyped or forgotten glob cannot be a weak-model decision.
 - **R3194:** A hunt's filter string **composes with** the `scope` word's own crank-handle mapping rather than replacing it — both are `-with -files` rows, which intersect, so `scope: code` plus `filter-files="~/work/ark/**"` means Go files under that tree. The seed applies the file globs but **not** the `scope` word (R3044 — a directive, not a search idea); that asymmetry is pre-existing and untouched. The file globs are the part of a hunt's scope made consistent across both enforcement points (R3192).
 - **R3190:** A scope is **opt-in per hunt and never inherited** — it lives on the watermark carrying it and nowhere else. Ambient recall does not read the `<BLOODHOUND>` tag and so cannot acquire a scope from it, leaving the standing rule that ambient recall must not filter by current-project scope untouched.
+- **R3576:** A hunt-metadata line (`scope:`, `depth:`, `want:`, `curate:`, `filter-files:`, `exclude-files:`) is dropped from the seed input wherever it sits in the payload, after the clue as well as before it (R3044); a paragraph left with no other text is not seeded. The task doc still carries the whole payload.
 
 
 ## Feature: Per-capability recall subscriptions (level decoupling)

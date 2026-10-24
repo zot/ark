@@ -508,6 +508,30 @@ func (l *Librarian) resolveTagValuePaths(tag, value string) []string {
 	return paths
 }
 
+// Embed priorities, lowest first (R1611).
+const (
+	embedPriorityTagged = iota
+	embedPriorityAuthored
+	embedPriorityChat
+)
+
+// embedPriority classes a file for the batch embedding pass: tag-bearing files
+// first, then authored content, then conversation logs. A conversation log is a
+// file indexed under the chat strategy, the test recall uses, so the subsystem
+// has one definition of "chat log"; the `.jsonl` suffix only spares the strategy
+// lookup for every other file (R3577).
+// CRC: crc-Librarian.md | R1611, R3577
+func (l *Librarian) embedPriority(path string, tagged bool) int {
+	switch {
+	case tagged:
+		return embedPriorityTagged
+	case strings.HasSuffix(path, ".jsonl") && l.db.FileStrategy(path) == ChatStrategy:
+		return embedPriorityChat
+	default:
+		return embedPriorityAuthored
+	}
+}
+
 // matchesAnyGlob returns true if path matches any of the glob patterns.
 func matchesAnyGlob(path string, patterns []string) bool {
 	for _, pat := range patterns {
@@ -2226,13 +2250,7 @@ func (l *Librarian) BatchEmbedChunks() error {
 		if err != nil || info.FileID == 0 {
 			continue
 		}
-		pri := 1
-		if strings.HasSuffix(fpath, ".jsonl") {
-			pri = 2
-		}
-		if tagFileIDs[info.FileID] {
-			pri = 0
-		}
+		pri := l.embedPriority(fpath, tagFileIDs[info.FileID])
 		sorted = append(sorted, filePriority{path: fpath, fileID: info.FileID, priority: pri})
 	}
 	sort.Slice(sorted, func(i, j int) bool {

@@ -443,6 +443,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Recall.md → `recall_test.go`
 - [x] test-RecallScope.md → `recall_scope_test.go`
 - [x] test-StaleChunk.md → `stale_chunk_test.go`, `cmd/ark/chunks_stale_test.go`
+- [x] test-EmbedPriority.md → `embed_priority_test.go`
 - [x] test-OffActorReads.md → `contentview_race_test.go`
 - [x] test-Discussed.md → `store_test.go`, `recall_test.go`, `cmd/ark/main_test.go`
 - [ ] test-DerivedTags.md → `store_test.go`, `recall_test.go`, `derived_tags_test.go`, `derived_flip_test.go`, `cmd/ark/main_test.go`

@@ -7,6 +7,7 @@
 **Expected:** `[ark mcp]`; empty listing gives nil
 **Refs:** crc-Server.md
 **Code:** builtinapps_test.go
+**Alarm:** 1
 **Fire alarm:** count a file directly in `apps/` as an app (drop the nested check). Red: `apps/README.md` becomes an app named `README.md`.
 **Inject:** appactivation.go:builtinAppNames
 **Pulled:** 2026-10-07 — rang: `builtinAppNames = [README.md ark mcp], want [ark mcp]` (first attempt dropped `isNested` outright and broke the build; the recorded injection keeps it referenced)

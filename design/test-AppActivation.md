@@ -7,6 +7,7 @@
 **Expected:** `lua/demo` resolves to a directory and is the only `lua/` entry; after deactivation it is gone and `apps/demo` remains
 **Refs:** crc-AppActivation.md
 **Code:** appactivation_test.go
+**Alarm:** 1
 **Fire alarm:** make DeactivateApp a no-op. Red: `lua/demo survived deactivation`.
 **Inject:** appactivation.go:DeactivateApp
 **Pulled:** 2026-10-07 — rang: `lua/demo survived deactivation`
@@ -17,6 +18,7 @@
 **Expected:** `lua/moved` → `apps/moved`; `lua/gone` still present and logged; no `lua/off`
 **Refs:** crc-AppActivation.md
 **Code:** appactivation_test.go
+**Alarm:** 2
 **Fire alarm:** (a) skip the re-make, red: `lua/moved` not re-made; (b) treat reconcile as "activate every installed app", the user-override bug, red: `repair activated an app that had no entry`.
 **Inject:** appactivation.go:RepairActivationLinks
 **Pulled:** 2026-10-07 — rang: (a) `dangling lua/moved was not re-made`, (b) `repair activated an app that had no entry`
@@ -34,6 +36,7 @@
 **Expected:** an error naming `lua/a`
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/bundlecheck_test.go
+**Alarm:** 3
 **Fire alarm:** skip the symlink test. Red: the source passes.
 **Inject:** cmd/ark/bundlecheck.go:checkBundleSource
 **Pulled:** 2026-10-07 — rang: `symlink not refused by name: <nil>`
@@ -44,6 +47,7 @@
 **Expected:** an error naming `T.DEFAULT.html` and `a, b`
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/bundlecheck_test.go
+**Alarm:** 4
 **Fire alarm:** require three owners for a collision. Red: the source passes.
 **Inject:** cmd/ark/bundlecheck.go:checkBundleSource
 **Pulled:** 2026-10-07 — rang: `collision not refused with names: <nil>`
@@ -54,6 +58,7 @@
 **Expected:** `lua/new` → `apps/new`; no `lua/old`
 **Refs:** crc-Updater.md
 **Code:** cmd/ark/update_test.go
+**Alarm:** 5
 **Fire alarm:** treat every bundled app as new. Red: `refresh re-activated an app the user had deactivated`.
 **Inject:** cmd/ark/update.go:appsNotYetInstalled
 **Pulled:** 2026-10-07 — rang: `refresh re-activated an app the user had deactivated`
@@ -64,6 +69,7 @@
 **Expected:** one conflict: `T.DEFAULT`, `aa` over `zz`
 **Refs:** crc-AppActivation.md
 **Code:** appactivation_test.go
+**Alarm:** 6
 **Fire alarm:** return no conflicts from ViewdefConflicts. Red: `ViewdefConflicts = [], want T.DEFAULT, aa over zz`.
 **Inject:** appactivation.go:ViewdefConflicts
 **Pulled:** 2026-10-13 — rang: `ViewdefConflicts = [], want T.DEFAULT, aa over zz`
@@ -74,6 +80,7 @@
 **Expected:** the JSON array names `aa` over `zz`
 **Refs:** crc-Server.md
 **Code:** appactivation_test.go
+**Alarm:** 7
 **Fire alarm:** answer an empty list when uiRuntime is nil. Red: `GET /ui/conflicts = [], want T.DEFAULT, aa over zz`.
 **Inject:** server.go:handleUIConflicts
 **Pulled:** 2026-10-13 — rang: `GET /ui/conflicts = [], want T.DEFAULT, aa over zz`
@@ -84,6 +91,7 @@
 **Expected:** `no viewdef conflicts`; `T.DEFAULT: aa wins over zz` then the two files indented
 **Refs:** crc-CLI.md
 **Code:** cmd/ark/conflicts_test.go
+**Alarm:** 8
 **Fire alarm:** print the loser before the winner. Red: `printed "T.DEFAULT: zz wins over aa…"`.
 **Inject:** cmd/ark/main.go:printViewdefConflicts
 **Pulled:** 2026-10-13 — rang: `printed "T.DEFAULT: zz wins over aa…"`

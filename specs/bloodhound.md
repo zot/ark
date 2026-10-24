@@ -131,7 +131,13 @@ representation rather than starving a fixed pool.
 
 Only the **clue** is embedded as seed input; the `scope`/`depth`/`want` fields
 shape the hunt (they drive the crank handle) but are directives, not search
-ideas, so they are never folded into the seed search.
+ideas, so they are never folded into the seed search. That holds wherever they
+sit. A watermark is prose, so a `depth:` or `want:` line can follow the clue as
+easily as lead it, and a hunt-metadata line is dropped from the seed input in
+either position; a paragraph left with nothing else in it is not seeded at all.
+Seeded, such a paragraph matches the documents *about* hunting (the bloodhound
+skill, the crank handle's own text) and spends its share of the seed on them.
+The secretary still reads every field in the task doc.
 
 This is the point of the bloodhound-over-recall design. The subagent's own
 tools reach only content search (FTS + Vector-EC via `ark search`); the

@@ -679,16 +679,17 @@ func TestSweepReissuesStandUp(t *testing.T) {
 
 // --- #32: multi-idea seed — clueOf + seedInputs ---
 
-// TestClueOf confirms clueOf strips leading scope/depth/want/curate metadata and
-// returns the clue body, while free-form prose and old clue-first payloads are
-// returned whole (R3044).
-// Refs: R3044
+// TestClueOf confirms clueOf strips scope/depth/want/curate metadata wherever it
+// sits and returns the clue body, while free-form prose is returned whole
+// (R3044, R3576).
+// Refs: R3044, R3576
 func TestClueOf(t *testing.T) {
 	cases := []struct{ name, payload, want string }{
 		{"metadata-first", "scope: all\ndepth: lookup\nwant: passages\n\nfind the actor queue\npattern", "find the actor queue\npattern"},
 		{"curate marker (--raw)", "scope: all\ndepth: lookup\nwant: passages\ncurate: false\n\nthe clue", "the clue"},
 		{"free-form prose", "investigate how recall dedup works — want a synthesis", "investigate how recall dedup works — want a synthesis"},
-		{"old clue-first degrades whole", "clue: x\nscope: all", "clue: x\nscope: all"},
+		{"old clue-first", "clue: x\nscope: all", "clue: x"},
+		{"metadata after the clue", "where did we settle the chunker interface?\n\ndepth: investigate\nwant: passages\n", "where did we settle the chunker interface?"},
 	}
 	for _, tc := range cases {
 		if got := clueOf(tc.payload); got != tc.want {
@@ -698,9 +699,9 @@ func TestClueOf(t *testing.T) {
 }
 
 // TestSeedInputs confirms the clue splits into one Recall input per paragraph, K
-// scales with the idea count, metadata never leaks into an input, and a single
-// idea is one input at the base K (R3043, R3044, R3045).
-// Refs: R3043, R3044, R3045
+// scales with the idea count, metadata never leaks into an input wherever it sits,
+// and a single idea is one input at the base K (R3043, R3044, R3045, R3576).
+// Refs: R3043, R3044, R3045, R3576
 func TestSeedInputs(t *testing.T) {
 	// single-paragraph clue → one input, base K
 	if inputs, k := seedInputs("scope: all\n\nsingle idea here"); len(inputs) != 1 || k != bloodhoundSeedK {
@@ -718,6 +719,11 @@ func TestSeedInputs(t *testing.T) {
 		if strings.HasPrefix(in.Text, "scope:") || strings.HasPrefix(in.Text, "depth:") || strings.HasPrefix(in.Text, "want:") {
 			t.Errorf("metadata leaked into a seed input: %q", in.Text)
 		}
+	}
+	// a metadata paragraph after the clue is not an idea: one input, base K (R3576)
+	inputs, k = seedInputs("the one idea\n\ndepth: investigate\nwant: passages")
+	if len(inputs) != 1 || k != bloodhoundSeedK || inputs[0].Text != "the one idea" {
+		t.Errorf("trailing metadata: inputs=%+v k=%d, want only the idea at base K", inputs, k)
 	}
 	// K is capped
 	if got := seedK(100); got != bloodhoundSeedKCap {

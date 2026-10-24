@@ -1,6 +1,6 @@
 package main
 
-// Test: test-StaleChunk.md | R3572
+// CRC: crc-CLI.md | Test: test-StaleChunk.md | R3572
 
 import (
 	"strings"

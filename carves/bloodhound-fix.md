@@ -32,9 +32,9 @@ Opened by Bill, 2026-10-22.
 - [x] ~~**Item 8 — one reader for Claude Code transcripts.**~~ **LANDED (2026-10-23 — `#158`.)**
       `/mini-spec`. The vehicle for Item 2. See Item 8.
 - **Item 9 — seeds.** What reaches the secretary before it searches. See Item 9.
-  - [ ] **9.1 — three seed defects.** **OPEN (#107.)** Excluded paths leak in;
-        the seeder matches its own scaffolding; JSONL ranked by extension.
-        `/mini-spec`. See Item 9.
+  - [x] ~~**9.1 — three seed defects.**~~ **LANDED (2026-10-24 — `#107`.)** The first was not a
+        defect (seeds must reach the chats); the other two are fixed (R3576,
+        R3577). See Item 9.
   - [ ] **9.2 — a hunt's seeds include its own session.** **OPEN (#27.)**
         `/mini-spec`. See Item 9.
 - [x] ~~**Item 10 — re-index the chat sources.**~~ **LANDED (2026-10-23 — `#160`.)** So the
@@ -283,13 +283,22 @@ and its planning notes; the measurements are from 2026-07-31 unless dated.
   prompt, matched by the prompt's own boilerplate. The same self-match surfaced
   in a *finding* on 2026-08-03, which cited the hunting session's own transcript
   from minutes earlier as "a prior discussion"; that half belongs with 9.2.
+  Re-measured 2026-10-24: a clue alone seeds no scaffolding (three clues, none;
+  a boilerplate clue as positive control ranked `recall_agent_builder.go`
+  first). The live cause is metadata *after* the clue: `clueOf` stripped
+  `depth:`/`want:` lines only at the head, and a watermark is prose, so a
+  trailing metadata paragraph became its own seed input and returned the
+  bloodhound skill and the crank handle's own documents. Fixed by #107 (R3576):
+  metadata lines are dropped wherever they sit.
 - *JSONL is deprioritized by file extension, not by chunker strategy* (latent).
   The librarian ranks any `.jsonl` last by suffix, while the watcher's trigger
   path asks `strategy == "chat-jsonl"`: two definitions of "chat log" in one
   subsystem. Inert while every indexed `.jsonl` is a chat file (Bill checked).
-  Bill's fix: keep the cheap suffix test as a gate, then check
-  `Config.StrategyForPath`. It changes intent, so it wants a requirement rather
-  than a bug-fix edit.
+  Bill's fix: keep the cheap suffix test as a gate, then check the strategy. It
+  changes intent, so it wants a requirement rather than a bug-fix edit. Fixed by
+  #107 (R3577), reading the indexed strategy (`DB.FileStrategy`) instead of
+  `Config.StrategyForPath`, since that is the test recall already uses
+  (Bill, 2026-10-24).
 
 Not a defect, recorded so it is not chased as one: even with nothing leaking,
 that hunt's seeds held none of the research asked for, because the corpus

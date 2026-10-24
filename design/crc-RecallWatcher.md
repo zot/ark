@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687-2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711-2715, R2728-2736, R2739-2741, R2746-2748, R2753, R2806, R2808, R2867-2869, R2893, R2898, R2901, R2934-2937, R2948, R3006, R3007, R3009, R3019, R3020, R3023-3025, R3030-3034, R3038, R3039, R3041-3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279-3283, R3293, R3294, R3296, R3298-3304, R3552
+**Requirements:** R2687-2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711-2715, R2728-2736, R2739-2741, R2746-2748, R2753, R2806, R2808, R2867-2869, R2893, R2898, R2901, R2934-2937, R2948, R3006, R3007, R3009, R3019, R3020, R3023-3025, R3030-3034, R3038, R3039, R3041-3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279-3283, R3293, R3294, R3296, R3298-3304, R3552, R3576
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -165,9 +165,10 @@ composes and writes each curation doc via the in-process
   rather than returning silently. A pool-served hunt is raw: its return goes
   straight to `ark-bloodhound-result=<S>` with no Luhmann `next` push (R3281).
   Then **seeds the hunt** via `renderSeed` (R3006, R3007,
-  R3043–R3045): `clueOf` extracts the **clue** from the payload — stripping any
-  leading `scope`/`depth`/`want`/`curate` metadata lines (R3044); free-form
-  in-session prose has none, so it is returned whole — then `splitParagraphs`
+  R3043–R3045): `clueOf` extracts the **clue** from the payload — dropping every
+  hunt-metadata line (`scope`/`depth`/`want`/`curate`/`filter-files`/
+  `exclude-files`) wherever it sits, before the clue or after it (R3044,
+  R3576); free-form in-session prose has none, so it is returned whole — then `splitParagraphs`
   (the same markdown chunker the fire uses, R2736) splits the clue and
   `librarian.Recall` runs with **one `ConnectionsInput` per paragraph**. `Recall`
   unions the per-input hits by chunkID (R3043), so each distinct idea in a complex

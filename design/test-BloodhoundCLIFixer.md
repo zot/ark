@@ -1,4 +1,5 @@
 # Test Design: Bloodhound CLI Fixer (S2)
+**Requirements:** R3576
 
 **Source:** crc-RecallWatcher.md
 
@@ -11,25 +12,35 @@ each test avoids). R3017, R3018, R3020, R3023, R3024, R3033, R3038, R3039,
 R3041, R3042. The seed clue-split helpers (`clueOf`, `seedInputs`, R3043–R3045)
 are pure functions tested directly, no DB.
 
-## Test: clueOf strips leading metadata, keeps the clue
-**Purpose:** `clueOf` returns the searchable clue — leading `scope`/`depth`/`want`/
-`curate` lines (and blank lines) stripped — while free-form prose with no leading
-metadata is returned whole (R3044).
+## Test: clueOf strips metadata wherever it sits, keeps the clue
+**Purpose:** `clueOf` returns the searchable clue — every `scope`/`depth`/`want`/
+`curate`/`filter-files`/`exclude-files` line stripped, before the clue or after it,
+plus leading blank lines — while free-form prose with no metadata is returned whole
+(R3044, R3576).
 **Input:** a metadata-first payload `scope: all\ndepth: lookup\nwant: passages\n\n<clue
 body>`; a `--raw` variant carrying a `curate: false` line; a free-form prose payload
-with no metadata; and an old-style `clue: x\nscope: all` payload.
+with no metadata; an old-style `clue: x\nscope: all` payload; and a watermark-shaped
+payload whose clue is followed by a `depth:`/`want:` paragraph.
 **Expected:** the first two return only the clue body (no scope/depth/want/curate); the
-free-form payload returns unchanged; the old-style payload degrades to the whole string
-(first line is not a stripped key) — no panic, no regression.
+free-form payload returns unchanged; the old-style payload returns `clue: x` (its
+`scope:` line is stripped, `clue:` is not a metadata key); the watermark-shaped payload
+returns the clue alone, with no `depth:`/`want:` text and no trailing blank lines.
+**Alarm:** 1
+**Fire alarm:** restore the leading-only scan (stop stripping at the first content
+line); the watermark-shaped and old-style cases fail.
+**Inject:** recall_watcher_cli.go:clueOf
+**Pulled:** 2026-10-24 — rang (both cases in TestClueOf, and TestSeedInputs seeded the
+`depth:` paragraph as a second input)
 
 ## Test: seedInputs splits per paragraph and scales K
 **Purpose:** `seedInputs` splits the clue into paragraphs (one `ConnectionsInput` each)
 and scales the seed budget `min(bloodhoundSeedK + 5·(paras−1), cap)`; a single-paragraph
 clue is one input at the base K (R3043, R3045). Metadata never appears as an input (R3044).
 **Input:** a one-paragraph clue; a three-paragraph clue; a metadata-first payload whose
-clue is two paragraphs.
-**Expected:** input counts 1, 3, 2; K = base, base+10, base+5 (capped); no input equals a
-`scope:`/`depth:`/`want:` line.
+clue is two paragraphs; a one-paragraph clue followed by a `depth:`/`want:` paragraph.
+**Expected:** input counts 1, 3, 2, 1; K = base, base+10, base+5 (capped), base; no input
+equals or contains a `scope:`/`depth:`/`want:` line (R3576: the emptied paragraph is not
+seeded).
 
 ## Test: pool config defaults and overrides
 **Purpose:** `EffectivePoolMax` / `EffectiveCooldownSeconds` /

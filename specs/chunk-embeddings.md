@@ -83,7 +83,9 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
 1. Scan for chunks missing EC records (C records exist but no
    corresponding EC record).
 2. Sort by priority: tag-bearing files first, then non-JSONL authored
-   content (markdown, code), then JSONL conversation logs. Files
+   content (markdown, code), then JSONL conversation logs. A file is a
+   conversation log by the strategy it was indexed under (`chat-jsonl`),
+   the same test recall uses, not by its `.jsonl` suffix. Files
    matching `search_exclude` are skipped entirely.
 3. For each file, read chunk content via `AllChunks(path)`.
    A stale chunk (one the current chunker no longer produces; see

@@ -60,6 +60,7 @@ clue; the path is pending exactly once; exactly one stand-up directive was
 pushed to the hub.
 **Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
 **Code:** bloodhound_watermark_pool_test.go
+**Alarm:** 1
 **Fire alarm:** disable the request trigger's `wm-` id guard, so it records the
 watermark as a CLI hunt; the origin comes back empty, pending holds the path
 twice, and two stand-ups are pushed.
@@ -78,6 +79,7 @@ event for a `wm-` path through `dispatchFixerEvent` with nothing recorded.
 **Expected:** no record, nothing pending, no directive pushed.
 **Refs:** crc-RecallWatcher.md, seq-recall-watcher.md#4
 **Code:** bloodhound_watermark_pool_test.go
+**Alarm:** 2
 **Fire alarm:** disable the `wm-` id guard; the trigger records the path as a CLI
 hunt, queues it and pushes a stand-up.
 **Inject:** recall_watcher_cli.go:onBloodhoundCLIRequest

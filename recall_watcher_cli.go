@@ -840,27 +840,25 @@ func scopeOf(payload string) (filter, exclude []string) {
 	return filter, exclude
 }
 
-// clueOf extracts the searchable clue from a bloodhound payload: leading
-// scope/depth/want/curate metadata lines (and blank lines) are stripped, and the
-// rest is the clue. Free-form in-session prose has no leading metadata, so it is
-// returned whole; an old clue-first payload (first line not a stripped key) also
-// degrades to the whole string — no regression.
-// CRC: crc-RecallWatcher.md | R3044
+// clueOf extracts the searchable clue from a bloodhound payload: every hunt-
+// metadata line (seedMetaKeys) is dropped wherever it sits, and the rest, trimmed,
+// is the clue. The CLI writes metadata first, but a watermark is prose, so a
+// `depth:` or `want:` line can just as well follow the clue; left in, it becomes
+// a seed paragraph that matches the documents about hunting (R3576). A paragraph
+// that held nothing else leaves only blank lines, which splitParagraphs drops.
+// Free-form in-session prose has no metadata, so it is returned whole.
+// CRC: crc-RecallWatcher.md | R3044, R3576
 func clueOf(payload string) string {
 	lines := strings.Split(payload, "\n")
-	i := 0
-	for i < len(lines) {
-		t := strings.ToLower(strings.TrimSpace(lines[i]))
-		isMeta := slices.ContainsFunc(seedMetaKeys, func(k string) bool {
-			return strings.HasPrefix(t, k)
-		})
-		// Skip blank and metadata lines; stop at the first content line.
-		if t != "" && !isMeta {
-			break
+	kept := lines[:0]
+	for _, line := range lines {
+		t := strings.ToLower(strings.TrimSpace(line))
+		if slices.ContainsFunc(seedMetaKeys, func(k string) bool { return strings.HasPrefix(t, k) }) {
+			continue
 		}
-		i++
+		kept = append(kept, line)
 	}
-	return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // seedK scales the seed budget with the clue's idea (paragraph) count so a
