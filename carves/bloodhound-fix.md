@@ -31,12 +31,14 @@ Opened by Bill, 2026-10-22.
 - [x] ~~**Item 7 — sweep the trajectory for bloodhound stragglers.**~~ **LANDED (2026-10-22 — `#154`.)** No skill. See Item 7.
 - [x] ~~**Item 8 — one reader for Claude Code transcripts.**~~ **LANDED (2026-10-23 — `#158`.)**
       `/mini-spec`. The vehicle for Item 2. See Item 8.
-- **Item 9 — seeds.** What reaches the secretary before it searches. See Item 9.
+- **Item 9 — seeds.** What reaches the secretary before it searches. Both parts
+      closed 2026-10-24. See Item 9.
   - [x] ~~**9.1 — three seed defects.**~~ **LANDED (2026-10-24 — `#107`.)** The first was not a
         defect (seeds must reach the chats); the other two are fixed (R3576,
         R3577). See Item 9.
-  - [ ] **9.2 — a hunt's seeds include its own session.** **OPEN (#27.)**
-        `/mini-spec`. See Item 9.
+  - [x] ~~**9.2 — a hunt's seeds include its own session.**~~ **LANDED (2026-10-24 — `#27`.)**
+        Closed without a change: it did not reproduce, and a directed hunt may
+        cite its own session by design. See Item 9.
 - [x] ~~**Item 10 — re-index the chat sources.**~~ **LANDED (2026-10-23 — `#160`.)** So the
       harness chunks #158 stopped producing leave the index. See Item 10.
 - [ ] **Item 11 — a chunker version stamp.** **OPEN (not queued.)** A file
@@ -314,6 +316,29 @@ The chat half is already servable per hunt with
 filter itself, and whether that exclusion should be a default rather than per
 hunt. Related: 6.3's pool hunts arrived with *empty* seed sets, which is the
 opposite failure and may share a cause.
+
+Re-measured 2026-10-24: a CLI hunt's seed runs the same `Librarian.Recall` as
+`ark connections recall`, so four probes went through that with the requesting
+session's own words (three phrases and one paragraph verbatim, each confirmed
+indexed by `ark search -contains`). None returned a chunk from the requesting
+session; chat chunks from other sessions did come back. The 07-03 case, a clue
+brushing a common tag name, was not reproduced. The 08-03 finding was the
+secretary's choice of what to cite, not a seed it could not avoid.
+
+DECIDED (Bill, 2026-10-24): close 9.2. The code already takes a position, and it
+stands: `FindingItem` has no own-session gate, because a directed search may
+point at the requester's own session. That is unlike ambient recall, which never
+shows a session its own words (R2869, R2872). The difference is deliberate:
+after compaction, the earlier part of a session is exactly what the requester no
+longer holds, so "we decided this hours ago, here" is a real finding. Excluding
+the chats by default was answered the same day (Item 9.1: the bloodhound must
+search them).
+
+Held in reserve, should self-seeding reappear: exclude only the part of the
+session still in the requester's context (the watermark's own turn and the
+recent turns, as ambient recall treats its own input), and keep the compacted
+past findable. It needs a definition of "still in context", and the watcher
+already tracks a recent-turn window.
 
 ## Item 10
 
