@@ -1,5 +1,5 @@
 # LuhmannCLI
-**Requirements:** R2791, R2792, R2793, R2794, R2795, R2796, R2861, R3010, R3011, R3012, R3013, R3014, R3015, R3016, R3017, R3018, R3019, R3026, R3036, R3122, R3123, R3124, R3125, R3130, R3147, R3148, R3321
+**Requirements:** R2791-2796, R2861, R3010-3019, R3026, R3036, R3122-3125, R3130, R3147, R3148, R3321, R3578
 
 The Go surface the orchestrator session calls into. Three verbs record
 its own supervisor lifecycle into `~/.ark/monitoring/luhmann.jsonl` —
@@ -32,6 +32,10 @@ card covers only the Go surface the skill calls into.
   caller is coming back. A lease neither active nor within this instant is
   stale, and a stale lease is claimable by another session's `--first`
   (R3013).
+- luhmannDrain: chan — the supersede signal of the seat's current drain, the
+  newest claimed `next` call (R3578). A claim closes the previous one's and
+  installs its own in the same locked step; the call clears it on return if it
+  is still the current one. Nil when nothing is draining.
 - nextQueue: chan work — in-memory queue of work items `next` drains
   (R3011): curation tasks (a request-doc path to refine) and supervisor
   directives (stand up / stop a pool secretary), both pushed by the recall
@@ -146,6 +150,16 @@ card covers only the Go surface the skill calls into.
     backgrounded drain, and ark cannot learn of the departure any other
     way, the pty host having lost custody of the very child whose exit it
     would otherwise have seen (R3125).
+  - **One drain** (R3578): every successful claim, in any mode, supersedes
+    the call already draining the seat, which returns the stand-down
+    disposition at once instead of waiting on `nextQueue`. A live
+    orchestrator never has two calls in flight, so the older one is an orphan
+    (a stopped session's backgrounded drain, or a displaced owner's) and any
+    item it took would be lost. A superseded call from the owner decrements
+    `luhmannActive` like any return, and the successor's call keeps the lease
+    live. An in-flight orphan under a different session id still holds the
+    lease and is not superseded, because it is not displaced: `--first` is
+    refused against it, and `--force` is the remedy.
   - Whenever the seat changes to a **different** session, the claim also
     clears Frictionless event routing in the same locked step
     (`clearEventRouting`, crc-LuhmannEvents.md, R3148): routing does not

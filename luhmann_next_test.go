@@ -53,7 +53,7 @@ func TestClaimLuhmannMatrix(t *testing.T) {
 			if tc.live {
 				srv.luhmannLiveUntil = time.Now().Add(time.Minute)
 			}
-			disp, msg := srv.claimLuhmann(tc.session, tc.mode)
+			disp, msg, _ := srv.claimLuhmann(tc.session, tc.mode)
 			if disp != tc.wantDisp {
 				t.Errorf("disposition = %d, want %d", disp, tc.wantDisp)
 			}
@@ -249,7 +249,7 @@ func TestLuhmannLeaseLiveness(t *testing.T) {
 	})
 	t.Run("expired window yields the seat to --first", func(t *testing.T) {
 		srv := &Server{luhmannOwner: "A", luhmannLiveUntil: time.Now().Add(-time.Second)}
-		if disp, _ := srv.claimLuhmann("B", luhmannModeFirst); disp != luhmannDispOK {
+		if disp, _, _ := srv.claimLuhmann("B", luhmannModeFirst); disp != luhmannDispOK {
 			t.Fatalf("--first on a stale seat = %d, want OK", disp)
 		}
 		if srv.luhmannOwner != "B" {
@@ -258,7 +258,7 @@ func TestLuhmannLeaseLiveness(t *testing.T) {
 	})
 	t.Run("normal return opens the grace window", func(t *testing.T) {
 		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
-		srv.endLuhmannCall("A", false)
+		srv.endLuhmannCall("A", false, nil)
 		srv.luhmannMu.Lock()
 		defer srv.luhmannMu.Unlock()
 		if srv.luhmannActive != 0 {
@@ -270,7 +270,7 @@ func TestLuhmannLeaseLiveness(t *testing.T) {
 	})
 	t.Run("cancelled return expires at once", func(t *testing.T) {
 		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
-		srv.endLuhmannCall("A", true)
+		srv.endLuhmannCall("A", true, nil)
 		srv.luhmannMu.Lock()
 		defer srv.luhmannMu.Unlock()
 		if srv.luhmannLeaseLiveLocked() {
@@ -283,7 +283,7 @@ func TestLuhmannLeaseLiveness(t *testing.T) {
 		// would expire while B is perfectly alive.
 		srv := &Server{luhmannOwner: "A", luhmannActive: 1}
 		srv.claimLuhmann("B", luhmannModeForce) // resets the pair, then registers B
-		srv.endLuhmannCall("A", true)           // A's late return
+		srv.endLuhmannCall("A", true, nil)      // A's late return
 		srv.luhmannMu.Lock()
 		defer srv.luhmannMu.Unlock()
 		if srv.luhmannActive != 1 {
@@ -293,4 +293,86 @@ func TestLuhmannLeaseLiveness(t *testing.T) {
 			t.Error("B's lease died when A's stale call returned")
 		}
 	})
+}
+
+// TestLuhmannNextNewestDrainWins confirms a claim supersedes the call already
+// draining the seat, so an orphaned drain — a stopped session's backgrounded
+// `next`, or a displaced owner's — never receives work meant for the live one.
+// Refs: R3578
+func TestLuhmannNextNewestDrainWins(t *testing.T) {
+	type result struct {
+		body string
+		disp luhmannNextDisposition
+	}
+	call := func(srv *Server, session string, mode luhmannNextMode) chan result {
+		out := make(chan result, 1)
+		go func() {
+			body, disp, err := srv.LuhmannNext(context.Background(), session, mode, time.Hour)
+			if err != nil {
+				t.Errorf("LuhmannNext(%s): %v", session, err)
+			}
+			out <- result{body, disp}
+		}()
+		return out
+	}
+	// waitDrain blocks until a call other than prev is the seat's drain.
+	waitDrain := func(srv *Server, prev chan struct{}) chan struct{} {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			srv.luhmannMu.Lock()
+			d := srv.luhmannDrain
+			srv.luhmannMu.Unlock()
+			if d != nil && d != prev {
+				return d
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatal("no new drain claimed the seat")
+		return nil
+	}
+	cases := []struct {
+		name          string
+		second        string
+		mode          luhmannNextMode
+		sameSessionUp bool
+	}{
+		{"same session", "A", luhmannModeFirst, true},
+		{"displaced owner", "B", luhmannModeForce, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &Server{luhmannOwner: "A", nextQueue: make(chan LuhmannWork)}
+			old := call(srv, "A", luhmannModePlain)
+			first := waitDrain(srv, nil)
+			live := call(srv, tc.second, tc.mode)
+			waitDrain(srv, first)
+			var r result
+			select {
+			case r = <-old:
+			case <-time.After(2 * time.Second):
+				t.Fatal("superseded call is still blocked; it would compete for the next item")
+			}
+			if r.disp != luhmannDispExit || !strings.Contains(r.body, "superseded") {
+				t.Fatalf("superseded call: disp=%d body=%q, want Exit + superseded", r.disp, r.body)
+			}
+			if tc.sameSessionUp {
+				srv.luhmannMu.Lock()
+				active, liveLease := srv.luhmannActive, srv.luhmannLeaseLiveLocked()
+				srv.luhmannMu.Unlock()
+				if active != 1 || !liveLease {
+					t.Errorf("after the orphan's return: active=%d live=%v, want 1 and live", active, liveLease)
+				}
+			}
+			srv.nextQueue <- LuhmannWork{Kind: "curation", Path: "tmp://BLOODHOUND-CLI/xyz"}
+			r = <-live
+			if r.disp != luhmannDispOK || !strings.Contains(r.body, "tmp://BLOODHOUND-CLI/xyz") {
+				t.Fatalf("newest call: disp=%d body=%q, want the curation item", r.disp, r.body)
+			}
+			srv.luhmannMu.Lock()
+			defer srv.luhmannMu.Unlock()
+			if srv.luhmannActive != 0 || srv.luhmannDrain != nil {
+				t.Errorf("after both returns: active=%d drain=%v, want 0 and nil", srv.luhmannActive, srv.luhmannDrain)
+			}
+		})
+	}
 }

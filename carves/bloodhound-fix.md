@@ -21,7 +21,7 @@ Opened by Bill, 2026-10-22.
 - **Item 6 — delegation through the Luhmann pool.** Split into the defects
       reported so far. See Item 6.
   - [x] ~~**6.1 — pool-served hunts do not reach the emitting session.**~~ **LANDED (2026-10-22 — `#153`.)** Probably one defect with #106. See Item 6.
-  - [ ] **6.2 — a stopped Luhmann session leaves its seat process running.**
+  - [x] ~~**6.2 — a stopped Luhmann session leaves its seat process running.**~~ **LANDED (2026-10-24 — `#163`.)**
         **OPEN (not queued), NOT VERIFIED** beyond HollowRpg's report. See Item 6.
   - [x] ~~**6.3 — a scoped hunt's seed is cut before its scope.**~~ **LANDED (2026-10-24 — `#159`.)**
         Measured 2026-10-24; not pool-specific, and not #107. All three legs cut inside the scope (the trigram leg through microfts2 70dbbcd). See Item 6.
@@ -173,6 +173,18 @@ session secretary, and see where the finding lands.
 --first` running. HollowRpg found three seat processes blocked at once, one
 reparented to init. Whether a stale waiter can take work meant for the live
 seat is not known.
+
+*Read 2026-10-24, and the answer is yes.* `LuhmannNext` checked ownership once,
+at the claim, then waited on the server's one shared queue with no further
+check, so every blocked call was an equal candidate for the next item. An item
+an orphan won went to an output file nobody reads, and that hunt's CLI timed
+out. Three blocked at once is consistent with one session id resumed (a
+newcomer under another id is refused while an orphan is in flight) or a
+`--force`; either way they shared the queue. Claude Code does not stop a
+backgrounded command when its session stops, so the orphan waits out its
+keepalive. Fixed by #163 (R3578): a claim supersedes the call already draining
+the seat, which stands down at once. An in-flight orphan under a different
+session id still holds the lease and is not covered; `--force` is the remedy.
 
 **6.3.** The three hunts HollowRpg's own secretary served had empty seed sets,
 so it searched the scope by hand, although a plain `ark search` found a dozen

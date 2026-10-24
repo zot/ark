@@ -232,6 +232,35 @@ visibly in flight, so even a 55-minute `--keepalive` never makes a live
 orchestrator look stale, and a dead one is displaceable in minutes rather
 than after a full cadence.
 
+##### One drain — the newest call wins
+
+The seat has **one drain**. When a `next` call claims the seat, any earlier
+call still in flight on it returns at once with the stand-down signal (exit 2,
+like `you don't have ownership`) instead of waiting on, and possibly receiving,
+the queue. Only the newest call waits for work.
+
+A live orchestrator never has two calls in flight, because it re-invokes `next`
+only after the previous one returns, so an older call still blocking belongs to
+a drain nobody is reading. Claude Code does not stop a backgrounded command when
+its session stops, so stopping a Luhmann session leaves its `next` running for
+up to a keepalive window, and a resumed session can come back under the same
+id (inferred from the 2026-10-20 case below, not measured). Without
+this rule every such orphan is an equal candidate for each queued item, and an
+item an orphan receives is printed to an output file nobody reads: the hunt is
+lost and its CLI times out (seen 2026-10-20, three blocked calls at once). The
+same holds for an owner displaced by `--first` or `--force`, whose call would
+otherwise keep draining the queue it no longer owns.
+
+The orphan cannot strike back. It makes no further call of its own: on a
+dropped connection `next` hands back a keepalive and exits rather than
+redialling, and there is no orchestrator behind it to re-invoke.
+
+One case this does not cover: an orphan under a **different** session id that
+is still in flight keeps its old lease live, so a newcomer's `--first` is
+refused until the orphan's keepalive window ends. Telling a dead client from a
+live one needs a look at the process, which is platform-specific; `--force` is
+the remedy until then.
+
 The two error strings drive two orchestrator reflexes, and together they
 make the protocol **self-converging** with no persistence and no human
 arbitration:

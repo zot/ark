@@ -782,10 +782,15 @@ func (srv *Server) luhmannLeaseLiveLocked() bool {
 // orchestrator able to displace the identity it was forked from. A call whose
 // session no longer owns the seat is ignored, its era's counters having been
 // reset when the seat moved (setLuhmannOwnerLocked).
-// CRC: crc-LuhmannCLI.md | R3321
-func (srv *Server) endLuhmannCall(session string, cancelled bool) {
+// R3578: the call also retires its supersede signal if it is still the seat's
+// current drain, whoever owns the seat now.
+// CRC: crc-LuhmannCLI.md | R3321, R3578
+func (srv *Server) endLuhmannCall(session string, cancelled bool, drain chan struct{}) {
 	srv.luhmannMu.Lock()
 	defer srv.luhmannMu.Unlock()
+	if srv.luhmannDrain == drain {
+		srv.luhmannDrain = nil
+	}
 	if srv.luhmannOwner != session {
 		return
 	}
@@ -808,21 +813,32 @@ func (srv *Server) endLuhmannCall(session string, cancelled bool) {
 // when unowned or already self, else stands the caller down; plain validates
 // only — unowned yields the reclaim signal, a foreign owner stands the caller
 // down. The lease is server memory (no persistence), so a bounce clears it and
-// the reclaim path (R3014) re-establishes exactly one owner.
-// CRC: crc-LuhmannCLI.md | R3012, R3013, R3014, R3026
-func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNextDisposition, string) {
+// the reclaim path (R3014) re-establishes exactly one owner. A successful claim
+// becomes the seat's one drain and returns its supersede signal (R3578).
+// CRC: crc-LuhmannCLI.md | R3012, R3013, R3014, R3026, R3578
+func (srv *Server) claimLuhmann(session string, mode luhmannNextMode) (luhmannNextDisposition, string, chan struct{}) {
 	srv.luhmannMu.Lock()
 	defer srv.luhmannMu.Unlock()
 	disp, msg := srv.applyLuhmannClaimLocked(session, mode)
-	if disp == luhmannDispOK {
-		// R3321: register the in-flight call in the SAME locked step as the
-		// claim, so there is no instant where the seat is owned but nothing
-		// proves the owner alive. Increment afterwards and a concurrent
-		// --first could read that gap as staleness and displace an
-		// orchestrator that had just claimed.
-		srv.luhmannActive++
+	if disp != luhmannDispOK {
+		return disp, msg, nil
 	}
-	return disp, msg
+	// R3578: a live orchestrator re-invokes only after its previous call
+	// returns, so a call still draining is an orphan. Closing its signal wakes
+	// it out of its select before this call can reach the queue, so a parked
+	// orphan never receives another item.
+	if srv.luhmannDrain != nil {
+		close(srv.luhmannDrain)
+	}
+	drain := make(chan struct{})
+	srv.luhmannDrain = drain
+	// R3321: register the in-flight call in the SAME locked step as the
+	// claim, so there is no instant where the seat is owned but nothing
+	// proves the owner alive. Increment afterwards and a concurrent
+	// --first could read that gap as staleness and displace an
+	// orchestrator that had just claimed.
+	srv.luhmannActive++
+	return disp, msg, drain
 }
 
 // applyLuhmannClaimLocked decides the disposition for one claim (R3013, R3321).
@@ -868,7 +884,7 @@ func (srv *Server) applyLuhmannClaimLocked(session string, mode luhmannNextMode)
 // deadline. The disposition drives the handler's headers (R3013, R3014).
 // CRC: crc-LuhmannCLI.md | Seq: seq-bloodhound-cli.md#1.5 | R3010, R3011, R3016
 func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmannNextMode, keepalive time.Duration) (body string, disp luhmannNextDisposition, err error) {
-	disp, msg := srv.claimLuhmann(session, mode)
+	disp, msg, drain := srv.claimLuhmann(session, mode)
 	if disp != luhmannDispOK {
 		return luhmannOwnershipPrompt(disp, msg), disp, nil
 	}
@@ -876,7 +892,7 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 	// exit path. Cancellation is singled out because it is the one exit meaning
 	// the client is gone rather than about to come back.
 	cancelled := false
-	defer func() { srv.endLuhmannCall(session, cancelled) }()
+	defer func() { srv.endLuhmannCall(session, cancelled, drain) }()
 	switch {
 	case keepalive <= 0:
 		keepalive = LuhmannNextKeepalive
@@ -889,6 +905,8 @@ func (srv *Server) LuhmannNext(ctx context.Context, session string, mode luhmann
 	case <-ctx.Done():
 		cancelled = true // R3321: the drain died; the lease expires at once
 		return "", luhmannDispOK, ctx.Err()
+	case <-drain:
+		return luhmannSupersededPrompt(), luhmannDispExit, nil // R3578
 	case w := <-srv.nextQueue:
 		// For a curation task, inline the request doc's content (query + raw
 		// findings) into the crank-handle: tmp:// paths aren't Read-able files,
@@ -917,6 +935,15 @@ func luhmannOwnershipPrompt(disp luhmannNextDisposition, msg string) string {
 		return fmt.Sprintf("The ark server has no Luhmann owner (%s) — it was restarted. Reclaim the seat: run `~/.ark/ark luhmann next --first`.\n", msg)
 	}
 	return fmt.Sprintf("Another session owns the Luhmann seat (%s). Stand down — do not run `next` again; a single orchestrator serves CLI hunts.\n", msg)
+}
+
+// luhmannSupersededPrompt is returned to a drain a newer `next` call displaced
+// (R3578). Its usual reader is nobody: an orphan left by a stopped session. A
+// live orchestrator that started a second call by mistake still has that newer
+// call holding the seat, so it must not start a third.
+// CRC: crc-LuhmannCLI.md | R3578
+func luhmannSupersededPrompt() string {
+	return "A newer `ark luhmann next` call now holds this seat, so this one was superseded. Stand down — do not run `next` again; if you have another `next` running, it is the one serving.\n"
 }
 
 // luhmannKeepalivePrompt is returned on the idle deadline (R3011, R3016): no

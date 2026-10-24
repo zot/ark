@@ -247,7 +247,7 @@ waiting.
 
 ### The two ownership signals
 
-The seat is single by design; two returns guard it:
+The seat is single by design; three returns guard it:
 
 - **"no Luhmann owner … reclaim with --first"** — the ark server was
   restarted and lost the in-memory lease. Re-claim it: run
@@ -258,6 +258,11 @@ The seat is single by design; two returns guard it:
   orchestrator holds it (e.g. you lost a post-restart race). **Stop** —
   do not re-invoke `next`. One orchestrator per corpus serves the
   hunts; a second would double-curate.
+- **"a newer `ark luhmann next` call now holds this seat … superseded"**
+  — you started a second `next` while one was still running, and the
+  newer one took the seat. Do not start another; the newer call's return
+  arrives as usual, and you carry on from it. (Its usual reader is an
+  orphan left by a stopped session, which nobody hears.)
 
 ### Supervising the pool
 

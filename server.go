@@ -73,7 +73,7 @@ type Server struct {
 	// keeps exactly one session draining `ark luhmann next`; nextQueue is the
 	// watcher→Luhmann handoff of curation tasks + supervisor directives. Both
 	// are in-memory server state — a bounce clears them (R3012, R3011).
-	luhmannMu    sync.Mutex // R3012, R3145, R3321: guards luhmannOwner + the lease liveness pair + eventOwner/eventPumpCancel
+	luhmannMu    sync.Mutex // R3012, R3145, R3321: guards luhmannOwner + the lease liveness pair + luhmannDrain + eventOwner/eventPumpCancel
 	luhmannOwner string     // R3012: session holding the Luhmann seat; "" when unowned
 	// R3321: the seat lease is held by the drain, not by a timer. luhmannActive
 	// counts the owner's in-flight `next` calls — the server is the party
@@ -84,8 +84,14 @@ type Server struct {
 	// then there is nobody to come back.
 	luhmannActive    int
 	luhmannLiveUntil time.Time
-	nextQueue        chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
-	sendCounter      atomic.Uint64    // R3131: monotonic nonce source for `ark luhmann send`; a bounce resets it
+	// R3578: the seat has one drain. luhmannDrain is the supersede signal of the
+	// newest claimed `next` call; the next claim closes it, so an older call —
+	// an orphan from a stopped session, or a displaced owner's — stands down
+	// instead of competing for nextQueue. Nil when nothing is draining.
+	luhmannDrain chan struct{}
+
+	nextQueue   chan LuhmannWork // R3011: curation tasks + supervisor directives for `next`
+	sendCounter atomic.Uint64    // R3131: monotonic nonce source for `ark luhmann send`; a bounce resets it
 
 	// R3145, R3148: Frictionless event routing. eventOwner shares luhmannMu
 	// with the seat rather than taking a lock of its own — the two are

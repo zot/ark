@@ -1,4 +1,5 @@
 # Test Design: LuhmannCLI
+**Requirements:** R3578
 
 **Source:** crc-LuhmannCLI.md
 
@@ -7,7 +8,7 @@ Covers the bloodhound-CLI S1 drain tube: the in-memory ownership lease
 against a bare `&Server{}` — the lease touches only
 `luhmannMu`/`luhmannOwner`/`luhmannActive`/`luhmannLiveUntil` and the drain only
 those plus `nextQueue`, so no DB, pubsub, or socket is needed. R3010, R3011,
-R3012, R3013, R3014, R3016, R3321.
+R3012, R3013, R3014, R3016, R3321, R3578.
 
 ## Test: ownership matrix
 **Purpose:** `claimLuhmann` applies the lease correctly across all three modes ×
@@ -63,6 +64,27 @@ elapsed time.
   B is alive.
 
 **Refs:** crc-LuhmannCLI.md
+
+## Test: the newest drain wins
+**Purpose:** a claim supersedes the call already draining the seat, so an
+orphaned drain can never receive work meant for the live one (R3578).
+**Input:** a `Server` owned by A with an unbuffered `nextQueue`. Two cases:
+- *same session:* A's first `LuhmannNext` blocks; a second A call claims.
+- *displaced owner:* A's call blocks; B claims with `--force`.
+In each, once the second call is in flight, push one curation item.
+**Expected:** the first call returns at once with disposition Exit and a body
+saying it was superseded, before any work is pushed; the second call receives
+the item; afterwards `luhmannActive` is 0 and `luhmannDrain` is nil. In the
+same-session case the first call's return must not end the lease, so the
+second's claim still reads as live while it waits.
+**Refs:** crc-LuhmannCLI.md
+**Code:** luhmann_next_test.go
+**Fire alarm:** stop the claim from superseding the previous drain; the first
+call stays blocked, so it is still waiting when the work is pushed and the test
+fails on its missing stand-down.
+**Inject:** recall_next.go:claimLuhmann
+**Pulled:** 2026-10-24 — rang: "superseded call is still blocked; it would compete for the next item" in both cases
+**Alarm:** 1
 
 ## Test: keepalive on idle deadline
 **Purpose:** with the seat owned and no work queued, `LuhmannNext` blocks until
@@ -147,3 +169,4 @@ R2777 value).
 with `tokens_at_close = 0`.
 **Inject:** cmd/ark/main.go:classifySubagentExit
 **Pulled:** 2026-10-22 — rang: label "crash" and tokens_at_close 0 in all three cases
+**Alarm:** 2
