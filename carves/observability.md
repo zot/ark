@@ -140,6 +140,17 @@ from the build. The commit comes from git, and a dirty tree is marked as such.
 Its publishers, the server activities that report into it: embedding first
 (the case that prompted this), then reconciliation, indexing and the queues.
 
+A second case for reconciliation, met 2026-10-25: every `ark.toml` edit reloads
+the config and starts a full reconcile, and clients wait behind it with nothing
+saying why. Measured that day on the live index, two reloads minutes apart: one
+reconcile took 2 min 56 s (12:43:30 to 12:46:26), during which `ark status` timed
+out at 15 s and a search at 30 s; the next took 24 s. Not known why they
+differ: the first followed a `search_exclude` change and dropped 8 scheduler
+queue entries, but neither is shown to be the cause. A client that saw
+"reconciling, N of M files" would have known to wait. Whether a config reload
+needs a full reconcile at all is a separate question, worth asking when this
+item is designed.
+
 The identity also goes to Lua directly, as a `sys.version` string (and the
 build stamp beside it, name to settle), set once in `registerLuaFunctions`.
 A constant needs no subscription, so the UI can read it without the document

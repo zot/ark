@@ -73,6 +73,12 @@ TUI consumes it exactly as the Frictionless panel does.
 Plausible screens after that: search (query line, results, preview pane), tag
 browse, status/monitor.
 
+## Testing it
+
+[tui.md](tui.md) is the runner that drives this TUI the way Playwright drives
+the browser: a Lua script launches it in a pty, types, waits, and reads the
+screen. The first screen built here is that carve's first target.
+
 ## Inventory to look at
 
 `bubbletea` (the loop), `lipgloss` (layout/style), `glamour` (markdown, already
