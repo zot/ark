@@ -1,4 +1,5 @@
 # Test Design: FileScanActor
+**Requirements:** R3612
 **Source:** crc-FileScanActor.md
 
 Cheap deterministic tests over the registry/changeNum decision logic on a
@@ -52,7 +53,7 @@ delete) — then a stale store's retire deletes the entry a newer in-flight even
 just created, and the newer scan's store is dropped as "not current" (file left
 unindexed). Red: entry-present assertion fails.
 **Inject:** db.go:retireFileScanIfCurrent
-**Pulled:** 2026-09-17 — rang
+**Pulled:** 2026-10-25 — rang ("stale retire(my1=1) deleted the entry newer scan my2=2 needs")
 
 ## Test: content-staleness escape, full-only, append-exempt
 **Purpose:** the full-store escape skips only when committed length AND hash
@@ -84,7 +85,7 @@ store failure then leaves the file unindexed with nothing to re-scan it until th
 next periodic reconcile, which a green suite never notices. Red: err case expects
 reEmit:true.
 **Inject:** db.go:storeResultAction
-**Pulled:** 2026-09-17 — rang
+**Pulled:** 2026-10-25 — rang ("store failure: got {retire:true reEmit:false force:false}, want {retire:true reEmit:true}")
 
 ## Test: per-chunk changeNum preemption abandons between chunks
 **Purpose:** when the reuse gate reports supersession, buildEntries returns
@@ -143,3 +144,16 @@ thousands of concurrent computes, the exact unboundedness Item 6 removes. Silent
 the index is still correct, the burst just melts the box. Red: peak == M (>> N).
 **Inject:** db.go:runScanBounded
 **Pulled:** 2026-09-18 — rang (peak concurrency exceeded cap=3)
+
+## Test: a scan's slot is held until it is released
+**Purpose:** a prepared scan keeps its dispatch slot after preparing, so prepared scans cannot pile up behind the writer; a double release frees one slot (R3612)
+**Input:** a one-slot DB; a scan that hands its release on; a second scan
+**Expected:** the second waits until the first's release; no slot held after both
+**Refs:** crc-FileScanActor.md
+**Code:** filescan_test.go
+**Fire alarm:** release the slot when the prepare closure returns, as before R3612; red is "a second scan ran while the first still held its slot"
+**Inject:** db.go:runScanBounded
+**Pulled:** 2026-10-25 — rang ("a second scan ran while the first still held its slot")
+**Fire alarm:** drop the once-guard, so a double release takes a slot it does not hold; red is "the slot was never released"
+**Inject:** db.go:runScanBounded
+**Pulled:** 2026-10-25 — rang ("the slot was never released")

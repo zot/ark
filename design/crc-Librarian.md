@@ -1,5 +1,5 @@
 # Librarian
-**Requirements:** R1235-1254, R1268-1273, R1277-1279, R1292, R1293, R1295-1301, R1306-1308, R1315, R1316, R1378-1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1604, R1608-1617, R1621, R1622, R1830, R1831, R1846-1848, R1854, R1862-1864, R1913-1916, R1922, R1927-1931, R2158, R2163-2173, R2194-2225, R2228, R2230, R2232-2257, R2313-2321, R2324, R2326-2343, R2409, R2567-2599, R2603, R2609, R2617, R2618, R2620-2626, R2629, R2634, R2639-2644, R2647, R2655-2660, R2662, R2667, R2668, R2670-2674, R2676, R2677, R2681, R2684-2686, R2742, R2743, R2905-2913, R2961-2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079-3082, R3163-3165, R3185-3187, R3192, R3195, R3414, R3415, R3570, R3573, R3575, R3577, R3579, R3580, R3585, R3587, R3588, R3591, R3592, R3604
+**Requirements:** R1235-1254, R1268-1273, R1277-1279, R1292, R1293, R1295-1301, R1306-1308, R1315, R1316, R1378-1382, R1529, R1530, R1587, R1593, R1594, R1596, R1597, R1604, R1608-1617, R1621, R1622, R1830, R1831, R1846-1848, R1854, R1862-1864, R1913-1916, R1922, R1927-1931, R2158, R2163-2173, R2194-2225, R2228, R2230, R2232-2257, R2313-2321, R2324, R2326-2343, R2409, R2567-2599, R2603, R2609, R2617, R2618, R2620-2626, R2629, R2634, R2639-2644, R2647, R2655-2660, R2662, R2667, R2668, R2670-2674, R2676, R2677, R2681, R2684-2686, R2742, R2743, R2905-2913, R2961-2965, R2973, R2991, R2992, R3004, R3067, R3070, R3075, R3079-3082, R3163-3165, R3185-3187, R3192, R3195, R3414, R3415, R3570, R3573, R3575, R3577, R3579, R3580, R3585, R3587, R3588, R3591, R3592, R3604, R3611
 
 Manages spectral search: expansion request queue (lotto tube for
 sidecar agent) and tag value embeddings (local nomic model). The
@@ -28,6 +28,7 @@ loads on first embedding query and stays warm until TTL expiry.
 - (substrate) `Librarian.modelCtx` is reused to embed bare-text inputs ad-hoc (R2572); no separate context.
 
 ## Does
+- chatSubchunks (recall.go): markdown sub-chunks of a chat turn, each carrying its voice: an open `<thinking>`/`<narration>` span is closed at a sub-chunk's end and reopened at the next one's start (R3611).
 - After each embed tier's `ctx.close()`, releaseMemory when the tier embedded at
   least `releaseAfterEmbedChunks` chunks (R3604).
 ### Find-Connections Substrate (substrateOp)

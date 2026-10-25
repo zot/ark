@@ -12,8 +12,13 @@ Opened by Bill, 2026-10-22.
 ## Status
 
 - [x] ~~**Item 1 — a watermark must be in the message to the user.**~~ **LANDED (2026-10-22 — `#152`.)** Skill and doc edits. See Item 1.
-- [ ] **Item 2 — paraphrased prose in the transcripts ark indexes.** **OPEN (not
-      queued), NOT VERIFIED.** What recall and chat indexing see. See Item 2.
+- **Item 2 — paraphrased prose in the transcripts ark indexes.** Decided
+      2026-10-25: kept, and marked in the chunk text. See Item 2.
+  - [x] ~~**2.1 — thinking and narration marked in chat chunks.**~~ **LANDED (2026-10-25 — `#167`.)** `/mini-spec`.
+        The version 2 re-chunk ran once microfts2 made chunk replacement cheap
+        (its ca1218c). See Item 2.
+  - [ ] **2.2 — the chat UI shows which voice a line is in.** **OPEN (#168.)** `/ui-thorough`, a Frictionless session of its own, after 2.1.
+        See Item 2.
 - [x] ~~**Item 3 — a multi-paragraph watermark came back as one hunt.**~~ **LANDED (2026-10-22 — `#157`.)** See Item 3.
 - [x] ~~**Item 4 — a finding labels itself ambient recall.**~~ **LANDED (2026-10-22 — `#156`.)** See Item 4.
 - [ ] **Item 5 — nothing shows whether a watermark was recognized.** **OPEN
@@ -121,6 +126,61 @@ The queue carried this as a note of Bill's before it was measured: thinking
 blocks now hold summaries, so the chunker and the chat renderers (`ark chats`
 and `/content`) need updating, and thinking blocks should be shown with a
 thought-balloon emoji.
+
+**Measured 2026-10-25**, every thinking block in `~/.claude/projects`, by the
+month of its record:
+
+| 2026    | with text | narration | empty |
+|---------|----------:|----------:|------:|
+| Jan–Feb |       161 |         0 |     0 |
+| Mar–Apr |       670 |         0 | 5,013 |
+| May–Jul |         0 |       209 | 27,991 |
+| Aug–Oct |    24,547 |     2,904 | 2,197 |
+
+Empty means the signature was kept and the text withheld. Text returned in
+August, so recent chats do carry thinking text; whether it is raw reasoning or a
+summary, the transcript cannot say, since every month's blocks have the same
+three keys. Narration is labelled in its signature and is still being written.
+
+DECIDED (Bill, 2026-10-25): **thinking and narration stay in the chunks**; they
+carry clues for the bloodhound and for the person. Since a summary cannot be told
+from raw reasoning, every thinking block with text is simply thinking. Narration
+stays distinct: it stands in for speech, not thought, and the data still marks
+it. **The mark lives in the chunk text, as XML ranges**: `<thinking>…</thinking>`
+and `<narration>…</narration>` around each block, plain text unwrapped. A span
+bounds a multi-line block exactly, a model reading a hit knows what it is
+without a convention to learn, and every surface carries it because the chunk is
+the canonical form; attributes were rejected because the CLI and agents would
+never see them. Empty thinking blocks contribute nothing, as now. The chat
+chunker goes to version 2, so every chat re-chunks (Item 11). Accepted cost: a
+block whose text contains a closing tag ends its span early, which is cosmetic,
+and a search for `thinking` or `narration` matches every marked chunk.
+
+**2.1** is that change: the chunker, its version, the specs, and `ark chats` and
+`/content` showing the tags as they stand.
+
+The version 2 re-chunk exposed two costs, measured 2026-10-25. Prepared scans
+piled up behind the single writer, holding 1.8 GB of file contents and 950 MB of
+trigram counts with the process at 5 to 6 GB; a scan now holds its dispatch slot
+until its store finishes, which held anonymous memory near 1.5 GB
+(parallel-indexing.md). And each store is slow, because replacing a chunk's text
+means removing its trigrams one inverted record at a time inside microfts2's
+reindex (about 18% of a CPU profile in `removeFromInvertedRecord` alone), so the
+corpus would take hours. DECIDED (Bill, 2026-10-25): stop and ask microfts2 for a
+cheaper replacement first; the re-chunk waits for it. microfts2 answered the
+same day (its ca1218c): a write gathers its inverted-record changes and rewrites
+each record once. Measured on this corpus afterwards, the re-chunk ran at about
+200 files a minute against 3 to 30 before, the last 816 files draining in five
+minutes at a 30 to 50 MB live heap; `removeFromInvertedRecord` is gone from the
+profile.
+
+**2.2** is the UI's rendering of them, Frictionless work in a session of its own
+(never mixed with 2.1's `/mini-spec`). Bill, 2026-10-25: each voice gets an icon,
+a brain for thinking, a speaking icon for the agent's ordinary text, and
+glasses for narration (his "?", so the icon is the UI session's to settle). A tag
+on a line of its own starts a CommonMark HTML block, which turns markdown off
+inside it until a blank line; whether the chunk renderer passes the tags through
+as elements CSS can style is the first thing 2.2 has to find out.
 
 ## Item 3
 

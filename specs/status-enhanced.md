@@ -80,9 +80,15 @@ chunks: 8451
 sources: 5
 strategies: lines=1200 chat-jsonl=73
 db: 511 MB
+scans: 12 in flight, 8 holding a slot of 8, 3 writes queued
 memory: go heap 640 MB live, 1.2 GB in use, 310 MB idle; go total 1.9 GB; rss 2.3 GB
 server: running
 ```
+
+A served status also prints a `scans:` line: file scans in flight, scans
+holding a dispatch slot (preparing, waiting for the writer, or storing) against
+the slot count, and writes queued. It is what shows a backlog behind the writer
+([parallel-indexing.md](parallel-indexing.md)).
 
 The `memory` line appears only when a server answers the status; it describes
 that server's process ([memory-release.md](memory-release.md)), and `rss` is

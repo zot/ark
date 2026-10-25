@@ -1226,13 +1226,50 @@ type inputQuery struct {
 // sub-chunks in document order. The N-th element is the unit a path:range:N
 // recall locator addresses; the funnel and `ark chunks PATH:RANGE:N` re-derive
 // it identically because markdown chunking is deterministic. R2910
+//
+// R3611: a thinking or narration block spanning paragraphs keeps its voice in
+// every sub-chunk: a span open at one sub-chunk's end is closed there and
+// reopened at the next one's start.
+// CRC: crc-Librarian.md | R2910, R3611
 func chatSubchunks(content string) []microfts2.Chunk {
 	var subs []microfts2.Chunk
+	open := -1
 	_ = microfts2.MarkdownChunker{}.Chunks("", []byte(content), func(c microfts2.Chunk) bool {
+		text := string(c.Content)
+		if open >= 0 {
+			text = voiceTags[open].open + text
+		}
+		if open = openVoice(text); open >= 0 {
+			// Flush against the text, before the sub-chunk's trailing newlines.
+			body := strings.TrimRight(text, "\n")
+			text = body + voiceTags[open].close + text[len(body):]
+		}
+		c.Content = []byte(text)
 		subs = append(subs, c)
 		return true
 	})
 	return subs
+}
+
+// voiceTags are the chat chunk voice spans (R3608), indexed by openVoice.
+var voiceTags = [...]struct{ open, close string }{
+	{thinkingOpen, thinkingClose},
+	{narrationOpen, narrationClose},
+}
+
+// openVoice returns the index of the voice span still open at the end of text,
+// or -1: whichever voice tag comes last decides. R3611
+func openVoice(text string) int {
+	last, voice := -1, -1
+	for i, v := range voiceTags {
+		if at := strings.LastIndex(text, v.open); at > last {
+			last, voice = at, i
+		}
+		if at := strings.LastIndex(text, v.close); at > last {
+			last, voice = at, -1
+		}
+	}
+	return voice
 }
 
 // ChatSubchunk returns the markdown sub-chunk of the chat turn at

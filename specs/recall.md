@@ -152,7 +152,11 @@ survivors, vector-check against the input, and surface the matched paragraph
 located by `path:range:"<snippet>"` (resolve via `ark chunks`, see
 [cli-commands.md](cli-commands.md); drop the snippet for the whole turn). Its
 *tags* surface the whole turn (tags attach to turns). Main-corpus chunks
-surface whole.
+surface whole. A turn's thinking and narration carry voice tags
+([indexing.md](indexing.md)), and a block that spans paragraphs would leave its
+middle sub-chunks unmarked, so a span still open at a sub-chunk's end is closed
+there and reopened at the start of the next: every sub-chunk says which voice it
+is in.
 
 After allocation, resolve each surfaced chunk's path/range/tags
 (`ChunkInfo` + `AllTagsForChunk`) and content (if `IncludeContent`) from the

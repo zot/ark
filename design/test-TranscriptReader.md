@@ -65,20 +65,26 @@ names, in transcript.go itself, so a broken scan fails rather than passing.
 **Purpose:** R3567, R240, R241, R1507. The chunker on lines in the shapes Claude
 Code writes. Before it moved onto the reader (2026-10-22) nothing tested its text
 rules: injecting "index tool results" or "drop thinking" turned nothing red.
-**Input:** a person turn with a timestamp; an assistant turn with thinking, text
-and a tool call; a tool-result turn; an attachment; a partial trailing line.
+**Input:** a person turn with a timestamp; an assistant turn with thinking, an
+empty signed thinking block, narration, text and a tool call; a tool-result turn;
+an attachment; a partial trailing line.
 **Expected:** three chunks: the person's turn (role human, timestamp set), the
-assistant's thinking and text one per line (role assistant), and the partial line
-raw with no role. No chunk for the tool result or the attachment, and no tool
+assistant's thinking, narration and text one per line, thinking and narration
+in their voice tags and the empty block absent (role assistant, R3608), and the
+partial line raw with no role. No chunk for the tool result or the attachment, and no tool
 command anywhere.
 **Refs:** crc-DB.md, crc-TranscriptReader.md
 **Code:** chat_chunker_test.go
 **Fire alarm:** index tool-result text; an extra chunk appears.
 **Inject:** db.go:chatChunkText
-**Pulled:** 2026-10-22 — rang: TestChatChunkerText failed
+**Pulled:** 2026-10-25 — rang: TestChatChunkerText "chunks:" mismatch (re-pulled after the voice tags rewrote chatChunkText)
 **Fire alarm:** drop thinking from chunk text; the assistant chunk loses "weighing".
 **Inject:** db.go:chatChunkText
-**Pulled:** 2026-10-22 — rang: TestChatChunkerText failed
+**Pulled:** 2026-10-25 — rang: TestChatChunkerText "chunks:" mismatch (re-pulled after the voice tags rewrote chatChunkText)
+**Fire alarm:** treat narration as plain text, untagged; the assistant chunk
+loses `<narration>said it</narration>`.
+**Inject:** db.go:chatChunkText
+**Pulled:** 2026-10-25 — rang: TestChatChunkerText "chunks:" mismatch
 **Fire alarm:** stop indexing a partial trailing line; its chunk disappears.
 **Inject:** db.go:JSONLChunkFunc
 **Pulled:** 2026-10-22 — rang: TestChatChunkerText failed

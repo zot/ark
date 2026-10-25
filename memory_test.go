@@ -8,10 +8,13 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"weak"
+
+	"github.com/zot/microfts2"
 )
 
-// CRC: crc-DB.md | Test: test-MemoryRelease.md | R3601-R3607
+// CRC: crc-DB.md | Test: test-MemoryRelease.md | R3601-R3607, R3613, R3614
 
 // TestReleaseAfterScanBurstThreshold: below the threshold nothing is released
 // and the count is kept; at it, the count resets. R3602
@@ -128,3 +131,29 @@ var queueSink *queueHolder
 // capturing returns a closure holding p by value, the way a store closure holds
 // its scan prep.
 func capturing(p *[1 << 20]byte) func() int { return func() int { return int(p[0]) } }
+
+// TestWriteCPUProfile: a short CPU profile is written and non-empty. R3614
+func TestWriteCPUProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cpu.pprof")
+	if err := writeCPUProfile(path, 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() == 0 {
+		t.Fatalf("no cpu profile written: %v, %v", fi, err)
+	}
+}
+
+// TestScanBacklog: the backlog counts registry entries, held slots against the
+// bound, and queued writes. R3613
+func TestScanBacklog(t *testing.T) {
+	db := &DB{scanSem: make(chan struct{}, 4)}
+	db.stampFileScan("/a")
+	db.stampFileScan("/b")
+	db.scanSem <- struct{}{}
+	db.writeQueue = append(db.writeQueue, func(*microfts2.DB) {})
+	got := *db.scanBacklog()
+	want := ScanBacklog{InFlight: 2, Holding: 1, Slots: 4, WritesQueued: 1}
+	if got != want {
+		t.Fatalf("backlog = %+v, want %+v", got, want)
+	}
+}

@@ -2109,12 +2109,18 @@ func (db *DB) releaseAfterScanBurst() {
 // worker-count bound under the per-file scan-actor model. A nil scanSem (a
 // zero-value *DB) runs unbounded, which only a test constructs.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.2.2 | R3438
-func (db *DB) runScanBounded(fn func()) {
+//
+// R3612: fn receives the slot's release and must see it called when the scan is
+// over, which for a stored scan is after its store, not after preparing. The
+// release is once-only, so every exit path can call it safely.
+func (db *DB) runScanBounded(fn func(release func())) {
+	release := func() {}
 	if db.scanSem != nil {
 		db.scanSem <- struct{}{}
-		defer func() { <-db.scanSem }()
+		var once sync.Once
+		release = func() { once.Do(func() { <-db.scanSem }) }
 	}
-	fn()
+	fn(release)
 }
 
 // startFileScan stamps path's registry entry with the next changeNum and
@@ -2150,7 +2156,9 @@ func (db *DB) startFileScanWith(idx *Indexer, path string, force bool) {
 	// Bound the dispatch: the actor's spawn returns immediately, and the
 	// goroutine acquires scanSem before the heavy prepareScan, so at most
 	// runtime.NumCPU() preparations run at once and the actor never blocks. R3438
-	go db.runScanBounded(func() { db.prepareFileScan(prepIdx, cfg, path, my, force) })
+	go db.runScanBounded(func(release func()) {
+		db.prepareFileScan(prepIdx, cfg, path, my, force, release)
+	})
 }
 
 // scanConfigOnActor indexes a config file (ark.toml) synchronously on the DB
@@ -2207,7 +2215,14 @@ func (db *DB) scanConfigOnActor(idx *Indexer, path string, my uint64) {
 // startFileScan captured on the actor. idx is copy-bound (idx.fts is a private
 // fts.Copy).
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.3 | R3419, R3426, R3433
-func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64, force bool) {
+func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64, force bool, release func()) {
+	// R3612: every path but the hand-off to finishFileScan ends the scan here.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			release()
+		}
+	}()
 	fi, statErr := os.Stat(path)
 	status, checkErr := idx.fts.CheckFile(path) // private copy — off-actor safe
 	known := checkErr == nil && status.FileID != 0
@@ -2265,7 +2280,8 @@ func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64,
 		return
 	}
 	SyncVoid(db, func(db *DB) error {
-		db.finishFileScan(path, prep, my)
+		handedOff = true
+		db.finishFileScan(path, prep, my, release)
 		return nil
 	})
 }
@@ -2273,13 +2289,15 @@ func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64,
 // finishFileScan applies the changeNum redo-escape and, if the scan is still
 // current, enqueues the store step. On the DB actor.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.7 | R3422
-func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
+func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64, release func()) {
 	// R3422: a newer event bumped the changeNum (or the entry was retired) — drop
 	// without storing. The newer scan owns the entry and will store + retire.
 	if !db.fileScanCurrent(path, my) {
+		release() // R3612
 		return
 	}
 	db.enqueueWrite(func(ftsCopy *microfts2.DB) {
+		defer release() // R3612: after the store, even one that fails or panics
 		idx := db.indexer.withFTS(ftsCopy)
 		err := idx.storeScan(prep)
 		db.drainWriteSchedule(idx)
@@ -4323,6 +4341,29 @@ type StatusInfo struct {
 	Warnings map[string]string `json:"warnings,omitempty"`
 	// Memory describes the serving process; nil when no server answered. R3605
 	Memory *MemoryStatus `json:"memory,omitempty"`
+	// Scans is the serving process's scan backlog; nil when unserved. R3613
+	Scans *ScanBacklog `json:"scans,omitempty"`
+}
+
+// ScanBacklog is how much file-scan work is outstanding, read on the DB actor.
+// Holding against Slots shows the dispatch bound (R3612); WritesQueued shows a
+// backlog behind the single writer.
+type ScanBacklog struct {
+	InFlight     int `json:"inFlight"`     // registry entries: scans not yet retired
+	Holding      int `json:"holding"`      // scans holding a dispatch slot
+	Slots        int `json:"slots"`        // the dispatch bound
+	WritesQueued int `json:"writesQueued"` // write closures waiting for the writer
+}
+
+// scanBacklog reads the backlog. On the DB actor. R3613
+// CRC: crc-Server.md | R3613
+func (db *DB) scanBacklog() *ScanBacklog {
+	return &ScanBacklog{
+		InFlight:     len(db.fileScans),
+		Holding:      len(db.scanSem),
+		Slots:        cap(db.scanSem),
+		WritesQueued: len(db.writeQueue),
+	}
 }
 
 // arkLabels maps every ark-bucket record prefix that `status -db` displays to
@@ -5644,22 +5685,38 @@ func JSONLChunkFunc(_ string, content []byte, yield func(microfts2.Chunk) bool) 
 	return nil
 }
 
+// Voice tags wrap a chat chunk's thinking and narration text, so every reader of
+// a chunk can tell them from what was said (R3608).
+const (
+	thinkingOpen   = "<thinking>"
+	thinkingClose  = "</thinking>"
+	narrationOpen  = "<narration>"
+	narrationClose = "</narration>"
+)
+
 // chatChunkText is a chat turn's chunk text: its text, thinking and narration
 // blocks, one per line. Tool calls and tool results are not indexed. The rule
 // the byte scanner applied, kept when the chunker moved onto the transcript
 // reader (measured identical on every user and assistant turn, 2026-10-22).
-// CRC: crc-DB.md | R240, R3553, R3567
+// Thinking and narration are wrapped in voice tags flush against their text, so
+// the first line of a block never stands alone as an HTML block (R3608).
+// CRC: crc-DB.md | R240, R3553, R3567, R3608
 func chatChunkText(rec TranscriptRecord) string {
 	if rec.Kind != TurnUser && rec.Kind != TurnAssistant {
 		return ""
 	}
 	var parts []string
 	for _, b := range rec.Blocks {
+		if b.Text == "" {
+			continue
+		}
 		switch b.Kind {
-		case BlockText, BlockThinking, BlockNarration:
-			if b.Text != "" {
-				parts = append(parts, b.Text)
-			}
+		case BlockText:
+			parts = append(parts, b.Text)
+		case BlockThinking:
+			parts = append(parts, thinkingOpen+b.Text+thinkingClose)
+		case BlockNarration:
+			parts = append(parts, narrationOpen+b.Text+narrationClose)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -5694,12 +5751,13 @@ type JSONLChunker struct{}
 // chatChunkerVersion is the chat-jsonl chunker's rules version. Bump it when
 // what the chunker indexes changes: microfts2 then reports every chat file
 // chunked under another version stale, and the ordinary refresh re-chunks it.
-// R3596
-const chatChunkerVersion = 1
+// Version 2 introduced the voice tags.
+// CRC: crc-DB.md | R3609
+const chatChunkerVersion = 2
 
 var _ microfts2.VersionedChunker = JSONLChunker{}
 
-// ChunkerVersion implements microfts2.VersionedChunker. R3596
+// ChunkerVersion implements microfts2.VersionedChunker. R3609
 func (JSONLChunker) ChunkerVersion() uint32 { return chatChunkerVersion }
 
 // Chunks delegates to JSONLChunkFunc.

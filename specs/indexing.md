@@ -32,6 +32,19 @@ chunk's content is the turn's text, thinking and narration blocks, one per line;
 a string `content` is one text block. Thinking is the `thinking` field, never its
 `signature`.
 
+**Each block says which voice it is.** A thinking block's text is wrapped as
+`<thinking>…</thinking>` and a narration block's as `<narration>…</narration>`;
+plain text is not wrapped. The open tag runs straight into the text and the close
+tag follows it directly, with no line of their own, so the first line of a block
+never stands alone as an HTML block in a markdown renderer. Thinking and
+narration carry clues for the bloodhound and the person, so they stay in the
+index, but neither is what was said: since mid-2026 a thinking block's text may
+be a summary another model wrote, which the transcript cannot distinguish from
+raw reasoning, and narration is a paraphrase standing in for words the
+transcript did not keep. A thinking block with no text contributes nothing.
+Decided by Bill, 2026-10-25 (bloodhound-fix Item 2), from a census of every
+thinking block in the transcripts.
+
 **What is not.**
 
 - `tool_use` blocks (input contains file contents and code edits whose
@@ -73,8 +86,9 @@ optional `VersionedChunker` interface, and microfts2 records in each file's
 record the version that file was chunked under. Bump the version whenever what
 the chunker indexes changes: every chat file chunked under another version then
 reads stale and the ordinary refresh re-chunks it (see Refresh). It is at
-**version 1** (Bill, 2026-10-25), the first stamp after the 2026-10-22 rules
-above; files chunked before the stamp existed read as version 0.
+**version 2**: version 1 (2026-10-25) stamped the 2026-10-22 rules, and version 2
+the voice tags above the same day. Files chunked before the stamp existed read
+as version 0.
 
 ### Paragraph-based markdown chunker
 

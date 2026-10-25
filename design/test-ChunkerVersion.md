@@ -1,6 +1,6 @@
 # Test Design: ChunkerVersion
 **Source:** crc-Indexer.md, crc-FileScanActor.md
-**Requirements:** R3597-3600
+**Requirements:** R3597-3600, R3611
 
 A file chunked under one chunker version and then left stale by a version bump
 (`versionedLineChunker` at 0, then 1) must be re-chunked by every refresh path.
@@ -44,3 +44,13 @@ A file chunked under one chunker version and then left stale by a version bump
 **Fire alarm:** drop the R3600 block that forces the scan; red is "file is stale after refresh, want fresh" — the escape skipped the store
 **Inject:** indexer.go:prepareScan
 **Pulled:** 2026-10-25 — rang ("file is stale after refresh, want fresh"; version 0, want 1)
+
+## Test: chat sub-chunks keep their voice
+**Purpose:** a multi-paragraph thinking block's middle sub-chunks stay marked, and text after it stays unmarked (R3611)
+**Input:** `<thinking>` spanning three paragraphs, then a plain paragraph; `chatSubchunks`
+**Expected:** three sub-chunks each wrapped flush in `<thinking>…</thinking>`, then `plain answer`
+**Refs:** crc-Librarian.md
+**Code:** chunker_version_test.go
+**Fire alarm:** stop reopening the span at a sub-chunk's start; red is the middle sub-chunk coming back as bare `second part`
+**Inject:** recall.go:chatSubchunks
+**Pulled:** 2026-10-25 — rang (sub-chunks `["<thinking>first part</thinking>" "second part" "third part</thinking>" ...]`)

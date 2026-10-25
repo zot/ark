@@ -1,6 +1,6 @@
 # Test Design: MemoryRelease
 **Source:** crc-DB.md, crc-Indexer.md, crc-CLI.md
-**Requirements:** R3601-3603, R3605-3607
+**Requirements:** R3601-3603, R3605-3607, R3613, R3614
 
 ## Test: scan-burst release honors its threshold
 **Purpose:** below `releaseAfterScanBytes` nothing is released; at it the count resets (R3602)
@@ -91,3 +91,23 @@
 **Fire alarm:** stop clearing the slot (`(*q)[0] = zero`); red is "popped closure's capture is still reachable through the queue". The first two drafts of this test never rang: the closure took `len(p)` of a fixed-size array, a constant, so it captured nothing.
 **Inject:** util.go:popFront
 **Pulled:** 2026-10-25 — rang ("popped closure's capture is still reachable through the queue")
+
+## Test: the scan backlog is counted
+**Purpose:** in-flight scans, held slots against the bound, and queued writes are what status reports (R3613)
+**Input:** two stamped scans, one held slot of four, one queued write
+**Expected:** {InFlight:2 Holding:1 Slots:4 WritesQueued:1}
+**Refs:** crc-Server.md
+**Code:** memory_test.go
+**Fire alarm:** report the slot bound as the held count; red is "backlog = {... Holding:4 ...}"
+**Inject:** db.go:scanBacklog
+**Pulled:** 2026-10-25 — rang ("backlog = {InFlight:2 Holding:4 Slots:4 WritesQueued:1}")
+
+## Test: a CPU profile is written
+**Purpose:** the server can be asked where its time goes (R3614)
+**Input:** `writeCPUProfile` for 50 ms to a temp path
+**Expected:** a non-empty file
+**Refs:** crc-Server.md
+**Code:** memory_test.go
+**Fire alarm:** return before starting the profile; red is "no cpu profile written". Stopping the profile before the sleep did NOT ring (2026-10-25): an early-stopped profile is still a valid non-empty file, so this test proves a profile is written, not how long it covers.
+**Inject:** memory.go:writeCPUProfile
+**Pulled:** 2026-10-25 — rang ("no cpu profile written", zero-size file)

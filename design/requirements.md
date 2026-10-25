@@ -5342,7 +5342,7 @@ reason.
 ## Feature: Chunker version stamp
 **Source:** specs/indexing.md
 
-- **R3596:** The `chat-jsonl` chunker implements microfts2's `VersionedChunker`; `ChunkerVersion()` returns 1, bumped whenever what the chunker indexes changes.
+- **~~R3596:~~** (Retired T292 — see R3609) The `chat-jsonl` chunker implements microfts2's `VersionedChunker`; `ChunkerVersion()` returns 1, bumped whenever what the chunker indexes changes.
 - **R3597:** `RefreshStale` does not apply the byte-identical skip (R2864) to a file `StaleFiles` reported stale: a byte-identical stale file is stale by chunker version and is fully re-chunked.
 - **R3598:** An append refused with `microfts2.ErrChunkerVersionStale` re-chunks the whole file: the fused refresh falls through to a full reindex.
 - **R3600:** A file scan of a file `CheckFile` reported stale, whose bytes match its F record's length and content hash, runs forced (R3568): it neither takes the append branch nor meets the store-time unchanged escape (R3423), since such a file is stale only by chunker version.
@@ -5362,3 +5362,34 @@ reason.
 - **R3605:** A served `ark status` carries the server process's memory: the live Go heap (`/gc/heap/live:bytes`), Go heap in use, Go heap idle and not yet returned, Go's total obtained from the OS, and on Linux the process's resident size; the CLI prints it as one `memory:` line before `server:`. An unserved status omits it.
 - **R3606:** `ark status --heap FILE` resolves FILE to an absolute path and POSTs it to the server's `/status/heap`, which runs a collection and writes the process's Go heap profile there, answering with the path; the CLI prints `heap profile: PATH`. Without a server the flag refuses with a message saying it profiles the server process.
 - **R3607:** A long-lived queue pops through `popFront`, which clears the popped slot before advancing, so a run closure and everything it captured stop being reachable through the backing array. The DB write queue and `ChanSvc`'s queue use it.
+
+## Feature: Chat voice tags
+**Source:** specs/indexing.md
+
+- **R3608:** Chat chunk text wraps each thinking block's text as `<thinking>TEXT</thinking>` and each narration block's as `<narration>TEXT</narration>`, tags flush against the text; text blocks are unwrapped and a thinking block with no text contributes nothing.
+- **R3609:** The `chat-jsonl` chunker's `ChunkerVersion()` returns 2, the version that introduced the voice tags (R3608).
+
+## Feature: Narration in ark chats
+**Source:** specs/chat-transcript.md
+
+- **R3610:** `ark chats --thinking` renders narration blocks as `≈ ...`, distinct from thinking's `✻ ...`.
+
+## Feature: Voice tags in chat sub-chunks
+**Source:** specs/recall.md
+
+- **R3611:** `chatSubchunks` keeps each sub-chunk's voice: a `<thinking>` or `<narration>` span left open at a sub-chunk's end is closed there and reopened at the start of the next sub-chunk, so no sub-chunk of a multi-paragraph block reaches a reader unmarked.
+
+## Feature: Scan backpressure
+**Source:** specs/parallel-indexing.md
+
+- **R3612:** A file scan holds its dispatch slot (R3438) from preparation until its store finishes, so at most `runtime.NumCPU()` prepared scans exist at once. The slot is released exactly once on every path: early retire, superseded drop, store success or failure, and a panicking write.
+
+## Feature: Scan backlog in status
+**Source:** specs/status-enhanced.md
+
+- **R3613:** A served `ark status` carries the scan backlog, read on the DB actor: scans in flight (registry entries), scans holding a dispatch slot against the slot count, and writes queued; the CLI prints it as one `scans:` line before `memory:`.
+
+## Feature: CPU profile on demand
+**Source:** specs/memory-release.md
+
+- **R3614:** `ark status --cpu FILE [--seconds N]` (default 10) resolves FILE to an absolute path and POSTs it with the duration to the server's `/status/cpu`, which profiles its CPU for that long and writes the profile there, answering with the path; the CLI prints `cpu profile: PATH`. Without a server it refuses like `--heap`.

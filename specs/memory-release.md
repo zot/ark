@@ -60,6 +60,12 @@ slots included, reachable until an append reallocates it. On a quiet server that
 can be a long time. So a queue that outlives its items clears the slot it pops
 before advancing; the closure actors' own queue (`ChanSvc`) had the same pop.
 
+**Finding what is slow.** `ark status --cpu FILE` asks the running server to
+profile its CPU for `--seconds` (default 10) and write the profile to FILE, the
+same shape as `--heap` and refusing the same way without a server. A heap profile
+says what is held; only a CPU profile says where the time goes, which is what a
+slow store needs.
+
 Not done: a memory limit (`debug.SetMemoryLimit`), which would lower a burst's
 peak rather than shorten its tail. It waits until the numbers above say what
 limit would not make the collector thrash during a large re-chunk.

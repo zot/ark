@@ -503,6 +503,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("GET /status", handle(srv, statusOp{}))        // R95, R3167
 	mux.HandleFunc("POST /status/chunks", srv.handleStatusChunks) // R3393
 	mux.HandleFunc("POST /status/heap", srv.handleStatusHeap)     // R3606
+	mux.HandleFunc("POST /status/cpu", srv.handleStatusCPU)       // R3614
 	mux.HandleFunc("GET /files", srv.handleFiles)                 // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
 	mux.HandleFunc("POST /files/expand", srv.handleFilesExpand) // R3378, R3379
@@ -1742,6 +1743,10 @@ func (o *statusOp) run() (any, error) {
 	result.status.UIIndexing = len(o.srv.currentlyIndexing()) > 0
 	result.status.Spectral = o.srv.librarian.Available()
 	result.status.Memory = memoryStatus() // R3605
+	// R3613: the scan backlog lives on the DB actor.
+	result.status.Scans, _ = Sync(o.srv.db, func(db *DB) (*ScanBacklog, error) {
+		return db.scanBacklog(), nil
+	})
 
 	if result.dbCounts != nil {
 		return struct {
@@ -1769,6 +1774,29 @@ func (srv *Server) handleStatusHeap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := writeHeapProfile(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"path": req.Path})
+}
+
+// handleStatusCPU serves POST /status/cpu: profile this process's CPU for the
+// requested seconds and write the profile to the absolute path given. R3614
+// CRC: crc-Server.md | R3614
+func (srv *Server) handleStatusCPU(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path    string `json:"path"`
+		Seconds int    `json:"seconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !filepath.IsAbs(req.Path) || req.Seconds <= 0 {
+		http.Error(w, "cpu profile needs an absolute path and a positive duration", http.StatusBadRequest)
+		return
+	}
+	if err := writeCPUProfile(req.Path, time.Duration(req.Seconds)*time.Second); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -13,7 +13,7 @@ import (
 // server line; an unserved one prints none. R3605
 func TestPrintStatusMemoryLine(t *testing.T) {
 	served := captureStdout(t, func() {
-		printStatus(&ark.StatusInfo{Memory: &ark.MemoryStatus{
+		printStatus(&ark.StatusInfo{Scans: &ark.ScanBacklog{InFlight: 5, Holding: 2, Slots: 8, WritesQueued: 3}, Memory: &ark.MemoryStatus{
 			HeapLive: 2 << 20, HeapInUse: 3 << 20, HeapIdle: 1 << 20, GoTotal: 5 << 20, RSS: 9 << 20,
 		}}, true)
 	})
@@ -23,6 +23,9 @@ func TestPrintStatusMemoryLine(t *testing.T) {
 	}
 	if mem < 0 || !strings.Contains(served, "; rss ") {
 		t.Fatalf("served status lacks the memory line:\n%s", served)
+	}
+	if scans := strings.Index(served, "scans: 5 in flight, 2 holding a slot of 8, 3 writes queued"); scans < 0 || scans > mem {
+		t.Fatalf("served status lacks the scans line before memory:\n%s", served)
 	}
 	if srv := strings.Index(served, "server: "); srv < mem {
 		t.Fatalf("memory line must come before server:\n%s", served)

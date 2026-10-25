@@ -44,13 +44,13 @@ interfaces; microfts2 type-asserts for them at index and retrieval time.
 | bracketChunker  | `bracket-*`  | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md              |
 | indentChunker   | `indent-*`   | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md              |
 | FuncChunker     | `lines`      | ✓      | ✗            | ✗        | ✗          | (def true) | 0       | chunker-strategies.md              |
-| JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | 1       | chat-transcript.md                 |
+| JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | 2       | chat-transcript.md                 |
 | PDFChunker      | `pdf`        | ✓      | ✗            | ✓        | ✓          | **false**  | 0       | pdf-chunker.md                     |
 | bibleChunker    | `bible`      | ✓      | ✗            | ✗        | ✗          | **false**  | 0       | bible-chunker.md                   |
 
 Notes:
 - **Version** 0 means the chunker does not implement `VersionedChunker`. Only
-  `chat-jsonl` declares one, at 1 (Bill, 2026-10-25).
+  `chat-jsonl` declares one, at 2 since its voice tags (indexing.md).
 - The four microfts2 *text* chunkers (Markdown, Line, bracket, indent) are
   **uniform** — identical full interface set.
 - `FileChunks` does **not** distinguish text from binary — text chunkers

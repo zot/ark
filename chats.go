@@ -92,10 +92,14 @@ func RenderChatLines(w io.Writer, r io.Reader, opts ChatRenderOptions) error {
 				case BlockThinking, BlockNarration:
 					// R3035: chain-of-thought, off by default (verbose). The
 					// corpus already indexes it; this restores display parity.
-					// Narration renders as it always did, as thinking; whether
-					// it should show differently is bloodhound-fix Item 2's.
+					// R3610: narration is a paraphrase of what was said, not
+					// thought, so it gets its own mark.
 					if opts.WithThinking && b.Text != "" {
-						writeWrapped(w, "✻", b.Text, lineLen)
+						mark := "✻"
+						if b.Kind == BlockNarration {
+							mark = "≈"
+						}
+						writeWrapped(w, mark, b.Text, lineLen)
 						fmt.Fprintln(w)
 					}
 				case BlockToolCall:

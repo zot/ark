@@ -1,8 +1,9 @@
 package main
 
-// CRC: test-ChatTranscript.md | R3035, R3242, R3243
+// CRC: test-ChatTranscript.md | R3035, R3242, R3243, R3610
 
 import (
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
@@ -131,5 +132,25 @@ func TestRenderChatThinking(t *testing.T) {
 	}
 	if !strings.Contains(out, "✻") {
 		t.Errorf("thinking should carry the ✻ marker; got %q", out)
+	}
+}
+
+// TestRenderChatNarration confirms R3610: with --thinking, narration renders
+// marked ≈ and thinking marked ✻, each on its own line.
+func TestRenderChatNarration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "n.jsonl")
+	sig := base64.StdEncoding.EncodeToString([]byte("\x12\x09narration\x1a\x04xyzw"))
+	rec := `{"type":"assistant","message":{"content":[` +
+		`{"type":"thinking","thinking":"PONDERING"},` +
+		`{"type":"thinking","thinking":"PARAPHRASED","signature":"` + sig + `"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() { _ = renderChat(path, ark.ChatRenderOptions{WithThinking: true}) })
+	if !strings.Contains(out, "≈ PARAPHRASED") {
+		t.Errorf("narration should carry the ≈ marker; got %q", out)
+	}
+	if !strings.Contains(out, "✻ PONDERING") {
+		t.Errorf("thinking should keep the ✻ marker; got %q", out)
 	}
 }

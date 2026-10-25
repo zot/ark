@@ -1,5 +1,5 @@
 # FileScanActor
-**Requirements:** R3419-3433, R3438, R3599, R3600
+**Requirements:** R3419-3433, R3438, R3599, R3600, R3612
 
 The per-file scan machinery that moves index compute (chunk + trigram + token)
 off the write slot. A registry of in-flight scans lives on the DB actor; each
@@ -33,13 +33,18 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
   scanSeq, then either handle a config file synchronously (scanConfigOnActor) or
   launch the off-slot content scan. The content-file dispatch goes through
   `runScanBounded`, which acquires `scanSem` before running `prepareFileScan` and
-  releases after: the spawn never blocks the actor, but the compute is bounded to
-  NumCPU. Only the stamp and the registry touches the goroutine posts back run on
+  hands it the slot's release: the spawn never blocks the actor, but the compute
+  is bounded to NumCPU, and the slot is held until the scan's store finishes
+  (R3612). Only the stamp and the registry touches the goroutine posts back run on
   the actor — the per-file os.Stat + CheckFile + classification moved off-slot.
   (R3421, R3433, R3438)
-- runScanBounded (off the actor): acquire scanSem, run the prepare closure, release.
-  Extracted so the bound is testable without a live prepareFileScan — a fake
-  closure tracking peak concurrency proves at most cap(scanSem) run at once. (R3438)
+- runScanBounded (off the actor): acquire scanSem, run the prepare closure with a
+  once-only release it must call when the scan is over (R3612): prepareFileScan
+  releases on its early-retire paths, finishFileScan on a superseded drop, and
+  the store closure in a defer, so a store that fails or panics still frees the
+  slot. Extracted so the bound is testable without a live prepareFileScan — a
+  fake closure tracking peak concurrency proves at most cap(scanSem) run at
+  once. (R3438)
 - scanConfigOnActor (on the DB actor): a config file (ark.toml) keeps its full
   on-actor path — os.Stat, CheckFile, deleted/dir/outside-source classification,
   and add/refresh/remove — because a dependent content write must see the chunker

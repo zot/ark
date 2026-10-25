@@ -66,10 +66,10 @@ sidechain turn; thinking and tools never appear by default.
 **Pulled:** 2026-10-22 — rang: default render differs
 **Fire alarm:** drop the sidechain filter; the default render shows SIDECHAIN.
 **Inject:** chats.go:RenderChatLines
-**Pulled:** 2026-10-22 — rang: default render differs
+**Pulled:** 2026-10-25 — rang: default render differs (re-pulled after R3610 edited RenderChatLines)
 **Fire alarm:** show tool calls without `--with-tools`; "tool line shown without --with-tools".
 **Inject:** chats.go:RenderChatLines
-**Pulled:** 2026-10-22 — rang: "tool line shown without --with-tools"
+**Pulled:** 2026-10-25 — rang: default render differs (the comparison fails before the tool-line check; re-pulled after R3610)
 
 ## Test: a session's turn count
 **Purpose:** a chat session's turn count is every user and assistant record
@@ -82,3 +82,13 @@ and the sidechain rule are TestReadChatLabel's.
 **Fire alarm:** count turn ends as turns; the count reads 5.
 **Inject:** chats.go:readChatLabel
 **Pulled:** 2026-10-22 — rang: turns = 5, want 4
+
+## Test: narration renders with its own mark
+**Purpose:** R3610: with `--thinking`, narration shows as `≈ ...`, thinking keeps `✻ ...`
+**Input:** an assistant record with a thinking block and a narration-signed block
+**Expected:** `✻ PONDERING` and `≈ PARAPHRASED` in the output
+**Refs:** crc-CLI.md
+**Code:** cmd/ark/chats_test.go
+**Fire alarm:** render narration with `✻`; red is "narration should carry the ≈ marker"
+**Inject:** chats.go:RenderChatLines
+**Pulled:** 2026-10-25 — rang ("narration should carry the ≈ marker"; got ✻ PARAPHRASED)

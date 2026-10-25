@@ -58,7 +58,7 @@ reach the in-scope chunk (the fixture check); scoped Recall with `K:3` returns i
 "the trigram leg cut corpus-wide before the scope". (Red from below until
 microfts2 restricted before its own top-k, O228.)
 **Inject:** recall.go:Recall
-**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+**Pulled:** 2026-10-25 — rang (scoped recall returned 0 chunks without the in-scope one: the trigram leg cut corpus-wide before the scope)
 
 ## Test: meaning leg scoped before its cut
 **Purpose:** the embedding walk skips out-of-scope chunks before scoring, so its
@@ -73,7 +73,7 @@ the in-scope chunk (the fixture check); scoped Recall with `K:3` returns it
 **Fire alarm:** stop setting `AboutRequest.Admit` on the scoped walk; red reads
 "the meaning leg cut corpus-wide before the scope"
 **Inject:** recall.go:Recall
-**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+**Pulled:** 2026-10-25 — rang (scoped recall returned 0 chunks without the in-scope one: the meaning leg cut corpus-wide before the scope)
 
 ## Test: tag axis scoped before its cut
 **Purpose:** a tag value counts toward the axis's 50 only when it reaches an
@@ -90,7 +90,7 @@ the cut. The value ranks below all 60 by construction, and the alarm is the proo
 **Fire alarm:** drop the in-scope check from the value loop, so every value
 counts toward the 50; red reads "the tag axis cut its values before the scope"
 **Inject:** recall.go:Recall
-**Pulled:** 2026-10-24 — rang (scoped recall returned 0 chunks without the in-scope one)
+**Pulled:** 2026-10-25 — rang (scoped recall returned 0 chunks without the in-scope one: the tag axis cut its values before the scope; `TestRecall_UnscopedNeverAdmitsFenced` also went red)
 
 ## Test: ScopeEmpty reports a wrong glob
 **Purpose:** separate "your scope matched nothing" from "the corpus has

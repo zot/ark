@@ -1,6 +1,6 @@
 package ark
 
-// CRC: crc-DB.md | Test: test-TranscriptReader.md | R240, R1507, R2271, R3553
+// CRC: crc-DB.md | Test: test-TranscriptReader.md | R240, R1507, R2271, R3553, R3608
 
 import (
 	"strings"
@@ -10,15 +10,17 @@ import (
 )
 
 // The chat chunker's rules, on lines in the shapes Claude Code writes: a turn's
-// text, thinking and narration are indexed one per line; tool calls and tool
-// results are not; records ark does not use (an attachment) are not; a partial
-// trailing line is indexed raw until it completes. Before the chunker moved onto
-// the transcript reader (2026-10-22) nothing tested the text rules: indexing
-// tool results, or dropping thinking, turned nothing red.
+// text, thinking and narration are indexed one per line, thinking and narration
+// wrapped in their voice tags (R3608); a thinking block with no text adds
+// nothing; tool calls and tool results are not; records ark does not use (an
+// attachment) are not; a partial trailing line is indexed raw until it
+// completes. Before the chunker moved onto the transcript reader (2026-10-22)
+// nothing tested the text rules: indexing tool results, or dropping thinking,
+// turned nothing red.
 func TestChatChunkerText(t *testing.T) {
 	content := strings.Join([]string{
 		`{"type":"user","origin":{"kind":"human"},"timestamp":"2026-10-22T10:00:00Z","message":{"role":"user","content":"a question"}}`,
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weighing"},{"type":"text","text":"an answer"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"SECRETCOMMAND"}}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"weighing"},{"type":"thinking","thinking":"","signature":"c2ln"},{"type":"thinking","thinking":"said it","signature":"` + narrationSig + `"},{"type":"text","text":"an answer"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"SECRETCOMMAND"}}]}}`,
 		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"TOOLOUTPUT"}]}}`,
 		`{"type":"attachment","attachment":{"content":"HARNESSNOISE"}}`,
 		`{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"trail`, // no newline: still being written
@@ -36,7 +38,7 @@ func TestChatChunkerText(t *testing.T) {
 	}
 	want := []string{
 		"1-1 a question",
-		"2-2 weighing\nan answer",
+		"2-2 <thinking>weighing</thinking>\n<narration>said it</narration>\nan answer",
 		`5-5 {"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"trail`,
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {

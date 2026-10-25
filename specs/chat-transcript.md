@@ -31,7 +31,9 @@ Tool input is summarized — the most useful field (command, file_path,
 pattern, prompt, etc.) is shown, truncated at 80 chars.
 
 `--thinking` shows assistant chain-of-thought (thinking) blocks inline
-as `✻ ...`, word-wrapped like any turn. Off by default — thinking is
+as `✻ ...`, and narration blocks as `≈ ...` (approximately what was said: a
+paraphrase standing in for words the transcript did not keep), word-wrapped like
+any turn. Off by default — thinking is
 verbose — but the corpus already indexes it (the chat-jsonl chunker
 extracts both `text` and `thinking`), so this only restores display
 parity with what search already sees.

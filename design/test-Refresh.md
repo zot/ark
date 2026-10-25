@@ -36,7 +36,7 @@ keeps the old one.
 **Code:** refresh_force_test.go
 **Fire alarm:** let a forced scan take the append branch; the file id stays the same.
 **Inject:** indexer.go:prepareScan
-**Pulled:** 2026-10-23 — rang: "a grown file was appended to, not re-chunked whole (file id still 1)"
+**Pulled:** 2026-10-25 — rang: "a grown file was appended to, not re-chunked whole (file id still 1)"
 
 ## Test: a forced refresh keeps a missing file
 **Purpose:** R45, R3568. The watcher's scan removes a file gone from disk; a
@@ -47,7 +47,7 @@ forced refresh must report it and keep it.
 **Code:** refresh_force_test.go
 **Fire alarm:** let a forced scan remove a missing file; CheckFile reports it gone.
 **Inject:** db.go:prepareFileScan
-**Pulled:** 2026-10-23 — rang: "a forced refresh removed a missing file from the index"
+**Pulled:** 2026-10-25 — rang: "a forced refresh removed a missing file from the index"
 
 ## Test: a forced refresh needs a pattern
 **Purpose:** R3569. Forcing the whole index is rarely meant, so `--force` without

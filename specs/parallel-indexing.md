@@ -51,6 +51,17 @@ per-file dispatch** (`startFileScan`): at most `runtime.NumCPU()` file
 preparations run concurrently, and the DB actor never blocks to enforce
 it. The walk uses the same default.
 
+**A scan holds its slot until its store finishes**, not only while it prepares,
+so at most `runtime.NumCPU()` prepared scans exist at once, waiting or storing.
+Preparation is parallel and storing is serial, so when stores are slow a slot
+released after preparing lets prepared scans pile up behind the writer, each
+holding its file's bytes and trigram counts. Measured 2026-10-25, when a chunker
+change made every chat store replace its chunks: about 31 files a minute stored,
+and the backlog held 1.8 GB of file contents and 950 MB of trigram counts, with
+the process at 5 to 6 GB. The slot is released once on every path out: an early
+retire, a superseded scan, a store that succeeds or fails, and a write that
+panics.
+
 ## Directory walk
 
 The scan walk enumerates source directories concurrently with a bounded

@@ -47,6 +47,23 @@ func writeHeapProfile(path string) error {
 	return f.Close()
 }
 
+// writeCPUProfile profiles this process's CPU for d and writes the profile to
+// path. pprof allows one CPU profile at a time; a second request fails. R3614
+// CRC: crc-Server.md | R3614
+func writeCPUProfile(path string, d time.Duration) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		f.Close()
+		return err
+	}
+	time.Sleep(d)
+	pprof.StopCPUProfile()
+	return f.Close()
+}
+
 // MemoryStatus describes the serving process's memory for `ark status`.
 type MemoryStatus struct {
 	HeapLive  uint64 `json:"heapLive"`      // heap the last GC found reachable

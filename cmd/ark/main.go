@@ -403,7 +403,7 @@ func heapNeedsServer(serverUp bool, heapFile string) error {
 
 // CRC: crc-CLI.md | R3606
 var errHeapNeedsServer = errors.New(
-	"--heap profiles the running server's memory; start one with `ark serve`")
+	"--heap and --cpu profile the running server; start one with `ark serve`")
 
 // writeServerHeapProfile asks the server to write its heap profile to file,
 // resolved to an absolute path since the server's working directory is not
@@ -421,6 +421,23 @@ func writeServerHeapProfile(client *http.Client, file string) {
 		fatal(err)
 	}
 	fmt.Printf("heap profile: %s\n", resp.Path)
+}
+
+// writeServerCPUProfile asks the server to profile its CPU for seconds and write
+// the profile to file (made absolute), then prints where it went.
+// CRC: crc-CLI.md | R3614
+func writeServerCPUProfile(client *http.Client, file string, seconds int) {
+	abs, err := filepath.Abs(ark.ExpandTilde(file))
+	if err != nil {
+		fatal(err)
+	}
+	var resp struct {
+		Path string `json:"path"`
+	}
+	if err := proxyDecode(client, "POST", "/status/cpu", map[string]any{"path": abs, "seconds": seconds}, &resp); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("cpu profile: %s\n", resp.Path)
 }
 
 // CRC: crc-CLI.md | R3394
@@ -2842,6 +2859,11 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 		fmt.Printf("map: %s / %s (%.0f%%)\n",
 			formatBytes(status.MapUsed), formatBytes(status.MapTotal), pct)
 	}
+	// R3613: the served process's scan backlog.
+	if s := status.Scans; s != nil {
+		fmt.Printf("scans: %d in flight, %d holding a slot of %d, %d writes queued\n",
+			s.InFlight, s.Holding, s.Slots, s.WritesQueued)
+	}
 	// R3605: the served process's memory; absent when no server answered.
 	if m := status.Memory; m != nil {
 		fmt.Printf("memory: go heap %s live, %s in use, %s idle; go total %s",
@@ -2949,6 +2971,8 @@ func cmdStatus(args []string) {
 	showChunks := fs.Bool("chunks", false, "show chunk size statistics")
 	tokenize := fs.Bool("tokenize", false, "measure in tokens (requires tag_model)")
 	heapFile := fs.String("heap", "", "write the running server's Go heap profile to FILE (go tool pprof)")
+	cpuFile := fs.String("cpu", "", "profile the running server's CPU and write it to FILE (go tool pprof)")
+	cpuSeconds := fs.Int("seconds", 10, "with --cpu: how long to profile")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: ark status [-with|-without] [-files GLOB]... [options]")
 		fmt.Fprintln(os.Stderr, "\nShow database status. With --chunks, show chunk size statistics.")
@@ -2964,6 +2988,9 @@ func cmdStatus(args []string) {
 		fatal(plan.err)
 	}
 	if err := heapNeedsServer(client != nil, *heapFile); err != nil {
+		fatal(err)
+	}
+	if err := heapNeedsServer(client != nil, *cpuFile); err != nil { // R3614: same refusal
 		fatal(err)
 	}
 
@@ -2993,6 +3020,9 @@ func cmdStatus(args []string) {
 		printWarnings(resp.Warnings)
 		if *heapFile != "" {
 			writeServerHeapProfile(client, *heapFile)
+		}
+		if *cpuFile != "" {
+			writeServerCPUProfile(client, *cpuFile, *cpuSeconds)
 		}
 		if !plan.proxyChunks {
 			return

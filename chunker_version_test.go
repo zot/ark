@@ -3,12 +3,13 @@ package ark
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/zot/microfts2"
 )
 
-// CRC: crc-Indexer.md | Test: test-ChunkerVersion.md | R3597-R3600
+// CRC: crc-Indexer.md | Test: test-ChunkerVersion.md | R3597-R3600, R3611
 
 // versionedLineChunker is a line chunker that declares a version, so a test can
 // chunk a file under one version and then bump the rules under it.
@@ -116,4 +117,23 @@ func TestScanForcesVersionStaleFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireRechunked(t, idx, fp)
+}
+
+// TestChatSubchunksKeepVoice: every sub-chunk of a multi-paragraph thinking
+// block carries the tags, and plain text after it carries none. R3611
+func TestChatSubchunksKeepVoice(t *testing.T) {
+	content := "<thinking>first part\n\nsecond part\n\nthird part</thinking>\n\nplain answer"
+	var got []string
+	for _, c := range chatSubchunks(content) {
+		got = append(got, strings.TrimSpace(string(c.Content)))
+	}
+	want := []string{
+		"<thinking>first part</thinking>",
+		"<thinking>second part</thinking>",
+		"<thinking>third part</thinking>",
+		"plain answer",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("sub-chunks:\n%q\nwant\n%q", got, want)
+	}
 }

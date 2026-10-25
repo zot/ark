@@ -275,7 +275,8 @@ func TestRunScanBoundedCapsConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			db.runScanBounded(func() {
+			db.runScanBounded(func(slot func()) {
+				defer slot()
 				mu.Lock()
 				live++
 				if live > peak {
@@ -310,5 +311,32 @@ func TestRunScanBoundedCapsConcurrency(t *testing.T) {
 	}
 	if peak < 1 {
 		t.Fatal("nothing ran under runScanBounded")
+	}
+}
+
+// TestScanSlotHeldUntilReleased: a scan that hands its slot on keeps it after
+// its preparation returns, so a second scan waits until the store releases it;
+// releasing twice frees one slot, not two. test-FileScanActor.md. R3612
+func TestScanSlotHeldUntilReleased(t *testing.T) {
+	db := &DB{scanSem: make(chan struct{}, 1)}
+	var handOff func()
+	db.runScanBounded(func(slot func()) { handOff = slot }) // prepared, not yet stored
+
+	second := make(chan struct{})
+	go db.runScanBounded(func(slot func()) { slot(); close(second) })
+	select {
+	case <-second:
+		t.Fatalf("a second scan ran while the first still held its slot")
+	case <-time.After(100 * time.Millisecond):
+	}
+	handOff() // the store finished
+	handOff() // a second release must not free a slot it does not hold
+	select {
+	case <-second:
+	case <-time.After(time.Second):
+		t.Fatalf("the slot was never released")
+	}
+	if n := len(db.scanSem); n != 0 {
+		t.Fatalf("slots held after both scans ended: %d, want 0", n)
 	}
 }
