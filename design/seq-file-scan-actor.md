@@ -1,4 +1,5 @@
 # Sequence: per-file scan actor (index compute off-slot, store on-slot)
+**Requirements:** R3599, R3602
 
 Participants: EntryPoint (ScanAsync / RefreshAsync / IndexPathsAsync),
 DBActor (db.svc), OffSlotGoroutine, WriteActor (write goroutine), Registry
@@ -38,6 +39,8 @@ Covers R3419-R3427, R3433, and R3438 (the enumeration + per-file classification 
        1.9.5  post-store bookkeeping: UpdateTagValues/AppendTagValues, UpdateTagDefs, runExtRouting, pubsub, writeDateIndex, pdf/bible flush, recallWatcher.OnAppend   (R3426)
 1.10 WriteActor → DBActor (fire-and-forget svc): retireFileScanIfCurrent(path, my)   (R3424)
        1.10.1  on store error: log + retireFileScanIfCurrent + reEmitChange(path) once (bounded)   (R3425)
+       1.10.2  on ErrChunkerVersionStale: the re-emit is a forced scan (never appends)   (R3599)
+       1.10.3  on success: scanBytesSinceRelease += chunked bytes; registry empty and ≥ threshold → go releaseMemory   (R3602)
 ```
 
 Notes:

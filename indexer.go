@@ -835,6 +835,18 @@ type refreshPrep struct {
 	modTime  int64
 }
 
+// chunkedBytes is how much this refresh chunked: nothing when skipped as
+// unchanged, the new bytes for an append, the whole file otherwise. R3603
+func (p *refreshPrep) chunkedBytes() int64 {
+	switch {
+	case p.unchanged:
+		return 0
+	case p.isAppend:
+		return int64(len(p.newBytes))
+	}
+	return int64(len(p.data))
+}
+
 // prepareRefresh reads a file and detects append-vs-full — safe to call
 // from multiple goroutines. LMDB reads (DetectAppend, FileInfoByID) are
 // concurrent-safe. Returns a prep struct for executeRefresh.
@@ -921,7 +933,8 @@ func (idx *Indexer) executeRefresh(prep *refreshPrep) error {
 		)
 		Logv(2, "execute-refresh: %s AppendChunks err=%v newChunks=%d", prep.path, err, len(acc.chunkTags))
 		if err != nil {
-			// Append failed — fall through to full reindex
+			// R3598: append failed — fall through to full reindex. This includes
+			// ErrChunkerVersionStale: the file's chunks follow other rules.
 			Logv(1, "index: %s APPEND FAILED (%v) — falling back to REINDEX", prep.path, err)
 			Logv(2, "execute-refresh: %s falling through to full refresh due to err: %v", prep.path, err)
 			return idx.executeFullRefresh(prep)
@@ -1090,6 +1103,15 @@ type scanPrep struct {
 	modTime        int64
 }
 
+// chunkedBytes is how much this scan chunked: the new bytes for an append, the
+// whole file otherwise. R3602
+func (p *scanPrep) chunkedBytes() int64 {
+	if p.isAppend {
+		return int64(len(p.newBytes))
+	}
+	return p.fileSize
+}
+
 // errScanSuperseded is returned by the per-chunk compute when a newer event
 // bumped the path's changeNum: the scan abandons between chunks and stores
 // nothing (its finished grams stay cached for the newer scan). Not a real error
@@ -1142,7 +1164,7 @@ func buildEntries(splits []microfts2.SplitChunk, gate scanGate, prepareChunk fun
 // goroutine — the LMDB read (FileInfoByID) is MVCC-safe and runs on a private fts
 // copy. Returns a scanPrep for storeScan.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.5 | R3419, R3426, R3428
-func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, force bool, gate scanGate) (*scanPrep, error) {
+func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, stale, force bool, gate scanGate) (*scanPrep, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -1154,6 +1176,16 @@ func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, forc
 	}
 	if fi, statErr := os.Stat(path); statErr == nil {
 		prep.modTime = fi.ModTime().UnixNano()
+	}
+	// R3600: judged stale yet byte-identical to its record means stale only by
+	// chunker version. Force the scan, or append detection and the store-time
+	// unchanged escape (R3423) would both pass it by and leave it stale.
+	if stale && known && !force {
+		if info, err := idx.fts.FileInfoByID(oldID); err == nil &&
+			info.FileLength == prep.fileSize && sha256.Sum256(data) == info.ContentHash {
+			force = true
+			prep.force = true
+		}
 	}
 
 	// Append detection off the same snapshot we hashed: the current file's first
@@ -1463,6 +1495,20 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	return nil
 }
 
+// prepareStaleRefresh prepares a file microfts2 has judged stale. The
+// byte-identical skip (R2864) absorbs redundant change events and never applies
+// here: a stale file whose bytes match its record is stale by chunker version,
+// and skipping it would leave it stale forever.
+// CRC: crc-Indexer.md | R3597
+func (idx *Indexer) prepareStaleRefresh(s microfts2.FileStatus) (*refreshPrep, error) {
+	prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
+	if err != nil {
+		return nil, err
+	}
+	prep.unchanged = false
+	return prep, nil
+}
+
 // CRC: crc-Indexer.md | Seq: seq-parallel-refresh.md | R517-R522
 // RefreshStale re-indexes all stale files in parallel. Workers read files
 // and extract tags concurrently. A ChanSvc actor serializes LMDB writes.
@@ -1506,7 +1552,7 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 	// Single file: skip goroutine overhead
 	if len(stale) == 1 {
 		s := stale[0]
-		prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
+		prep, err := idx.prepareStaleRefresh(s)
 		if err != nil {
 			log.Printf("refresh: skip %s: %v", s.Path, err)
 			return missing, nil
@@ -1514,6 +1560,7 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		if err := idx.executeRefresh(prep); err != nil {
 			return missing, fmt.Errorf("refresh %s: %w", s.Path, err)
 		}
+		releaseAfterRefresh(prep.chunkedBytes())
 		return missing, nil
 	}
 
@@ -1527,6 +1574,7 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 	writeCh := make(chan func() error, numWorkers)
 	var errCount int
 	var errMu sync.Mutex
+	var chunked int64 // R3603: written only by the write goroutine, read after writeWg.Wait
 
 	// ChanSvc: serialize all LMDB writes
 	var writeWg sync.WaitGroup
@@ -1550,13 +1598,17 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		go func() {
 			defer workerWg.Done()
 			for s := range jobCh {
-				prep, err := idx.prepareRefresh(s.Path, s.Strategy, s.FileID)
+				prep, err := idx.prepareStaleRefresh(s)
 				if err != nil {
 					log.Printf("refresh: skip %s: %v", s.Path, err)
 					continue
 				}
 				writeCh <- func() error {
-					return idx.executeRefresh(prep)
+					if err := idx.executeRefresh(prep); err != nil {
+						return err
+					}
+					chunked += prep.chunkedBytes()
+					return nil
 				}
 			}
 		}()
@@ -1576,7 +1628,17 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 	if errCount > 0 {
 		log.Printf("refresh: %d file(s) had errors", errCount)
 	}
+	releaseAfterRefresh(chunked)
 	return missing, nil
+}
+
+// releaseAfterRefresh releases memory when a stale refresh chunked at least the
+// scan threshold. R3603
+// CRC: crc-Indexer.md | R3603
+func releaseAfterRefresh(chunked int64) {
+	if chunked >= releaseAfterScanBytes {
+		releaseMemory("stale refresh")
+	}
 }
 
 // (tagWindowForAppend removed per R1895 — append-boundary handling is

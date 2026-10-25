@@ -1534,12 +1534,14 @@ ark status [options]
 |------------------------|---------|----------------------------------------------------------------------------------------|
 | `--db`                 | `false` | Show index record counts by prefix (microfts2 + ark, with totals)                      |
 | `--chunks`             | `false` | Show chunk size statistics (count, min, max, mean, median, p90, p95, p99) per strategy |
+| `--heap FILE`          | —       | Ask the running server to collect, then write its Go heap profile to FILE (for `go tool pprof`); refuses without a server (memory-release.md) |
 | `--tokenize`           | `false` | With `--chunks`: measure in tokens; requires `[embedding] model` **and the server stopped** — it loads the model for its vocabulary, like `embed bench` |
 | `-files GLOB`  | —       | Repeatable positive path filter for `--chunks`                                         |
 | `-without -files GLOB` | —       | Repeatable negative path filter                                                        |
 
 Default output: file/chunk/source counts, database file size,
-server/UI status, plus a `warnings:` section listing E records (each
+the served process's memory (only when a server answers; see
+memory-release.md), server/UI status, plus a `warnings:` section listing E records (each
 `name: payload`). Prefers server proxy.
 
 ### `stop` — stop the server

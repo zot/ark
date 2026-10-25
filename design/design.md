@@ -223,7 +223,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 ## Artifacts
 
 ### CRC Cards
-- [ ] crc-DB.md → `db.go`, `locator.go`, `compact.go`, `util.go`
+- [x] crc-DB.md → `db.go`, `locator.go`, `compact.go`, `util.go`, `memory.go`
 - [x] crc-Config.md → `config.go`, `ptyhost.go`
 - [x] crc-Matcher.md → `match.go`
 - [ ] crc-TagMatcher.md → `tagmatch.go`
@@ -444,6 +444,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-RecallScope.md → `recall_scope_test.go`
 - [x] test-PubSub.md → `pubsub_test.go`
 - [x] test-TagValuePaths.md → `tagvalue_paths_test.go`
+- [x] test-ChunkerVersion.md → `chunker_version_test.go`
+- [x] test-MemoryRelease.md → `memory_test.go`, `cmd/ark/status_memory_test.go`
 - [x] test-StaleChunk.md → `stale_chunk_test.go`, `cmd/ark/chunks_stale_test.go`
 - [x] test-EmbedPriority.md → `embed_priority_test.go`
 - [x] test-EmbedDebounce.md → `embed_debounce_test.go`
@@ -1281,3 +1283,5 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] O233: ark search accepts retired flags silently: `--filter ark x` parses as `-contains "ark x"` and `--filter-files GLOB` turns its argument into search terms (checked 2026-10-25 with `-parse`). The filter stack replaced `--filter`, `--except`, `--filter-files`, `--exclude-files`, `--filter-file-tags` and `--exclude-file-tags` (specs/search-filtering.md), so a user following an old doc gets wrong results with no error. A retired flag should be rejected with a message naming its filter-stack form.
 - [x] O234: The server side of #165's subscription rules has no unit test: handleSubscribe setting TagSub.InheritNoise for a sub with no file filters, and the watcher's config reload calling PubSub.SetExcludes. Both need a running Server, which no unit harness builds; the PubSub half (admits, SetExcludes, routed delivery) is unit-tested in test-PubSub.md. Verify live: subscribe with no filters, change search_exclude in ark.toml, and check delivery follows the reload. R941, R3595.
 - [ ] O235: The recall test harnesses (setupRecall, setupFileBackedRecall, via newTestDB) never call Store.SetChunkResolver, which DB.Open wires (db.go). With it nil, Store.FilesForChunks answers an empty set for every chunk, so any test of a chunk-to-file lookup in those harnesses passes or fails without the lookup running. Found 2026-10-25 when TestTagValuePaths* returned nothing for an indexed chunk; tagvalue_paths_test.go wires it locally (wireChunkFiles). The fix is to wire it in newTestDB, after checking which existing tests silently relied on it being nil. #121 (a harness that builds a whole *DB) would close it too.
+- [ ] O236: No automated alarm guards finishFileScan passing storeResultAction's force through to reEmitFileChange (R3599): injecting reEmitFileChange(path, false) left the whole suite green on 2026-10-25. Reaching it needs a test harness running the DB actor and the write actor together, which ark's tests lack (newTestDB builds neither). Verified live instead, on the restart that bumped chat-jsonl to version 1.
+- [ ] O237: Three memory-release wires have no automated alarm (R3602-R3604): finishFileScan adding chunkedBytes to scanBytesSinceRelease, RefreshStale summing chunked bytes, and the Librarian's release after a big embed tier. Deleting the first left the suite green on 2026-10-25. The first needs the DB-actor harness O236 names; the tier release needs a loaded embedding model. Verified live instead (memory-release.md).

@@ -184,7 +184,9 @@ new change event for a path with a scan already in flight bumps the
   actor (never off it) closes the retire-versus-new-event race.
 - **A store failure logs, retires the entry, and re-emits a single (bounded)
   change event** for the path so the normal machinery re-scans it once. It is
-  never an inline full reindex.
+  never an inline full reindex. When the store was refused because the file was chunked
+  under another chunker version, the re-emitted event is a *forced* scan, which
+  never appends (indexing.md, Refresh).
 
 The stamp is drawn from a single monotonic counter, not reset per entry, so a
 stale compute from a retired-and-recreated entry can never collide with a fresh

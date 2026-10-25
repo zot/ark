@@ -41,7 +41,7 @@ Opened by Bill, 2026-10-22.
         cite its own session by design. See Item 9.
 - [x] ~~**Item 10 — re-index the chat sources.**~~ **LANDED (2026-10-23 — `#160`.)** So the
       harness chunks #158 stopped producing leave the index. See Item 10.
-- [ ] **Item 11 — a chunker version stamp.** **OPEN (not queued.)** A file
+- [x] ~~**Item 11 — a chunker version stamp.**~~ **LANDED (2026-10-25 — `#166`.)** A file
       chunked under older rules is stale, so a rule change re-chunks itself.
       `/mini-spec`. See Item 11.
 - [x] ~~**Item 12 — retrieval after a chunker rule change shows the wrong chunk.**~~ **LANDED (2026-10-24 — `#161`.)**
@@ -431,6 +431,29 @@ version it was chunked with, and a file chunked under an older version counts as
 stale, so the ordinary refresh re-chunks it through the reindex path, keeping
 every unchanged chunk's id and embedding. Costs a field in the file record and a
 migration. Filed by Bill, 2026-10-23, after choosing the forced refresh for now.
+
+DECIDED (Bill, 2026-10-25): **the stamp lives in microfts2**, where staleness is
+decided. Today `classifyFile` (microfts2 `db.go`) judges a file by its record's
+mtime and content hash alone, which is why #158's rule change went unnoticed:
+nothing there can see a chunker. So: an optional chunker interface declaring a
+version, the file record carrying the version it was chunked under, and
+`classifyFile` reporting stale when the record lags, so ark's ordinary refresh
+re-chunks through the reindex path. A missing stamp reads as version 0 and every
+chunker starts at 0, so the upgrade itself re-chunks nothing; a chunker bumps
+only when its rules next change (superseded for the chat chunker, below). Rejected: an ark-side stamp record feeding
+`refresh --force`, which would give ark a second notion of stale that microfts2
+cannot see.
+
+DECIDED (Bill, 2026-10-25): **the chat chunker starts at version 1**, not 0, so
+its first stamp re-chunks every chat file once under the current rules. microfts2
+landed the stamp the same day (`VersionedChunker`, file-record format 3, an
+append onto a version-stale file refused with `ErrChunkerVersionStale`). ark's
+half: the chat chunker declares 1; `RefreshStale` never skips a byte-identical
+file microfts2 judged stale, since such a file is stale only by version; and a
+file-scan store refused for version re-emits a forced scan, which never appends,
+where a plain re-emit would have retried the same refused append without end.
+Specs: indexing.md (chat-jsonl chunker, Refresh), db-write-actor.md,
+chunkers.md.
 
 It is also the other half of #161 (Bill, 2026-10-24). A stale chunk should be
 treated as missing in everything associated with it, but ark can tell a chunk

@@ -5,6 +5,20 @@ import (
 	"time"
 )
 
+// popFront removes and returns the head of a queue, clearing the vacated slot
+// first. Advancing with q = q[1:] alone leaves the popped element reachable
+// through the backing array until an append reallocates it, which keeps alive
+// everything a popped closure captured (measured 2026-10-25: 1.36 GB of scan
+// data after a re-chunk burst).
+// CRC: crc-DB.md | R3607
+func popFront[T any](q *[]T) T {
+	head := (*q)[0]
+	var zero T
+	(*q)[0] = zero
+	*q = (*q)[1:]
+	return head
+}
+
 // timeNow returns the current time. Test seam: reassign for deterministic tests.
 var timeNow = time.Now
 

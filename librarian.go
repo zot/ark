@@ -2400,6 +2400,7 @@ func (l *Librarian) batchEmbedChunks(paths []string) error {
 			return refs[i].chunkIdx < refs[j].chunkIdx
 		})
 
+		tierStart := totalEmbedded
 		ctx, err := l.createTierCtx(tier)
 		if err != nil {
 			log.Printf("librarian: skip tier %d/%d: %v", tier.Ctx, tier.Parallel, err)
@@ -2492,6 +2493,10 @@ func (l *Librarian) batchEmbedChunks(paths []string) error {
 		}
 
 		ctx.close()
+		// R3604: the context's C memory is gone; return the Go side of a big tier.
+		if totalEmbedded-tierStart >= releaseAfterEmbedChunks {
+			releaseMemory(fmt.Sprintf("embed tier %d/%d", tier.Ctx, tier.Parallel))
+		}
 	}
 
 	// R1608, R1618, R1848: recompute EF centroids from scratch for files that

@@ -238,12 +238,13 @@ func flatCommands() []*ucli.Command {
 			// R3204: same as `files` — the stack cannot survive flag
 			// re-serialization, so raw args reach cmdStatus directly.
 			Name: "status", Usage: "show database status",
-			ArgsUsage:       "[-files GLOB]... [--db] [--chunks] [--tokenize]",
+			ArgsUsage:       "[-files GLOB]... [--db] [--chunks] [--tokenize] [--heap FILE]",
 			SkipFlagParsing: true,
 			Description: "Show database status. With --chunks, show chunk size statistics.\n\n" +
 				"   --db         show record counts by type\n" +
 				"   --chunks     show chunk size statistics\n" +
-				"   --tokenize   measure in tokens (requires an [embedding] model)\n\n" +
+				"   --tokenize   measure in tokens (requires an [embedding] model)\n" +
+				"   --heap FILE  write the running server's Go heap profile to FILE (go tool pprof)\n\n" +
 				filterStackHelp,
 			Action: filterStackAction(cmdStatus),
 		},

@@ -29,21 +29,28 @@ interfaces; microfts2 type-asserts for them at index and retrieval time.
   file itself (computes hash, may skip if unchanged).
 - **`ChunkerMetadata`** — `IsWritable()`, `CommentSyntax()`. Editability +
   line-comment delimiter; absent ⇒ treated as writable, no comment syntax.
+- **`VersionedChunker`** — `ChunkerVersion() uint32`. The version of the
+  chunker's rules; absent ⇒ version 0. microfts2 stamps each file's record with
+  the version it was chunked under and reports the file stale when the two
+  differ, so a rule change re-chunks its files through the ordinary refresh.
+  Bump it whenever what the chunker indexes changes (indexing.md, Refresh).
 
 ## Interface matrix
 
-| Chunker         | reg. name    | Chunks | AppendChunks | GetChunk | FileChunks | IsWritable | owner spec                         |
-|-----------------|--------------|:------:|:------------:|:--------:|:----------:|:----------:|------------------------------------|
-| MarkdownChunker | `markdown`   | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md, indexing.md |
-| LineChunker     | (full line)  | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
-| bracketChunker  | `bracket-*`  | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
-| indentChunker   | `indent-*`   | ✓      | ✓            | ✓        | ✓          | true       | chunker-strategies.md              |
-| FuncChunker     | `lines`      | ✓      | ✗            | ✗        | ✗          | (def true) | chunker-strategies.md              |
-| JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | chat-transcript.md                 |
-| PDFChunker      | `pdf`        | ✓      | ✗            | ✓        | ✓          | **false**  | pdf-chunker.md                     |
-| bibleChunker    | `bible`      | ✓      | ✗            | ✗        | ✗          | **false**  | bible-chunker.md                   |
+| Chunker         | reg. name    | Chunks | AppendChunks | GetChunk | FileChunks | IsWritable | Version | owner spec                         |
+|-----------------|--------------|:------:|:------------:|:--------:|:----------:|:----------:|:-------:|------------------------------------|
+| MarkdownChunker | `markdown`   | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md, indexing.md |
+| LineChunker     | (full line)  | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md              |
+| bracketChunker  | `bracket-*`  | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md              |
+| indentChunker   | `indent-*`   | ✓      | ✓            | ✓        | ✓          | true       | 0       | chunker-strategies.md              |
+| FuncChunker     | `lines`      | ✓      | ✗            | ✗        | ✗          | (def true) | 0       | chunker-strategies.md              |
+| JSONLChunker    | `chat-jsonl` | ✓      | ✓            | ✗        | ✗          | (def true) | 1       | chat-transcript.md                 |
+| PDFChunker      | `pdf`        | ✓      | ✗            | ✓        | ✓          | **false**  | 0       | pdf-chunker.md                     |
+| bibleChunker    | `bible`      | ✓      | ✗            | ✗        | ✗          | **false**  | 0       | bible-chunker.md                   |
 
 Notes:
+- **Version** 0 means the chunker does not implement `VersionedChunker`. Only
+  `chat-jsonl` declares one, at 1 (Bill, 2026-10-25).
 - The four microfts2 *text* chunkers (Markdown, Line, bracket, indent) are
   **uniform** — identical full interface set.
 - `FileChunks` does **not** distinguish text from binary — text chunkers

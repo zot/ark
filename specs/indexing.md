@@ -68,6 +68,14 @@ available; when a later append completes the line, that chunk is
 replaced with a corrected version through the drop-and-replace
 semantics that microfts2's append protocol provides.
 
+**Chunker version.** The chunker declares a version through microfts2's
+optional `VersionedChunker` interface, and microfts2 records in each file's
+record the version that file was chunked under. Bump the version whenever what
+the chunker indexes changes: every chat file chunked under another version then
+reads stale and the ordinary refresh re-chunks it (see Refresh). It is at
+**version 1** (Bill, 2026-10-25), the first stamp after the 2026-10-22 rules
+above; files chunked before the stamp existed read as version 0.
+
 ### Paragraph-based markdown chunker
 
 `markdown` — a func strategy in microfts2 that splits markdown files
@@ -145,11 +153,29 @@ microfts2's orphan callbacks (chunkid-keyed, R1914).
 
 ## Refresh
 
-Re-index stale files. Uses microfts2's staleness detection (modtime +
-content hash). For each stale file:
+Re-index stale files. Uses microfts2's staleness detection: the file's
+chunker version (a file chunked under a different version than its chunker
+declares is stale whatever its bytes), then modtime + content hash. For each
+stale file:
 - Re-add to microfts2 (gets new chunk offsets)
 - Re-embed the file's chunks via the Librarian/EC pipeline (EC records,
   chunkid-keyed)
+
+**A version-stale file is re-chunked even though its bytes are unchanged.**
+The byte-identical shortcut, which skips re-chunking a file whose length and
+content hash match its record, exists to absorb redundant change events. It
+never applies to a file microfts2 has judged stale: such a file can only be
+stale by its chunker version, and skipping it would leave it stale forever.
+The file scan has the same rule: a scan of a file microfts2 judged stale whose
+bytes still match its record runs as a forced scan, so neither append detection
+nor the store-time unchanged escape can pass it by.
+
+**An append onto a version-stale file re-chunks the whole file instead.**
+microfts2 refuses an append when the file was chunked under another version,
+since the existing chunks follow other rules. ark answers with a full reindex
+of that file. Where a store failure normally re-emits one plain change event,
+this refusal re-emits a *forced* scan, which never appends, so the retry
+cannot meet the same refusal.
 
 Missing files are not auto-deleted. They're added to ark's missing
 files list for review. The user or agent decides what to do.

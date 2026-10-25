@@ -5338,3 +5338,27 @@ reason.
 - **R3564:** If the chat chunker keeps scanning transcript bytes directly for speed, that scanner lives inside the reader, yields the same types, and a test runs it and the full decode over the real corpus and requires them to agree. No transcript decoding lives anywhere else.
 - **R3565:** While reading, the reader counts what it could not place (unknown record types, unknown block kinds, unknown user-turn origin kinds, malformed lines), and the counts are available to report. An unknown origin kind falls through to the content rules of R3556.
 - **R3566:** A scheduled check runs the reader over recent transcripts and raises an alert when the share of narration among thinking blocks drops to nothing while signed thinking blocks keep appearing, since a renamed narration label would otherwise turn narration into thinking silently.
+
+## Feature: Chunker version stamp
+**Source:** specs/indexing.md
+
+- **R3596:** The `chat-jsonl` chunker implements microfts2's `VersionedChunker`; `ChunkerVersion()` returns 1, bumped whenever what the chunker indexes changes.
+- **R3597:** `RefreshStale` does not apply the byte-identical skip (R2864) to a file `StaleFiles` reported stale: a byte-identical stale file is stale by chunker version and is fully re-chunked.
+- **R3598:** An append refused with `microfts2.ErrChunkerVersionStale` re-chunks the whole file: the fused refresh falls through to a full reindex.
+- **R3600:** A file scan of a file `CheckFile` reported stale, whose bytes match its F record's length and content hash, runs forced (R3568): it neither takes the append branch nor meets the store-time unchanged escape (R3423), since such a file is stale only by chunker version.
+
+## Feature: Version-stale scan retry
+**Source:** specs/db-write-actor.md
+
+- **R3599:** A file-scan store that fails with `microfts2.ErrChunkerVersionStale` re-emits its one change event as a forced scan, which never appends, so the retry cannot meet the same refusal.
+
+## Feature: Memory release after bursts
+**Source:** specs/memory-release.md
+
+- **R3601:** `releaseMemory(reason)` forces a collection and returns freed pages to the OS (`debug.FreeOSMemory`) and logs one line naming the reason. It is called only at quiet points after bursts, never per file.
+- **R3602:** The DB actor counts bytes chunked by stored file scans since the last release (the whole file for a full chunk, the new bytes for an append). When the file-scan registry empties and the count has reached `releaseAfterScanBytes` (256 MiB), it resets the count and releases off the actor.
+- **R3603:** `RefreshStale` releases when it finishes if the bytes it chunked reached `releaseAfterScanBytes`.
+- **R3604:** After each embedding tier's batch closes its model context, the Librarian releases if the tier embedded at least `releaseAfterEmbedChunks` (512) chunks.
+- **R3605:** A served `ark status` carries the server process's memory: the live Go heap (`/gc/heap/live:bytes`), Go heap in use, Go heap idle and not yet returned, Go's total obtained from the OS, and on Linux the process's resident size; the CLI prints it as one `memory:` line before `server:`. An unserved status omits it.
+- **R3606:** `ark status --heap FILE` resolves FILE to an absolute path and POSTs it to the server's `/status/heap`, which runs a collection and writes the process's Go heap profile there, answering with the path; the CLI prints `heap profile: PATH`. Without a server the flag refuses with a message saying it profiles the server process.
+- **R3607:** A long-lived queue pops through `popFront`, which clears the popped slot before advancing, so a run closure and everything it captured stop being reachable through the backing array. The DB write queue and `ChanSvc`'s queue use it.

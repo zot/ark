@@ -122,8 +122,7 @@ func (s *ChanSvc) next() {
 		s.running = false
 		return
 	}
-	fn := s.queue[0]
-	s.queue = s.queue[1:]
+	fn := popFront(&s.queue) // R3607
 	s.launch(fn)
 }
 

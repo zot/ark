@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36-44, R117, R118, R121, R126, R360-368, R386, R502, R503, R505, R511, R517-522, R751, R752, R757, R795-797, R866, R868-870, R872, R873, R933-935, R953, R954, R956, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113-1116, R1119-1126, R1128, R1317-1325, R1849-1854, R1869, R1890-1901, R1904-1908, R1923, R1926, R1983, R1984, R1996, R2000-2008, R2012, R2016, R2018, R2022, R2024, R2026, R2110-2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090-3093, R3095-3100, R3104, R3106, R3107, R3244, R3264-3266, R3274, R3275, R3388, R3568, R3594
+**Requirements:** R36-44, R117, R118, R121, R126, R360-368, R386, R502, R503, R505, R511, R517-522, R751, R752, R757, R795-797, R866, R868-870, R872, R873, R933-935, R953, R954, R956, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113-1116, R1119-1126, R1128, R1317-1325, R1849-1854, R1869, R1890-1901, R1904-1908, R1923, R1926, R1983, R1984, R1996, R2000-2008, R2012, R2016, R2018, R2022, R2024, R2026, R2110-2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090-3093, R3095-3100, R3104, R3106, R3107, R3244, R3264-3266, R3274, R3275, R3388, R3568, R3594, R3597, R3598, R3603
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -86,6 +86,8 @@ access. (R2915)
   (R2696, R2729).
 
 ## Does
+- RefreshStale sums the bytes its refreshes chunked and calls releaseMemory at
+  the end when the sum reaches `releaseAfterScanBytes` (R3603).
 - reresolvePlansFor(candidates) / reresolveMovedPremises(changed) (R3388):
   **one** plan builder and **one** updater for both things that can invalidate
   a routing — a file changing, and a link moving under an @ext premise.
@@ -122,7 +124,11 @@ access. (R2915)
   file-level tags + defs are re-extracted from prep.data in
   executeFullRefresh (R1126, R2913). Eliminates splitChunks call (R1124).
 - RefreshStale(patterns): get stale files from microfts2, optionally filter
-  by patterns, refresh each one in parallel.
+  by patterns, refresh each one in parallel. A file microfts2 judged stale is
+  never unchanged-skipped (R2864): a byte-identical stale file is stale by
+  chunker version and must be re-chunked (R3597).
+- executeRefresh append branch: any AppendChunks error, including
+  `ErrChunkerVersionStale`, falls through to executeFullRefresh (R3598).
 - prepareScan / storeScan with force (R3568): a forced scan never takes the
   append branch and never skips an unchanged file at store time, so the whole
   file is re-chunked and stored through ReindexPrepared. Worker pool (NumCPU goroutines)

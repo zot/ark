@@ -391,6 +391,38 @@ func planStatus(serverUp, wantChunks, wantTokenize bool) statusPlan {
 	return statusPlan{proxy: true, proxyChunks: wantChunks}
 }
 
+// heapNeedsServer refuses `--heap` without a server: the profile is of the
+// long-running server process, and the CLI's own heap says nothing.
+// CRC: crc-CLI.md | R3606
+func heapNeedsServer(serverUp bool, heapFile string) error {
+	if heapFile != "" && !serverUp {
+		return errHeapNeedsServer
+	}
+	return nil
+}
+
+// CRC: crc-CLI.md | R3606
+var errHeapNeedsServer = errors.New(
+	"--heap profiles the running server's memory; start one with `ark serve`")
+
+// writeServerHeapProfile asks the server to write its heap profile to file,
+// resolved to an absolute path since the server's working directory is not
+// ours, and prints where it went.
+// CRC: crc-CLI.md | R3606
+func writeServerHeapProfile(client *http.Client, file string) {
+	abs, err := filepath.Abs(ark.ExpandTilde(file))
+	if err != nil {
+		fatal(err)
+	}
+	var resp struct {
+		Path string `json:"path"`
+	}
+	if err := proxyDecode(client, "POST", "/status/heap", map[string]string{"path": abs}, &resp); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("heap profile: %s\n", resp.Path)
+}
+
 // CRC: crc-CLI.md | R3394
 var errTokenizeNeedsExclusive = errors.New(
 	"--tokenize loads the embedding model and needs the index to itself; stop the server with `ark stop`")
@@ -2810,6 +2842,15 @@ func printStatus(status *ark.StatusInfo, serverRunning bool) {
 		fmt.Printf("map: %s / %s (%.0f%%)\n",
 			formatBytes(status.MapUsed), formatBytes(status.MapTotal), pct)
 	}
+	// R3605: the served process's memory; absent when no server answered.
+	if m := status.Memory; m != nil {
+		fmt.Printf("memory: go heap %s live, %s in use, %s idle; go total %s",
+			formatBytes(int64(m.HeapLive)), formatBytes(int64(m.HeapInUse)), formatBytes(int64(m.HeapIdle)), formatBytes(int64(m.GoTotal)))
+		if m.RSS > 0 {
+			fmt.Printf("; rss %s", formatBytes(int64(m.RSS)))
+		}
+		fmt.Println()
+	}
 	fmt.Printf("server: %s\n", server)
 	if status.UIRunning {
 		fmt.Printf("ui: running (port %d)\n", status.UIPort)
@@ -2907,6 +2948,7 @@ func cmdStatus(args []string) {
 	showDB := fs.Bool("db", false, "show LMDB record counts by type")
 	showChunks := fs.Bool("chunks", false, "show chunk size statistics")
 	tokenize := fs.Bool("tokenize", false, "measure in tokens (requires tag_model)")
+	heapFile := fs.String("heap", "", "write the running server's Go heap profile to FILE (go tool pprof)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: ark status [-with|-without] [-files GLOB]... [options]")
 		fmt.Fprintln(os.Stderr, "\nShow database status. With --chunks, show chunk size statistics.")
@@ -2920,6 +2962,9 @@ func cmdStatus(args []string) {
 	plan := planStatus(client != nil, *showChunks, *tokenize)
 	if plan.err != nil {
 		fatal(plan.err)
+	}
+	if err := heapNeedsServer(client != nil, *heapFile); err != nil {
+		fatal(err)
 	}
 
 	ff := ark.ExpandTildeSlice([]string(filterFiles))
@@ -2946,6 +2991,9 @@ func cmdStatus(args []string) {
 				resp.Version, ark.Version)
 		}
 		printWarnings(resp.Warnings)
+		if *heapFile != "" {
+			writeServerHeapProfile(client, *heapFile)
+		}
 		if !plan.proxyChunks {
 			return
 		}

@@ -78,6 +78,9 @@ type DB struct {
 	// CRC: crc-FileScanActor.md | R3420
 	fileScans map[string]*fileScan
 	scanSeq   uint64 // R3421: process-global monotonic changeNum counter, never reset per entry (ABA guard)
+	// scanBytesSinceRelease counts bytes chunked by stored scans since the last
+	// memory release; actor-only. R3602
+	scanBytesSinceRelease int64
 	// scanSem bounds concurrent off-slot file preparations to runtime.NumCPU(),
 	// so a reconcile of thousands of stale files never spawns thousands of
 	// concurrent computes. Enforces R519 under the per-file scan-actor model.
@@ -645,8 +648,7 @@ func (db *DB) startNextWrite() {
 	if len(db.writeQueue) == 0 {
 		return
 	}
-	fn := db.writeQueue[0]
-	db.writeQueue = db.writeQueue[1:]
+	fn := popFront(&db.writeQueue) // R3607
 	db.writing = true
 
 	ftsCopy := db.fts.Copy()
@@ -2029,15 +2031,22 @@ func (g dbScanGate) keep(hash [32]byte, pc *microfts2.PreparedChunk) {
 type storeOutcome struct {
 	retire bool
 	reEmit bool
+	force  bool // R3599: re-emit as a forced scan, which never appends
 }
 
 // storeResultAction decides the post-store action: always retire the entry;
 // re-emit one bounded change event only on failure (never an inline reindex).
 // A pure function so the "re-scan on failure, exactly once" property is testable
-// without a live store. R3425
-// CRC: crc-FileScanActor.md | R3425
+// without a live store. An append refused because the file was chunked under
+// another chunker version re-emits a forced scan: a plain one would prepare the
+// same append and meet the same refusal on every retry. R3425, R3599
+// CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.10.2 | R3425, R3599
 func storeResultAction(err error) storeOutcome {
-	return storeOutcome{retire: true, reEmit: err != nil}
+	return storeOutcome{
+		retire: true,
+		reEmit: err != nil,
+		force:  errors.Is(err, microfts2.ErrChunkerVersionStale),
+	}
 }
 
 // stampFileScan looks up or creates path's registry entry and stamps it with the
@@ -2075,7 +2084,22 @@ func (db *DB) retireFileScanIfCurrent(path string, my uint64) {
 	if fs := db.fileScans[path]; fs != nil && fs.changeNum == my {
 		delete(db.fileScans, path)
 		db.checkWriteIdle()
+		if len(db.fileScans) == 0 {
+			db.releaseAfterScanBurst()
+		}
 	}
+}
+
+// releaseAfterScanBurst releases memory once no scan is in flight and enough
+// has been chunked since the last release. The release runs on a goroutine so
+// the actor never waits on the collection. On the DB actor.
+// CRC: crc-DB.md | Seq: seq-file-scan-actor.md#1.10.3 | R3602
+func (db *DB) releaseAfterScanBurst() {
+	if db.scanBytesSinceRelease < releaseAfterScanBytes {
+		return
+	}
+	db.scanBytesSinceRelease = 0
+	go releaseMemory("file scans")
 }
 
 // runScanBounded runs fn under the per-file dispatch semaphore, so at most
@@ -2223,7 +2247,8 @@ func (db *DB) prepareFileScan(idx *Indexer, cfg *Config, path string, my uint64,
 	// R3428-R3431: the gate carries per-chunk reuse + changeNum preemption for the
 	// full-file compute; its map hops run on the DB actor.
 	gate := dbScanGate{db: db, path: path, my: my}
-	prep, err := idx.prepareScan(path, strategy, status.FileID, known, force, gate)
+	stale := checkErr == nil && status.Status == "stale"
+	prep, err := idx.prepareScan(path, strategy, status.FileID, known, stale, force, gate)
 	if err != nil {
 		// errScanSuperseded is a clean abandon (a newer scan owns the entry), not a
 		// failure — don't log it. R3430
@@ -2263,6 +2288,9 @@ func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
 		// goroutine (the loop is free to receive).
 		svc(db.svc, func() {
 			act := storeResultAction(err)
+			if err == nil {
+				db.scanBytesSinceRelease += prep.chunkedBytes() // R3602
+			}
 			if act.reEmit {
 				log.Printf("index: store %s failed (%v) — re-scanning once", path, err)
 			}
@@ -2274,7 +2302,7 @@ func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
 				db.onFileStored(path)
 			}
 			if act.reEmit {
-				db.reEmitFileChange(path)
+				db.reEmitFileChange(path, act.force)
 			}
 		})
 	})
@@ -2284,8 +2312,8 @@ func (db *DB) finishFileScan(path string, prep *scanPrep, my uint64) {
 // machinery so a failed store is re-scanned once — bounded, never an inline
 // full reindex (R3425). On the DB actor; the post defers to the queue tail.
 // CRC: crc-FileScanActor.md | Seq: seq-file-scan-actor.md#1.10.1 | R3425
-func (db *DB) reEmitFileChange(path string) {
-	db.Do(func(db *DB) { db.startFileScan(db.indexer, path) })
+func (db *DB) reEmitFileChange(path string, force bool) {
+	db.Do(func(db *DB) { db.startFileScanWith(db.indexer, path, force) })
 }
 
 // SyncLinkPath brings the link table in line with one path, and records a
@@ -4293,6 +4321,8 @@ type StatusInfo struct {
 	// to be read from the index in whatever local open the CLI happened
 	// to make, so the proxied form printed none.
 	Warnings map[string]string `json:"warnings,omitempty"`
+	// Memory describes the serving process; nil when no server answered. R3605
+	Memory *MemoryStatus `json:"memory,omitempty"`
 }
 
 // arkLabels maps every ark-bucket record prefix that `status -db` displays to
@@ -5660,6 +5690,17 @@ func chatChunkRole(rec TranscriptRecord) string {
 // locator stored in microfts2's F record (R2275), so the struct itself
 // carries no state.
 type JSONLChunker struct{}
+
+// chatChunkerVersion is the chat-jsonl chunker's rules version. Bump it when
+// what the chunker indexes changes: microfts2 then reports every chat file
+// chunked under another version stale, and the ordinary refresh re-chunks it.
+// R3596
+const chatChunkerVersion = 1
+
+var _ microfts2.VersionedChunker = JSONLChunker{}
+
+// ChunkerVersion implements microfts2.VersionedChunker. R3596
+func (JSONLChunker) ChunkerVersion() uint32 { return chatChunkerVersion }
 
 // Chunks delegates to JSONLChunkFunc.
 func (JSONLChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {

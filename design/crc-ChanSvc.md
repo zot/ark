@@ -1,5 +1,5 @@
 # ChanSvc
-**Requirements:** R986, R3344, R3345, R3346, R3347, R3348, R3349, R3350
+**Requirements:** R986, R3344-3350, R3607
 
 The closure actor itself, as a reusable component rather than a DB
 implementation detail. Serializes access to whatever state its owner protects,
@@ -18,6 +18,7 @@ direct send, and the direct send is what makes ordering hold.
 - running: whether a closure is in flight. Written and read only on the loop goroutine, which is why it is a plain bool rather than an atomic (R3346).
 
 ## Does
+- next pops its queue through popFront, so a run closure is not kept alive by the backing array (R3607).
 - loop: receive a closure and run it immediately. Every closure it receives is bookkeeping (`accept` or `next`), never caller work, so the loop is never held longer than a queue operation and is effectively always at the receive (R3346). This is what makes a direct send viable, and running caller work here instead is precisely what made escaping the send tempting in the first place.
 - Svc(fn) / SvcSync(fn) / SvcSyncVoid(fn): post fn. The send is performed **on the calling goroutine** — never handed to a spawned sender, which would let two posts race and surrender ordering (R3344, R3345). Both post kinds enter here, so ordering spans them (R3344). The synchronous forms additionally block the caller on fn's completion.
 - accept(fn) (loop goroutine): if a closure is in flight, append fn to the queue; otherwise launch it (R3346).

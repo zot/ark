@@ -1,5 +1,5 @@
 # FileScanActor
-**Requirements:** R3419, R3420, R3421, R3422, R3423, R3424, R3425, R3426, R3427, R3428, R3429, R3430, R3431, R3432, R3433, R3438
+**Requirements:** R3419-3433, R3438, R3599, R3600
 
 The per-file scan machinery that moves index compute (chunk + trigram + token)
 off the write slot. A registry of in-flight scans lives on the DB actor; each
@@ -54,6 +54,9 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
   per-chunk compute — `SplitFile` once, then `buildEntries` (reuse map + chunk
   preemption), then `AssembleFile`; an append keeps the single `PrepareAppend`.
   Enqueues the store closure back through the write actor. (R3419, R3426, R3428)
+  A file CheckFile reported stale whose bytes match its F record is stale only
+  by chunker version, so the scan runs forced: no append, no store-time
+  unchanged escape (R3600).
 - buildEntries (pure, off-slot): the per-chunk loop over split chunks. For each,
   consult the reuse gate (preempt on supersession, reuse grams on a hash hit),
   else `PrepareChunk` and cache. Returns ordered `[]PreparedEntry` for
@@ -68,7 +71,9 @@ orchestration on the actor) and `indexer.go` (the prepare/store split).
   only; appends exempt), then `StorePrepared` / `ReindexPrepared` /
   `AppendPrepared` + all post-store bookkeeping; orphan cleanup via
   `WithRemovedChunkCallback`. Posts retire (and, on failure, one bounded
-  re-emit) back to the actor. (R3423, R3425, R3426)
+  re-emit) back to the actor. (R3423, R3425, R3426) A store refused with
+  `ErrChunkerVersionStale` re-emits a *forced* scan, which never appends, so
+  the retry cannot meet the same refusal (R3599).
 - retireFileScanIfCurrent (on the DB actor): remove the entry only if its
   changeNum still matches — closes the retire-vs-new-event race. (R3424)
 

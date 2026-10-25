@@ -502,6 +502,7 @@ func Serve(dbPath string, opts ServeOpts) error {
 	mux.HandleFunc("POST /refresh", srv.handleRefresh)            // R94
 	mux.HandleFunc("GET /status", handle(srv, statusOp{}))        // R95, R3167
 	mux.HandleFunc("POST /status/chunks", srv.handleStatusChunks) // R3393
+	mux.HandleFunc("POST /status/heap", srv.handleStatusHeap)     // R3606
 	mux.HandleFunc("GET /files", srv.handleFiles)                 // R96
 	mux.HandleFunc("POST /files/status", srv.handleFilesStatus)
 	mux.HandleFunc("POST /files/expand", srv.handleFilesExpand) // R3378, R3379
@@ -1740,6 +1741,7 @@ func (o *statusOp) run() (any, error) {
 	}
 	result.status.UIIndexing = len(o.srv.currentlyIndexing()) > 0
 	result.status.Spectral = o.srv.librarian.Available()
+	result.status.Memory = memoryStatus() // R3605
 
 	if result.dbCounts != nil {
 		return struct {
@@ -1748,6 +1750,29 @@ func (o *statusOp) run() (any, error) {
 		}{result.status, result.dbCounts}, nil
 	}
 	return result.status, nil
+}
+
+// handleStatusHeap serves POST /status/heap: collect, then write this process's
+// Go heap profile to the absolute path given, for `go tool pprof`. It never
+// touches the DB, so it runs off the actor.
+// CRC: crc-Server.md | R3606
+func (srv *Server) handleStatusHeap(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		http.Error(w, "heap profile path must be absolute", http.StatusBadRequest)
+		return
+	}
+	if err := writeHeapProfile(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"path": req.Path})
 }
 
 // handleStatusChunks serves POST /status/chunks — the chunk size statistics

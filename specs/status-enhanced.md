@@ -80,8 +80,13 @@ chunks: 8451
 sources: 5
 strategies: lines=1200 chat-jsonl=73
 db: 511 MB
-server: not running
+memory: go heap 640 MB live, 1.2 GB in use, 310 MB idle; go total 1.9 GB; rss 2.3 GB
+server: running
 ```
+
+The `memory` line appears only when a server answers the status; it describes
+that server's process ([memory-release.md](memory-release.md)), and `rss` is
+shown only where the platform reports it (Linux).
 
 The total size appears parenthesized after the file count. The
 `stale`/`missing`/`unresolved` lines carry `(as of HH:MM:SS)` (or `-`

@@ -55,7 +55,7 @@ check); with content it does not
 **Code:** stale_chunk_test.go
 **Fire alarm:** keep the candidate when `ChunkText` fails
 **Inject:** recall.go:Recall
-**Pulled:** 2026-10-24 — rang (recall with content returned the stale chunk)
+**Pulled:** 2026-10-25 — rang (recall with content returned the stale chunk); re-pulled after #165 changed Recall
 
 ## Test: content view
 **Purpose:** a stale chunk keeps its div, holding the placeholder; a PDF page

@@ -151,6 +151,13 @@ queue entries, but neither is shown to be the cause. A client that saw
 needs a full reconcile at all is a separate question, worth asking when this
 item is designed.
 
+A startup reconcile shows the same stall, so it is not specific to reloads.
+Measured later that day, on a plain restart with nothing stale but 16 files: 2
+min 48 s (16:44:42 to 16:47:30), `ark status` timing out at 20 s and 30 s, with
+the process near 0% CPU and its memory flat at about 190 MB throughout. Waiting,
+then, not working: whatever the reconcile blocks on is not hashing or chunking.
+Earlier restarts the same day had answered `status` within a minute.
+
 The identity also goes to Lua directly, as a `sys.version` string (and the
 build stamp beside it, name to settle), set once in `registerLuaFunctions`.
 A constant needs no subscription, so the UI can read it without the document
