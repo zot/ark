@@ -130,6 +130,7 @@ type SearchOpts struct {
 	Fuzzy           bool                     // R744: typo-tolerant search via SearchFuzzy
 	Proximity       bool                     // enable proximity reranking
 	NoTmp           bool                     // R673: exclude tmp:// documents
+	System          bool                     // R3590: lift the system_exclude fence for this search
 	Cache           *microfts2.ChunkCache    // R652: session-provided cache (nil = per-query)
 	ChunkFilters    []ChunkFilterRow         // R1402: stacked filter rows for chunk-level filtering
 	extraOpts       []microfts2.SearchOption // built from ChunkFilters at search time
@@ -536,9 +537,7 @@ func (s *Searcher) SearchSplit(opts SearchOpts) ([]SearchResultEntry, error) {
 	} else if hasAbout {
 		// Vector only: the candidate set skipped the FTS scan, so apply the
 		// post-filter stack + default scope post-hoc before resolving. R2951
-		if def := s.effectiveExcludeFiles(opts); def != nil {
-			opts.ExcludeFiles = def
-		}
+		opts = s.withDefaultExcludes(opts) // R3584: fence + noise, appended
 		keptIDs, ferr := s.postFilterChunkIDs(chunkScoreIDs(vecResults), opts, opts.Cache)
 		if ferr != nil {
 			return nil, ferr
@@ -770,6 +769,63 @@ func resolvePredicateLocations(p MatchPredicate, store *Store) (map[uint64]bool,
 	return chunkIDs, fileIDs
 }
 
+// routedPrimaryChunks returns the candidates that carry a routed tag value
+// matching p: name among the predicate's names, value accepted by the
+// predicate. A chunk whose only match is inline is not in the set. Beside
+// resolvePredicateLocations so the server's tag primary and the CLI's
+// cold path compute the same exemption.
+// CRC: crc-Searcher.md | R3587
+func routedPrimaryChunks(p MatchPredicate, store *Store, candidates []uint64) map[uint64]bool {
+	if store == nil || store.extmap == nil || len(candidates) == 0 {
+		return nil
+	}
+	names := make(map[string]bool)
+	for _, n := range matchingTagNames(p, store) {
+		names[n] = true
+	}
+	var routed map[uint64]bool
+	for _, cid := range candidates {
+		for _, tv := range store.extmap.RoutedTagsForChunk(cid) {
+			if !names[tv.Tag] || !p.MatchValue(tv.Value) {
+				continue
+			}
+			if routed == nil {
+				routed = make(map[uint64]bool)
+			}
+			routed[cid] = true
+			break
+		}
+	}
+	return routed
+}
+
+// dropNoiseExceptRouted removes results whose path matches the noise filter,
+// keeping those reached through a routing (R3587). Same matcher as
+// filterByPathGlobs.
+func dropNoiseExceptRouted(results []SearchResultEntry, noise []string, routed map[uint64]bool) []SearchResultEntry {
+	if len(noise) == 0 {
+		return results
+	}
+	m := &Matcher{Dotfiles: true}
+	kept := results[:0]
+	for _, r := range results {
+		if !routed[r.ChunkNum] && matchesAnyWith(m, noise, r.Path) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept
+}
+
+func matchesAnyWith(m *Matcher, globs []string, path string) bool {
+	for _, g := range globs {
+		if m.Match(g, path, "", false) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchingTagNames enumerates tag names accepted by p.NameMode.
 // Exact mode short-circuits to a single lowercased candidate without
 // touching the index — downstream lookups yield nothing if the name
@@ -902,17 +958,26 @@ func BuildChunkFilters(rows []ChunkFilterRow, links *LinkTable, cache *microfts2
 	return opts
 }
 
-// effectiveExcludeFiles returns the default search_exclude scope to inject
-// when the caller supplied no explicit file filter. A positive `-files`
-// chunk-filter row (the user asking for a specific path set) or any explicit
-// --filter-files/--exclude-files disables it. Shared by resolveFilters (FTS
-// path) and the index-lookup funnel so every primary mode applies the same
-// default. R939, R940.
-// CRC: crc-Searcher.md | R939, R940, R2951
-func (s *Searcher) effectiveExcludeFiles(opts SearchOpts) []string {
-	if s.config == nil || len(s.config.SearchExclude) == 0 {
-		return nil
+// defaultExcludes returns the default scope, computed from the caller's opts
+// before any are written: the fence (system_exclude), unless the search asked
+// for -system, and the noise filter (search_exclude), unless an explicit file
+// filter or a positive `-files` row replaces it. Callers append both to
+// opts.ExcludeFiles rather than assigning, so the fence holds alongside an
+// explicit filter.
+// CRC: crc-Searcher.md | R939, R940, R2951, R3584, R3590
+func (s *Searcher) defaultExcludes(opts SearchOpts) (fence, noise []string) {
+	if s.config == nil {
+		return nil, nil
 	}
+	if !opts.System {
+		fence = s.config.SystemExcludes()
+	}
+	return fence, s.noiseExcludes(opts)
+}
+
+// noiseExcludes is the R939/R940 rule: search_exclude applies unless the
+// caller narrowed to an explicit file set.
+func (s *Searcher) noiseExcludes(opts SearchOpts) []string {
 	if len(opts.FilterFiles) > 0 || len(opts.ExcludeFiles) > 0 {
 		return nil
 	}
@@ -921,7 +986,33 @@ func (s *Searcher) effectiveExcludeFiles(opts SearchOpts) []string {
 			return nil
 		}
 	}
-	return s.config.SearchExclude
+	return s.config.SearchExcludes()
+}
+
+// withDefaultExcludes returns opts with the whole default scope appended to
+// its ExcludeFiles, for paths that have no routed exemption to make.
+func (s *Searcher) withDefaultExcludes(opts SearchOpts) SearchOpts {
+	fence, noise := s.defaultExcludes(opts)
+	opts.ExcludeFiles = appendGlobs(opts.ExcludeFiles, fence, noise)
+	return opts
+}
+
+// appendGlobs concatenates into a fresh slice, so a caller's ExcludeFiles
+// backing array is never written through.
+func appendGlobs(base []string, more ...[]string) []string {
+	n := len(base)
+	for _, m := range more {
+		n += len(m)
+	}
+	if n == len(base) {
+		return base
+	}
+	out := make([]string, 0, n)
+	out = append(out, base...)
+	for _, m := range more {
+		out = append(out, m...)
+	}
+	return out
 }
 
 // postFilterChunkIDs applies the user post-filter stack to a non-FTS
@@ -1412,13 +1503,11 @@ func (s *Searcher) resolvePatterns(pats []string) []string {
 }
 
 func (s *Searcher) resolveFilters(opts SearchOpts) (microfts2.SearchOption, error) {
-	// R939, R940: inject the default search_exclude scope when the caller
+	// R939, R940: inject the default exclude scope when the caller
 	// supplied no explicit file filter. Shared with the index-lookup funnel
-	// via effectiveExcludeFiles so every primary mode applies the same
+	// via withDefaultExcludes so every primary mode applies the same
 	// default; a positive `-files` row or explicit flags disable it.
-	if def := s.effectiveExcludeFiles(opts); def != nil {
-		opts.ExcludeFiles = def
-	}
+	opts = s.withDefaultExcludes(opts) // R3584: fence + noise, appended
 	// R950: expand a leading `~/` on the explicit file-glob flags so they
 	// behave like the (already tilde-expanded) search_exclude config. No-op
 	// for globs without a leading tilde. SearchExclude is pre-expanded at
@@ -1746,11 +1835,17 @@ func (s *Searcher) FillChunks(results []SearchResultEntry) ([]SearchResultEntry,
 // through the post-filter funnel (default search_exclude scope + the user
 // post-filter stack + path globs) so post-filtering is
 // primary-mode-independent. Caps to opts.K. Caller fills chunks/files.
-// CRC: crc-Searcher.md | Seq: seq-search.md | R2442, R2951
-func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
+// routed holds the candidates a matching tag value reached through an @ext
+// routing: the noise filter spares them, the fence does not (R3587).
+// CRC: crc-Searcher.md | Seq: seq-search.md | R2442, R2951, R3584, R3587
+func (s *Searcher) SearchTagChunks(chunkIDs []uint64, routed map[uint64]bool, opts SearchOpts) ([]SearchResultEntry, error) {
 	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
-	if def := s.effectiveExcludeFiles(opts); def != nil {
-		opts.ExcludeFiles = def
+	fence, noise := s.defaultExcludes(opts)
+	if len(routed) == 0 {
+		opts.ExcludeFiles = appendGlobs(opts.ExcludeFiles, fence, noise)
+		noise = nil
+	} else {
+		opts.ExcludeFiles = appendGlobs(opts.ExcludeFiles, fence)
 	}
 	chunkIDs, err := s.postFilterChunkIDs(chunkIDs, opts, opts.Cache)
 	if err != nil {
@@ -1761,6 +1856,7 @@ func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]Search
 		return nil, err
 	}
 	results = filterByPathGlobs(results, opts)
+	results = dropNoiseExceptRouted(results, noise, routed)
 	k := opts.K
 	if k == 0 {
 		k = 20
@@ -1775,9 +1871,9 @@ func (s *Searcher) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]Search
 // — bypasses FTS. Wraps SearchTagChunks with chunk-text fill and the shared
 // grouping/preview pipeline used by SearchGrouped.
 // CRC: crc-Searcher.md | R2442
-func (s *Searcher) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
+func (s *Searcher) GroupTagChunks(chunkIDs []uint64, routed map[uint64]bool, opts SearchOpts) ([]GroupedResult, error) {
 	opts = s.normalizeOpts(opts) // R3359: resolve every path-shaped input at the door
-	results, err := s.SearchTagChunks(chunkIDs, opts)
+	results, err := s.SearchTagChunks(chunkIDs, routed, opts)
 	if err != nil {
 		return nil, err
 	}

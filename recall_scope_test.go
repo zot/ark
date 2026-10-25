@@ -621,3 +621,115 @@ func TestBuildSearchTask_CarriesScope(t *testing.T) {
 		t.Errorf("task doc order wrong: scope=%d seed=%d handle=%d", scopeAt, seedAt, handleAt)
 	}
 }
+
+// fencedTagFixture is TagAxisScopedBeforeItsCut's shape with the outranking
+// values inside a fenced directory: only a working fence lets the kept value
+// through. It returns the query chunk, the kept chunk, and the fenced dir.
+// CRC: crc-Librarian.md | R3591, R3593
+func fencedTagFixture(t *testing.T) (*Librarian, uint64, uint64, string) {
+	t.Helper()
+	l, db := setupRecall(t)
+	fencedDir := filepath.Join(db.dbPath, "fenced")
+	for _, d := range []string{fencedDir, filepath.Join(db.dbPath, "keep")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.config.SystemExclude = &[]string{fencedDir + "/**"}
+	query, _ := indexLine(t, db, "query.txt", "what should we cook tonight")
+	if err := db.store.WriteChunkEmbedding(query, vecFrom(0, 0, 1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	tagChunk := func(name, value string, vec []float32) uint64 {
+		t.Helper()
+		cid, _ := indexLine(t, db, name, "zzz qqq "+value)
+		if err := db.store.UpdateTagValues([]ChunkTagValues{
+			{ChunkID: cid, Values: []TagValue{{Tag: "cuisine", Value: value}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		tvid, ok := db.store.TvidMap().Lookup("cuisine", value)
+		if !ok {
+			t.Fatalf("tvid for cuisine:%s not allocated", value)
+		}
+		if err := db.store.WriteTagValueEmbedding(tvid, vec); err != nil {
+			t.Fatal(err)
+		}
+		return cid
+	}
+	for i := range scopeLegOutranked {
+		tagChunk(filepath.Join("fenced", fmt.Sprintf("d%02d.txt", i)), fmt.Sprintf("v%02d", i), vecFrom(0, 0.01, 1, 0))
+	}
+	keep := tagChunk(filepath.Join("keep", "k.txt"), "kept", vecFrom(0, 1, 1, 0))
+	return l, query, keep, fencedDir
+}
+
+func anyUnder(res *RecallResult, dir string) bool {
+	for _, c := range res.Chunks {
+		if strings.HasPrefix(c.Path, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRecall_UnscopedNeverAdmitsFenced: with no hunt scope, the fence still
+// applies on the tag axis before its cut. Refs: R3591
+func TestRecall_UnscopedNeverAdmitsFenced(t *testing.T) {
+	l, query, keep, fencedDir := fencedTagFixture(t)
+	res, err := l.Recall([]ConnectionsInput{{ChunkID: query}}, RecallOpts{K: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anyUnder(res, fencedDir) {
+		t.Fatalf("unscoped recall returned a fenced chunk")
+	}
+	if !scopeLegContains(res, keep) {
+		t.Fatalf("unscoped recall lost the kept chunk: fenced values took the tag axis's slots")
+	}
+}
+
+// TestRecall_ScopeIntoFenceYieldsNothing: a hunt scoped into the fence gets
+// nothing from it, and says the scope matched no admissible file.
+// Refs: R3593, R3188
+func TestRecall_ScopeIntoFenceYieldsNothing(t *testing.T) {
+	l, query, _, fencedDir := fencedTagFixture(t)
+	res, err := l.Recall([]ConnectionsInput{{ChunkID: query}}, RecallOpts{K: 3, FilterFiles: []string{fencedDir + "/**"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anyUnder(res, fencedDir) {
+		t.Fatalf("a scope pointing into the fence reached it")
+	}
+	if !res.ScopeEmpty {
+		t.Errorf("ScopeEmpty = false: a scope that only names fenced files should read as a wrong scope")
+	}
+}
+
+// TestFenceOnlyScopeIsDenySet: an unscoped recall builds a deny set of the
+// fenced files, not an allow set over every file. Refs: R3591
+func TestFenceOnlyScopeIsDenySet(t *testing.T) {
+	l, _, keep, _ := fencedTagFixture(t)
+	op := l.newRecallOp()
+	scope := op.resolveRecallScope(nil, nil)
+	if !scope.active || scope.only != nil || len(scope.denied) != scopeLegOutranked {
+		t.Fatalf("fence-only scope: active=%v only=%v denied=%d, want active, no allow set, %d denied",
+			scope.active, scope.only != nil, len(scope.denied), scopeLegOutranked)
+	}
+	if !scope.admits(op, keep) {
+		t.Errorf("fence-only scope rejected an unfenced chunk")
+	}
+}
+
+// TestScopeDirectiveNeverCarriesSystem: the secretary's ready-made filter
+// string cannot lift the fence, whatever the hunt's scope. Refs: R3593
+func TestScopeDirectiveNeverCarriesSystem(t *testing.T) {
+	d := scopeDirective(bloodhoundReq{
+		filterFiles:  []string{"~/.ark/schedule/**", "~/work/ark/**"},
+		excludeFiles: []string{"**/*.jsonl"},
+	})
+	if !strings.Contains(d, "-with -files") || strings.Contains(d, "-system") {
+		t.Errorf("scope directive must carry -files rows and never -system:\n%s", d)
+	}
+}
+

@@ -679,3 +679,72 @@ func TestResolveGlobsSkipsSymlinkedMatch(t *testing.T) {
 		t.Fatal("the glob matched no real directories, so this proves nothing")
 	}
 }
+
+// loadTOML writes body as <dir>/ark.toml and loads it, so dbPath is dir.
+func loadTOML(t *testing.T, dir, body string) *Config {
+	t.Helper()
+	p := filepath.Join(dir, "ark.toml")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// TestExcludeDefaults: an absent key means the built-in default, for both
+// settings, and the fence names the scheduler's own directory.
+// Refs: R3581, R3582, R3583
+func TestExcludeDefaults(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadTOML(t, dir, "")
+	if got, want := cfg.SearchExcludes(), []string{ExpandTilde(defaultSearchExclude)}; !reflect.DeepEqual(got, want) {
+		t.Errorf("SearchExcludes() = %v, want the chat-log default %v", got, want)
+	}
+	if got, want := cfg.SystemExcludes(), []string{scheduleDirFor(dir) + "/**"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("SystemExcludes() = %v, want the scheduler's dir %v", got, want)
+	}
+}
+
+// TestExcludeListsReplaceDefaults: a set list replaces the default and an
+// explicit [] turns the setting off. Refs: R3583
+func TestExcludeListsReplaceDefaults(t *testing.T) {
+	cfg := loadTOML(t, t.TempDir(), `search_exclude = ["~/notes/**"]`)
+	if got, want := cfg.SearchExcludes(), []string{ExpandTilde("~/notes/**")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("set list: got %v, want only %v (no default added)", got, want)
+	}
+	cfg = loadTOML(t, t.TempDir(), "search_exclude = []\nsystem_exclude = []\n")
+	if got := cfg.SearchExcludes(); len(got) != 0 {
+		t.Errorf("search_exclude = []: got %v, want none", got)
+	}
+	if got := cfg.SystemExcludes(); len(got) != 0 {
+		t.Errorf("system_exclude = []: got %v, want none", got)
+	}
+}
+
+// TestExplicitEmptyExcludeSurvivesSave: a config edit must not turn an
+// explicitly disabled setting back on. Refs: R3583
+func TestExplicitEmptyExcludeSurvivesSave(t *testing.T) {
+	dir := t.TempDir()
+	cfg := loadTOML(t, dir, "search_exclude = []\n")
+	p := filepath.Join(dir, "ark.toml")
+	if err := cfg.SaveConfig(p); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := os.ReadFile(p)
+	if !strings.Contains(string(saved), "search_exclude = []") {
+		t.Errorf("saved ark.toml lost the explicit empty list:\n%s", saved)
+	}
+	if strings.Contains(string(saved), "system_exclude") {
+		t.Errorf("saved ark.toml wrote an absent key's default:\n%s", saved)
+	}
+	again, err := LoadConfig(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.SearchExcludes(); len(got) != 0 {
+		t.Errorf("reloaded: got %v, want none", got)
+	}
+}

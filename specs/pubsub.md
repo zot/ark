@@ -150,6 +150,23 @@ The publish hook goes in `Indexer.AppendFile` (after
 (~indexer.go:155). No new extraction — just matching against what
 was already extracted.
 
+### Ext-routed tags
+
+A tag routed onto a chunk by an `@ext` line in a mirror file
+([at-ext-storage.md](at-ext-storage.md)) is published too. An `@ext` line
+extracts as one tag (`ext`), so without this a subscriber to `status` would
+never hear a `@status:` that a mirror routed. When a mirror file is indexed,
+every tag value its routings carry is published under the **target chunk's**
+file path, since that is the file the association is about, and marked as
+routed. Like every other publish, it repeats on each index of the mirror rather
+than only on a change. Re-resolving a routing when its target file is
+re-indexed publishes nothing, because the association has not changed.
+
+A routed event passes a subscription's inherited `search_exclude` (an inline
+tag in a conversation is usually a mention; a routing is a use), but the
+`system_exclude` fence and the subscription's own `-files` rows apply as usual.
+See [search-filtering.md](search-filtering.md).
+
 ## Subscription Registry
 
 In-memory. Dies with server. Agents re-subscribe on connect.

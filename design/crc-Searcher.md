@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46-60, R108-116, R183-186, R188-190, R192, R193, R215-228, R372-375, R403-409, R512-516, R572, R574-578, R585-589, R593-604, R652, R653, R672, R673, R683, R684, R697-700, R738, R744-747, R750, R939, R940, R950, R1094-1097, R1139-1141, R1230, R1395-1401, R1470, R1471, R1703-1708, R1783-1785, R1787, R1867-1872, R1915-1918, R1921, R1922, R1932-1935, R1939, R2128, R2433, R2434, R2453-2456, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3359, R3362, R3377, R3400-3402, R3571, R3573
+**Requirements:** R46-60, R108-116, R183-186, R188-190, R192, R193, R215-228, R372-375, R403-409, R512-516, R572, R574-578, R585-589, R593-604, R652, R653, R672, R673, R683, R684, R697-700, R738, R744-747, R750, R939, R940, R950, R1094-1097, R1139-1141, R1230, R1395-1401, R1470, R1471, R1703-1708, R1783-1785, R1787, R1867-1872, R1915-1918, R1921, R1922, R1932-1935, R1939, R2128, R2433, R2434, R2453-2456, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3359, R3362, R3377, R3400-3402, R3571, R3573, R3584, R3587, R3590
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -165,9 +165,9 @@ Optionally retrieves chunk text or full file content.
   by reading C records (FileID), looking up paths via FileIDPaths,
   and recovering Range from the F record's chunk list. Stale chunkIDs
   (deleted/replaced chunks) are silently skipped. No FTS pass. (R2442)
-- SearchTagChunks(chunkIDs, opts): flat SearchResultEntry list from a
-  tag-derived chunkID set. R2951: the post-filter funnel for index-lookup
-  primaries — injects the default search_exclude scope (effectiveExcludeFiles),
+- SearchTagChunks(chunkIDs, routed, opts): flat SearchResultEntry list from a
+  tag-derived chunkID set (routed: see the R3587 bullet below). R2951: the post-filter funnel for index-lookup
+  primaries — injects the default scope (defaultExcludes: fence + noise),
   runs the chunkIDs through postFilterChunkIDs (the user filter stack), calls
   ChunksByID, then filterByPathGlobs (file scope + default exclude), then -k.
   Shared by the server short-circuit and the CLI-direct fallback. (R2442, R2951)
@@ -186,10 +186,25 @@ Optionally retrieves chunk text or full file content.
   Single source of truth for filter semantics — both BuildChunkFilters
   (wraps each as a microfts2 option) and postFilterChunkIDs (applies them
   post-hoc) build from it, so the funnel cannot drift from the FTS path. (R2951)
-- effectiveExcludeFiles(opts): the R939/R940 default-scope rule extracted
-  for reuse — returns config.SearchExclude when no explicit/positive file
-  filter is present, else nil. Used by resolveFilters and the index-lookup
-  funnel. (R939, R940, R2951)
+- defaultExcludes(opts) (fence, noise []string): the default scope, computed
+  once from the caller's opts before any are written. fence is
+  `config.SystemExcludes()` unless `opts.System` (R3584, R3590); noise is
+  `config.SearchExcludes()` under the R939/R940 rule (nil when an explicit or
+  positive file filter is present). Callers **append** both to
+  `opts.ExcludeFiles`, never replace it, so the fence holds alongside an
+  explicit filter. Replaces effectiveExcludeFiles, whose replace-on-assign was
+  safe only while the default was nil whenever ExcludeFiles was set.
+  Used by resolveFilters, the about vec-only path and SearchTagChunks.
+  (R939, R940, R2951, R3584, R3590)
+- SearchTagChunks(chunkIDs, routed, opts): the tag-primary funnel. fence and
+  the user's filters apply to every candidate; noise applies to every candidate
+  **except** the chunk IDs in `routed`, those a matching tag value reached
+  through an `@ext` routing (R3587). GroupTagChunks passes `routed` through.
+- routedPrimaryChunks(p, store, candidates) map[uint64]bool: the chunk IDs
+  among a tag primary's candidates that carry a **routed** tag value matching
+  the predicate (`ExtMap.RoutedTagsForChunk`, name among `matchingTagNames`,
+  value passing `p.MatchValue`). Beside resolvePredicateLocations so the
+  server's tag primary and the CLI's cold path compute the same set (R3587).
 - filterByPathGlobs(results, opts): apply FilterFiles/ExcludeFiles (incl.
   the injected default scope) to a resolved candidate set via the shared
   Matcher. Extracted from SearchTagChunks so the about vec-only path reuses

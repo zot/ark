@@ -114,7 +114,11 @@ next startup will gate on the problem.
 - `sources` add/remove — scan/reconcile handles it
 - `global_include` / `global_exclude` — next scan handles it
 - `dotfiles` — next scan handles it
-- `search_exclude` — search-time only, no index impact
+- `system_exclude` — serve-time only, no index impact
+- `search_exclude` — no re-index, but it gates the embedding pass
+  ([chunk-embeddings.md](chunk-embeddings.md)): a file it stops covering
+  is embedded by the next pass, and vectors already stored for a file it
+  starts covering stay
 - `session_ttl` — runtime only
 - `schedule` — runtime only
 - `strategies` map — next scan assigns strategies

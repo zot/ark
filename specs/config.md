@@ -32,7 +32,8 @@ ark CLI binary at `~/.ark/ark`; the config file lives at
 | `default_exclude`         | []string   | (built-in)           | Glob patterns that exclude paths from every source unless overridden.                                                | `source-monitoring.md`                                                      |
 | `strategies`              | map<str,str> | `{}`               | Glob-pattern → chunker-name map applied across all sources.                                                          | `chunker-strategies.md`                                                     |
 | `session_ttl`             | string     | `"30s"`              | Lifetime of named session caches before eviction. Go duration string.                                                | `session-status.md`                                                         |
-| `search_exclude`          | []string   | `[]`                 | Glob patterns excluded from search results by default.                                                               | `search.md`                                                                 |
+| `system_exclude`          | []string   | (built-in)           | The fence: ark's system files, never served as evidence. A set list replaces the default.                            | `search-filtering.md`                                                       |
+| `search_exclude`          | []string   | (built-in)           | The noise filter: hidden from interactive search, not from recall. A set list replaces the default.                  | `search-filtering.md`                                                       |
 | `auto_compact`            | bool       | `false`              | Run `mdb_env_copy2` before `Open` on every server start.                                                             | `record-formats.md`                                                         |
 | `about_centroid_filter`   | bool       | `false`              | Enable the EF centroid prefilter on `-about` search queries.                                                         | `search.md`                                                                 |
 | `about_centroid_threshold`| float64    | (mode-dep.)          | Cosine threshold for the EF centroid prefilter.                                                                      | `search.md`                                                                 |
@@ -153,7 +154,7 @@ ambient watcher.
   `default_include`, `default_exclude`, `[[source]].include`,
   `[[source]].exclude`, `strategies`, `[[source]].strategies` — take the
   source's own directory as the root, so bare `X` means `SOURCE/**/X`.
-  **Rootless** keys — `search_exclude`, `[schedule] filter_files` /
+  **Rootless** keys — `system_exclude`, `search_exclude`, `[schedule] filter_files` /
   `exclude_files`, and the `[schedule.tag.<NAME>]` overrides — have no
   root, so bare `X` means `**/X` (any depth, any source), and `./X` has
   nothing to anchor to and falls back to the absolute path. `[[source]].dir`

@@ -470,6 +470,11 @@ where did we settle the chunker interface? pointers
 - An attribute whose value is empty is ignored rather than treated as a glob
   that matches nothing — a stray `filter-files=""` must not silently empty the
   corpus.
+- **No scope breaches the fence.** `system_exclude`
+  ([search-filtering.md](search-filtering.md)) holds for every hunt, scoped or
+  not, at both enforcement points below: a `filter-files=` pointing into a
+  fenced directory still yields nothing from it. Unlike a positive `-files`,
+  a hunt's scope is never read as a person asking to look inside the fence.
 
 ### Globs mean what `ark search -files` means
 

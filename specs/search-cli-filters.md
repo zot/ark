@@ -59,8 +59,10 @@ ark search TERM...
   `-without -files GLOB` subtracts the glob *without* disabling the
   default scope. With no positive `-files` (and no structural
   `filter_files`/`exclude_files`), `search_exclude` applies as the
-  default exclude. The `search_exclude` config itself is owned by
-  [search-filtering.md](search-filtering.md) §"Default search excludes".
+  default exclude. The fence, `system_exclude`, never yields to `-files`:
+  only `--system` lifts it, for that search. Both configs are owned by
+  [search-filtering.md](search-filtering.md) §"Default excludes: the fence and
+  the noise filter".
 
 ### Polarity
 
@@ -85,7 +87,7 @@ the results.
 
 **Post-filtering is primary-mode-independent.** The choice of mode for
 the primary entry determines *only* the initial candidate set. Every
-subsequent filter row — and the default `search_exclude` scope (see
+subsequent filter row — and the default `system_exclude` and `search_exclude` scopes (see
 [search-filtering.md](search-filtering.md)) — applies identically to
 that candidate set regardless of whether the primary is `-contains`,
 `-fuzzy`, `-regex`, `-tag`, `-file-tag`, or `-about`. There is no
@@ -101,6 +103,16 @@ stack and default exclude that the content-scan primaries
 `-parse` prints the fully disambiguated command and exits without
 searching. Each entry is shown with its explicit mode flag and
 quoted value. Polarity toggles are shown at each boundary.
+
+### The `-system` flag
+
+`-system` lifts the `system_exclude` fence for this one search, so ark's own
+bookkeeping files (the scheduler's logs) can be looked at:
+`ark search -system -files '~/.ark/schedule/*' ark-event-fired`. It is a
+conventional flag rather than a filter row, and it is the only way past the
+fence: a `-files` row never lifts it, however it is written. It does not touch
+the `search_exclude` noise filter, which yields to a positive `-files` as
+above. See [search-filtering.md](search-filtering.md).
 
 ## Examples
 

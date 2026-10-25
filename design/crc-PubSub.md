@@ -1,5 +1,5 @@
 # PubSub
-**Requirements:** R778, R779, R780, R781, R782, R783, R784, R785, R786, R787, R788, R789, R790, R791, R792, R793, R794, R795, R796, R797, R798, R799, R800, R801, R802, R803, R804, R814, R815, R816, R817, R818, R819, R820, R829, R830, R831, R879, R880, R941, R942, R944, R945, R946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302, R2303, R2304, R2309, R2312, R2457, R2458, R2459, R2460, R2461, R2462, R2463, R2464, R2465, R2466, R2467, R2468, R2469, R2470, R2471, R2802, R2803, R2804, R2857, R3195, R3197, R3204, R3207, R3199
+**Requirements:** R778-804, R814-820, R829-831, R879, R880, R941, R942, R944-946, R2276, R2278, R2279, R2283, R2284, R2287, R2295, R2302-2304, R2309, R2312, R2457-2471, R2802-2804, R2857, R3195, R3197, R3199, R3204, R3207, R3586, R3587, R3594, R3595
 
 Subscription registry and notification delivery for tag events.
 In-memory, dies with server. Agents subscribe to tag patterns and
@@ -27,6 +27,8 @@ no new struct, no new field (R2278).
   subscribing client's cwd** (R3204, R3197)
 - ExcludeFiles: []string — exclude these paths (R945, renamed from ExceptFiles).
   Same stack, same anchoring
+- TagSub.InheritNoise: bool — set when the subscription gave no file filters (R941); replaces copying search_exclude into ExcludeFiles, so inherited noise stays distinguishable from explicit excludes (R3587) and follows config reloads (R3595).
+- fence, noise: []string — the current `system_exclude` and `search_exclude`, held under `mu` and replaced by SetExcludes (R3586, R3595).
 - FileTagMembers: map[uint64]bool — set of fileIDs currently matching this entry's predicate; populated/maintained only when Kind == FileTag (R2463, R2469)
 - Hits: uint64 — events successfully enqueued (atomic)
 - Drops: uint64 — events lost to full queue (atomic)
@@ -57,6 +59,9 @@ no new struct, no new field (R2278).
   into MatchPredicates and tagged with Kind (R2442, R2462). Fires
   the `subChanged` broadcast (close+replace) so waiters gated on
   subscriber presence — recall `next` — wake at once (R2857).
+- SetExcludes(fence, noise []string): replace the held lists under `mu`; called by the server at startup and on every config reload (R3595).
+- admits(sub, path, routed) bool: the one delivery test for both passes. Fenced paths are refused for every subscription (R3586); the noise list refuses a path only when `sub.InheritNoise` and the event is not routed (R941, R3587); then `matchFileFilters` on the sub's own rows.
+- PublishRouted(writerID, targetPath string, tags []TagValue): deliver ext-routed tag values under the target chunk's path through the chunk pass and the file-tag pass with `routed` set. No mute check and no watchdog for unmatched values: those belong to the mirror file's own publish (R3594).
 - SubChanged() <-chan struct{}: return the current `subChanged`
   channel; closed when the next Subscribe runs. A caller selects on
   it to wake on subscription changes instead of polling (R2857).

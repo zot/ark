@@ -62,7 +62,10 @@ broadly:
 
 - **It is this machine's configuration, not the product's.** `search_exclude`
   defaults to `[]` (`specs/config.md`), so a fresh install embeds its chat logs
-  today. The 42% is what one `ark.toml` avoids.
+  today. The 42% is what one `ark.toml` avoids. **Changes with #165**
+  (bloodhound-fix Item 14, specified 2026-10-25): `search_exclude` gains a
+  built-in default covering the chat logs, so a fresh install stops embedding
+  them until this carve's knob takes over the gate.
 - **Recall embeds some chat text anyway.** Its chat funnel (`specs/recall.md`,
   `[recall].chat_funnel_gate`) embeds the top markdown sub-chunks of chat turns
   the trigram legs already matched, at recall time and transiently, on a path

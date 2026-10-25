@@ -30,6 +30,9 @@ A skeleton (Bill, 2026-10-07), restructured around generated paths (Bill,
 - [ ] **Item 6 — the PDF inspector.** **OPEN (not queued.)** Filed by Bill,
       2026-10-21. The second inspector: one path per indexed PDF, showing its
       anatomy. See Item 6.
+- [ ] **Item 7 — embedding and routing counts per file.** **OPEN (not queued.)**
+      Filed by Bill, 2026-10-25. `ark files --status --detail` also shows each
+      file's `EC` and `X` record counts. `/mini-spec`. See Item 7.
 
 <a id="problem"></a>
 ## The problem
@@ -217,6 +220,23 @@ a symlinked PDF indexed twice under both names, so every hit came back twice
 symlink's target and from a build output. The fixes belong to the text
 extraction, the chunker, symlink handling and search scoping. The inspector is
 how they get found and checked.
+
+**Item 7.** `ark files --status --detail` shows, per file, its state, bytes,
+chunk count and chunk-size spread, but nothing about what the index holds for
+those chunks. Add each file's counts of `EC` records (how many of its chunks
+have an embedding) and `X` records (`@ext` routings onto its chunks), as
+specified in [record-formats.md](../specs/record-formats.md). Needs none of
+Item 1; it is an addition to an existing verb. To settle in design: whether `X`
+counts routings *onto* the file, routings a mirror file *authors*, or both as
+separate columns.
+
+Two questions on 2026-10-25 needed exactly this and had only `ark status -db`'s
+whole-index totals. How many chat chunks gained vectors in the 26 seconds a
+commented-out `search_exclude` let the embedding pass reach the chat logs (the
+gate is still that setting until chat-embeddings Item 1 lands). And whether any
+`@ext` routings existed while bloodhound-fix Item 14 was being designed (none
+did). A per-file count answers both directly, and an `-files` scope narrows it
+to the chat logs or a mirror tree.
 
 ### Identity decisions
 

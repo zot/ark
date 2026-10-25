@@ -47,10 +47,10 @@ Opened by Bill, 2026-10-22.
 - [x] ~~**Item 12 — retrieval after a chunker rule change shows the wrong chunk.**~~ **LANDED (2026-10-24 — `#161`.)**
       Measured 2026-10-23. microfts2's half landed 2026-10-24 (`GetChunks` matches by
       range and reports a stale chunk `Missing`); #161 is ark's half. See Item 12.
-- [ ] **Item 13 — a file added mid-session has no embeddings until the next
-      reconcile.** **OPEN (#164.)** As specified, but it
+- [x] ~~**Item 13 — a file added mid-session has no embeddings until the next
+      reconcile.**~~ **LANDED (2026-10-25 — `#164`.)** As specified, but it
       blinds the meaning leg to new files. See Item 13.
-- [ ] **Item 14 — `search_exclude` does two jobs.** **OPEN (not queued).** A
+- [x] ~~**Item 14 — `search_exclude` does two jobs.**~~ **LANDED (2026-10-25 — `#165`.)** A
       fence around ark's system files and a noise filter for interactive search,
       split into settings. It also decides what is embedded, which is
       [chat-embeddings.md](chat-embeddings.md). `/mini-spec`. See Item 14.
@@ -513,8 +513,81 @@ under `~/.claude/projects/**`, whose JSONL chunks flood ordinary results). The
 two want opposite treatment from recall and the bloodhound: the fence holds
 everywhere, while the noise filter must not apply to them, since the chats are
 part of the memory those features exist to reach. Recall today honors neither,
-so the fence is open to it. Not yet measured whether any seed or recollection
-has actually served a fenced file; measure that first.
+so the fence is open to it.
+
+**Measured 2026-10-25: the fence has leaked, and still would.** The fenced
+population is one indexed file, the scheduler's state file
+`~/.ark/schedule/fb02b2eb95f31742.md`, nearly all `@ark-event-*` tag lines.
+Every Claude Code transcript under `~/.claude/projects` (all projects, Luhmann's
+included) was scanned for its path, and each mention classed by the tool call
+that carried it. All but one were deliberate work (scheduling development, a
+scheduling inventory, a log). The exception: on 2026-06-10 a recall secretary's
+curation docs offered two of its chunks as candidates, both through the
+tag-vector leg (`cell: main-tags`, `tag-vec=0.79`). The secretary rejected both,
+so nothing reached a conversation. Chunk-text vectors cannot reach the file (it
+is not embedded, and an all-tag chunk strips to nothing), but its tags are
+embedded like any other file's. Live today, `ark connections recall --type text`
+returns the file for three probe texts, as the top candidate for two. No
+bloodhound hunt carried it. The instrument sees only what reached a transcript;
+curation docs on disk are pruned (two remain), so a seed that used a fenced
+chunk without printing its path would not show.
+
+Where `search_exclude` is consulted today: interactive search (`search.go`,
+R939-R942), tag-value path resolution (`Librarian.resolveTagValuePaths`), tag
+pubsub subscriptions that give no file filters (`server.go`, R941/R942), and
+the embedding passes (full pass, `AllChunkIDsPartitioned`, and #164's
+`noteStoredFile`). Recall is not among them. Each of these is a surface the
+split must assign to the fence, the noise filter, or both.
+
+DECIDED (Bill, 2026-10-25): tag search may honor the noise filter, but **external
+tags are never filtered out by it**, because an `@ext` routing was made on
+purpose to preserve information and associations. Today the filter would drop
+one: `SearchTagChunks` and `resolveTagValuePaths` test the *target* chunk's
+path, so a routing onto a chat chunk (the likely first use, from recall's
+`@ext-candidate` lines) would vanish from tag search while its mirror sits
+outside the filter. Nothing is lost yet: measured the same day, the index holds
+no `X`, `RC` or `RJ` records, the global mirror `~/.ark/external/` is empty,
+and no source sets `ext_mirror`. Two consequences for the design. A tag value a
+mirror routed survives the noise filter, though the fence still applies. And a
+built-in fence must name ark's system directories one by one (`schedule/`,
+not `~/.ark/**`), since the global mirror tree, the patterns and the skills
+all live under `~/.ark`.
+
+DECIDED (Bill, 2026-10-25): **the fence is built in, overridable in `ark.toml`.**
+And **the noise filter keeps applying to tag pubsub subscriptions and to tag
+search, but never filters out an ext tag.** A tag written inline in a chat is
+almost always a mention (talking about `@status:`, quoting a watermark), and
+the risk of use-mention confusion is too high to let chat tags through
+subscriptions or search by default. A chat chunk's association matters only
+once a mirror routes it with `@ext`, which makes it a use. So the test is the
+tag value's provenance (did it arrive through a routing?), not the target
+chunk's path.
+
+DECIDED (Bill, 2026-10-25): the fence's key is **`system_exclude`**, joining
+`search_exclude` and #81's `embed_exclude`. ~~An explicit `-files` filter naming a
+fenced path breaches the fence **for CLI search only**, as R940 does for
+`search_exclude`; recall, the bloodhound and subscriptions never breach it.~~
+**Superseded the same day:** the secretary's own searches are CLI `ark search
+-files` calls, so that rule let a hunt scoped into the fence leak there.
+DECIDED (Bill, 2026-10-25): only an explicit `ark search --system` lifts the
+fence; no file filter ever does (flag name provisional). And
+**a list in `ark.toml` replaces the built-in default, never amends it**, for
+both keys, so `search_exclude` gains a built-in default too. Today it has none
+(`[]`, `specs/config.md`): commenting the line out on 2026-10-25, expecting a
+code default, let the embedding pass start on the chat logs within seconds
+(10:18:55 to 10:19:21, until the line was restored). The defaults: `search_exclude`
+covers the chat logs (`~/.claude/projects/**`), `system_exclude` covers
+`<ark home>/schedule/**` only. Not `chimes.md`, though ark maintains it too: a
+fired chime carries its source path, so fencing that file would silence every
+chime subscriber. The scheduler reads its logs directly and is untouched by the fence.
+
+**Open, not decided (raised 2026-10-25):** recall's tag axis pulls chunks
+through `TagValueChunks`, which unions inline and ext-routed tag values, so a
+chat turn can surface in recall because it *mentions* a tag inline. That is the
+use-mention confusion the noise-filter decision keeps out of search and
+subscriptions, but recall is not noise-filtered (the chats are its memory).
+Whether recall's tag axis should count only routed tag values for chat chunks is
+Bill's call, and outside #165 as specified.
 
 DECIDED (Bill, 2026-10-24): split it into two settings, each replaceable in
 `ark.toml` and on the CLI. The names, the defaults (whether ark's own system

@@ -159,6 +159,7 @@ const (
 	IFieldChunkers        = "chunkers"
 	IFieldSessionTTL      = "session_ttl"
 	IFieldSearchExclude   = "search_exclude"
+	IFieldSystemExclude   = "system_exclude"
 	IFieldEmbedTiers      = "embed_tiers"
 	IFieldSchedule        = "schedule"
 	// Operational fields
@@ -658,7 +659,11 @@ func (s *Store) WriteConfig(cfg *Config) error {
 		if err := putJSON(IFieldChunkers, cfg.Chunkers); err != nil {
 			return err
 		}
-		if err := putJSON(IFieldSearchExclude, cfg.SearchExclude); err != nil {
+		// R3589: the effective lists, so a change of default reads as a change.
+		if err := putJSON(IFieldSearchExclude, cfg.SearchExcludes()); err != nil {
+			return err
+		}
+		if err := putJSON(IFieldSystemExclude, cfg.SystemExcludes()); err != nil {
 			return err
 		}
 		if err := putJSON(IFieldEmbedTiers, cfg.Embedding.Tiers); err != nil {
@@ -702,6 +707,7 @@ func (s *Store) ReadConfig() (*Config, error) {
 		getJSON(IFieldSources, &cfg.Sources)
 		getJSON(IFieldChunkers, &cfg.Chunkers)
 		getJSON(IFieldSearchExclude, &cfg.SearchExclude)
+		getJSON(IFieldSystemExclude, &cfg.SystemExclude)
 		getJSON(IFieldEmbedTiers, &cfg.Embedding.Tiers)
 		getJSON(IFieldSchedule, &cfg.Schedule)
 		return nil

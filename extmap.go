@@ -261,6 +261,39 @@ func (m *ExtMap) RoutedTagsForChunk(targetChunkID uint64) []TagValue {
 	return out
 }
 
+// RoutedFromSources returns, for routings whose source chunk is among
+// sourceChunks, each target chunk's routed tag values. It is the source-side
+// view the indexer publishes after a mirror file is indexed (R3594).
+// CRC: crc-ExtMap.md | Seq: seq-ext-routing.md | R3594
+func (m *ExtMap) RoutedFromSources(sourceChunks []uint64) map[uint64][]TagValue {
+	if len(sourceChunks) == 0 {
+		return nil
+	}
+	sources := make(map[uint64]bool, len(sourceChunks))
+	for _, cid := range sourceChunks {
+		sources[cid] = true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out map[uint64][]TagValue
+	for tvidExt, src := range m.extSource {
+		if !sources[src] {
+			continue
+		}
+		routed := m.routedTagsByTvidExt[tvidExt]
+		if len(routed) == 0 {
+			continue
+		}
+		for _, target := range m.targetToChunk[tvidExt] {
+			if out == nil {
+				out = make(map[uint64][]TagValue)
+			}
+			out[target] = append(out[target], routed...)
+		}
+	}
+	return out
+}
+
 // ExtTagValueChunks returns target chunkids carrying (tag, value) via
 // any @ext routing — persistent or overlay. Walks
 // routedTagsByTvidExt (the cache populated by Rebuild and maintained

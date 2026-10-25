@@ -266,6 +266,7 @@ func (idx *Indexer) afterAddStore(fileid uint64, path, strategy string, content 
 		// R795, R796: publish tag events to subscribers
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, fileVals)
+			idx.publishRouted(acc.chunkTags) // R3594
 		}
 		// R866: write schedule log entries
 		idx.writeDateIndex(path, fileVals)
@@ -452,6 +453,45 @@ func (idx *Indexer) reindexCallback(fileID uint64, tt *TvidTxn) microfts2.Reinde
 // orphanedChunkIDs are the chunk diffs reported by microfts2;
 // chunkTags are the per-chunk tag values just persisted by Store.
 // CRC: crc-Indexer.md | R1996, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2011
+// publishRouted publishes the tag values this pass's @ext chunks route, each
+// under its target chunk's file path, after the mirror's own publish. Only
+// chunks carrying an @ext tag can be sources, so a file with none costs one
+// scan of its tags (R3594).
+// CRC: crc-Indexer.md | Seq: seq-ext-routing.md | R3594
+func (idx *Indexer) publishRouted(chunkTags []ChunkTagValues) {
+	if idx.pubsub == nil || idx.extmap == nil || idx.db == nil {
+		return
+	}
+	var sources []uint64
+	for _, ct := range chunkTags {
+		for _, tv := range ct.Values {
+			if tv.Tag == tagExt {
+				sources = append(sources, ct.ChunkID)
+				break
+			}
+		}
+	}
+	byTarget := idx.extmap.RoutedFromSources(sources)
+	if len(byTarget) == 0 {
+		return
+	}
+	byPath := make(map[string][]TagValue)
+	for target, vals := range byTarget {
+		fileID, ok := idx.db.ChunkFileID(target)
+		if !ok {
+			continue
+		}
+		path, ok := idx.db.resolveFilePath(fileID)
+		if !ok {
+			continue
+		}
+		byPath[path] = append(byPath[path], vals...)
+	}
+	for path, vals := range byPath {
+		idx.pubsub.PublishRouted("", path, vals)
+	}
+}
+
 func (idx *Indexer) runExtRouting(fileID uint64, addedChunkIDs, orphanedChunkIDs []uint64, chunkTags []ChunkTagValues) error {
 	if idx.extmap == nil || idx.db == nil {
 		return nil
@@ -927,6 +967,7 @@ func (idx *Indexer) afterAppendStore(oldID uint64, path, strategy string, newByt
 	// R795, R796: publish tag events from appended content
 	if idx.pubsub != nil {
 		idx.pubsub.PublishAndWatch("", path, fileVals)
+		idx.publishRouted(acc.chunkTags) // R3594
 	}
 	idx.writeDateIndex(path, fileVals)
 	// Simple-recall watcher hook: hand the freshly-appended bytes and the
@@ -1007,6 +1048,7 @@ func (idx *Indexer) afterReindexStore(fileid, oldID uint64, path, strategy strin
 		// R795, R796: publish tag events from refreshed content
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, fileVals)
+			idx.publishRouted(acc.chunkTags) // R3594
 		}
 		// R866: write schedule log entries
 		idx.writeDateIndex(path, fileVals)
@@ -1412,6 +1454,7 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 		// R795, R796: publish tag events from appended content
 		if idx.pubsub != nil {
 			idx.pubsub.PublishAndWatch("", path, fileVals)
+			idx.publishRouted(acc.chunkTags) // R3594
 		}
 		// R866: write schedule log entries
 		idx.writeDateIndex(path, fileVals)

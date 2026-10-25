@@ -386,6 +386,7 @@ during `ark init` and by config-mutating commands.
 | `chunkers`         | JSON array                   | `Config.Chunkers`        |
 | `session_ttl`      | string                       | `Config.SessionTTL`      |
 | `search_exclude`   | JSON array                   | `Config.SearchExclude`   |
+| `system_exclude`   | JSON array                   | `Config.SystemExclude`   |
 | `embed_tiers`      | JSON array                   | `Config.Embedding.Tiers` |
 | `schedule`         | JSON                         | `Config.Schedule`        |
 | `schedule_config`  | JSON                         | `Config.ScheduleConfig`  |

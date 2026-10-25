@@ -483,7 +483,10 @@ func (l *Librarian) HandleEmbedMatch(w http.ResponseWriter, r *http.Request) {
 // default search exclude patterns. The V blob holds chunkids, so it
 // resolves chunkid → fileid via Store.FilesForChunks (overlay-aware)
 // before mapping each fileid → path.
-// CRC: crc-Librarian.md | Seq: seq-tag-value-index.md | R1887
+// The fence drops a path always (R3585). The noise filter drops it only when
+// no routed value reaches that file: a value a mirror routed onto a chat
+// chunk keeps its path (R3587).
+// CRC: crc-Librarian.md | Seq: seq-tag-value-index.md | R1887, R3585, R3587
 func (l *Librarian) resolveTagValuePaths(tag, value string) []string {
 	chunkids, err := l.db.store.TagValueChunks(tag, value)
 	if err != nil {
@@ -493,14 +496,28 @@ func (l *Librarian) resolveTagValuePaths(tag, value string) []string {
 	for _, cid := range chunkids {
 		chunkSet[cid] = true
 	}
-	excludes := l.db.Config().SearchExclude
+	var routedFiles map[uint64]bool
+	if em := l.db.store.extmap; em != nil {
+		if routed := em.ExtTagValueChunks(tag, value); len(routed) > 0 {
+			routedSet := make(map[uint64]bool, len(routed))
+			for _, cid := range routed {
+				routedSet[cid] = true
+			}
+			routedFiles = l.db.store.FilesForChunks(routedSet)
+		}
+	}
+	cfg := l.db.Config()
+	fence, noise := cfg.SystemExcludes(), cfg.SearchExcludes()
 	var paths []string
 	for fid := range l.db.store.FilesForChunks(chunkSet) {
 		path, ok := l.db.resolveFilePath(fid)
 		if !ok {
 			continue
 		}
-		if matchesAnyGlob(path, excludes) {
+		if matchesAnyGlob(path, fence) {
+			continue
+		}
+		if !routedFiles[fid] && matchesAnyGlob(path, noise) {
 			continue
 		}
 		paths = append(paths, path)
@@ -2262,7 +2279,8 @@ func (l *Librarian) batchEmbedChunks(paths []string) error {
 		priority int // 0 = tag-bearing, 1 = non-JSONL, 2 = JSONL
 	}
 	var sorted []filePriority
-	excludePatterns := l.db.Config().SearchExclude
+	// R3588: the embed gate is search_exclude alone; the fence does not gate embedding.
+	excludePatterns := l.db.Config().SearchExcludes()
 	for _, fpath := range files {
 		if matchesAnyGlob(fpath, excludePatterns) {
 			continue

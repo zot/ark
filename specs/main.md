@@ -85,7 +85,7 @@ The contextual root differs by where the glob is written:
 |---------------------------|-----------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | **CLI flags**             | the current directory | `$PWD/X`                          | `-files` and the rest of the filter stack                                                                                        |
 | **Source-scoped config**  | the source's dir      | `SOURCE/**/X` (any depth in it)   | `default_include`, `default_exclude`, `[[source]].include`, `[[source]].exclude`, `strategies`, `[[source]].strategies`          |
-| **Rootless**              | none                  | `**/X` (any depth, any source)    | `search_exclude`, `[schedule] filter_files`, `[schedule] exclude_files`, `[schedule.tag.<NAME>]` overrides, and the Lua/MCP `filter_files` / `exclude_files` opts |
+| **Rootless**              | none                  | `**/X` (any depth, any source)    | `system_exclude`, `search_exclude`, `[schedule] filter_files`, `[schedule] exclude_files`, `[schedule.tag.<NAME>]` overrides, and the Lua/MCP `filter_files` / `exclude_files` opts |
 
 The rule in one sentence: **a bare glob is relative to where you are
 standing.** At the CLI that is the current directory, so `*.md` means what it

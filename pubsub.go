@@ -31,6 +31,9 @@ type TagSub struct {
 	Predicate    MatchPredicate // R2442: parsed sigil form
 	FilterFiles  []string       // only match these path globs (nil = all)
 	ExcludeFiles []string       // R945: exclude these path globs (renamed from ExceptFiles)
+	// InheritNoise: the sub gave no file filters, so the current
+	// search_exclude applies to it at delivery (R941, R3595).
+	InheritNoise bool
 	// FileTagMembers tracks fileIDs currently matching this entry's
 	// Predicate. Populated/maintained only when Kind == TagSubFile.
 	// In-memory only — re-seeded on server restart via the normal
@@ -60,6 +63,32 @@ type PubSub struct {
 	db          *DB                          // for watchdog tmp:// writes (nil = watchdog disabled)
 	tagSetCache map[string]map[TagValue]bool // R2283: path → last-published tag-set, used by PublishTmpDiff
 	subChanged  chan struct{}                // R2857: close+replace broadcast fired when a subscription is added
+	fence       []string                     // R3586: current system_exclude, under mu
+	noise       []string                     // R3595: current search_exclude, under mu
+}
+
+// SetExcludes replaces the fence and noise lists delivery reads. The server
+// calls it at startup and on every config reload, so existing subscriptions
+// follow the config (R3595).
+// CRC: crc-PubSub.md | R3586, R3595
+func (ps *PubSub) SetExcludes(fence, noise []string) {
+	ps.mu.Lock()
+	ps.fence, ps.noise = fence, noise
+	ps.mu.Unlock()
+}
+
+// admits is the one delivery test for both passes: the fence refuses a path
+// for every sub; inherited noise refuses it unless the event is routed; then
+// the sub's own rows. Must hold at least RLock.
+// CRC: crc-PubSub.md | R941, R3586, R3587
+func (ps *PubSub) admits(sub *TagSub, path string, routed bool) bool {
+	if !matchFileFilters(path, nil, ps.fence) {
+		return false
+	}
+	if sub.InheritNoise && !routed && !matchFileFilters(path, nil, ps.noise) {
+		return false
+	}
+	return matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles)
 }
 
 // NewPubSub creates a PubSub with the given TTL and queue depth.
@@ -302,6 +331,20 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 			return nil
 		}
 	}
+	return ps.publishTags(writerID, path, tags, false)
+}
+
+// PublishRouted delivers tag values a mirror's @ext routings carry, under the
+// target chunk's path. They pass inherited noise but not the fence. No mute
+// check and no watchdog for unmatched values: both belong to the mirror's own
+// publish.
+// CRC: crc-PubSub.md | Seq: seq-ext-routing.md | R3587, R3594
+func (ps *PubSub) PublishRouted(writerID, targetPath string, tags []TagValue) {
+	ps.publishTags(writerID, targetPath, tags, true)
+}
+
+// publishTags is the delivery behind Publish and PublishRouted.
+func (ps *PubSub) publishTags(writerID, path string, tags []TagValue, routed bool) []TagValue {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 	now := time.Now()
@@ -329,7 +372,7 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 				if !sub.Predicate.Match(tv) {
 					continue
 				}
-				if !matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles) {
+				if !ps.admits(sub, path, routed) {
 					continue
 				}
 				// Non-blocking send — drop if full. R801, R819
@@ -357,7 +400,7 @@ func (ps *PubSub) Publish(writerID string, path string, tags []TagValue) []TagVa
 	// sub, compare the cached membership against an authoritative
 	// read of the file's aggregate tag set and act on the transition.
 	if ps.anyFileTagSubLocked() {
-		ps.publishFileTagPass(writerID, path, now)
+		ps.publishFileTagPass(writerID, path, now, routed)
 	}
 	return unmatched
 }
@@ -383,7 +426,7 @@ func (ps *PubSub) anyFileTagSubLocked() bool {
 // single-threaded per PubSub instance (no concurrent Publish calls
 // hit the same entry).
 // CRC: crc-PubSub.md | Seq: seq-pubsub.md | R2460, R2461, R2462, R2463, R2464, R2469, R2470, R2471, R2472
-func (ps *PubSub) publishFileTagPass(writerID, path string, now time.Time) {
+func (ps *PubSub) publishFileTagPass(writerID, path string, now time.Time, routed bool) {
 	if ps.db == nil {
 		return
 	}
@@ -407,7 +450,7 @@ func (ps *PubSub) publishFileTagPass(writerID, path string, now time.Time) {
 			if sub.Kind != TagSubFile {
 				continue
 			}
-			if !matchFileFilters(path, sub.FilterFiles, sub.ExcludeFiles) {
+			if !ps.admits(sub, path, routed) {
 				continue
 			}
 			wasMember := false

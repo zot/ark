@@ -1,5 +1,5 @@
 # Config
-**Requirements:** R8-14, R22-27, R143-146, R148-151, R157-159, R194, R195, R200, R201, R203, R205-209, R340, R341, R396, R397, R624, R625, R631-635, R646, R853-856, R938, R943, R947-960, R1012, R1274, R1588-1592, R1919-1922, R1938, R2125, R2143-2150, R2728-2741, R2767, R2768, R2781, R2797-2800, R2811, R2822, R2830-2837, R2856, R2862, R2886, R2892, R2964-2966, R2968, R3041, R3135, R3171, R3195, R3198-3203, R3218, R3220, R3268, R3278, R3288-3290, R3292, R3329-3331, R3354, R3381, R3487
+**Requirements:** R8-14, R22-27, R143-146, R148-151, R157-159, R194, R195, R200, R201, R203, R205-209, R340, R341, R396, R397, R624, R625, R631-635, R646, R853-856, R938, R943, R947-960, R1012, R1274, R1588-1592, R1919-1922, R1938, R2125, R2143-2150, R2728-2741, R2767, R2768, R2781, R2797-2800, R2811, R2822, R2830-2837, R2856, R2862, R2886, R2892, R2964-2966, R2968, R3041, R3135, R3171, R3195, R3198-3203, R3218, R3220, R3268, R3278, R3288-3290, R3292, R3329-3331, R3354, R3381, R3487, R3581-3583, R3589
 
 Parses, validates, and mutates ark.toml. Provides the effective pattern
 sets for each source directory. Explains pattern resolution for any file.
@@ -32,7 +32,9 @@ or the other, and the difference is only what a *bare* pattern means:
 - strategies: map[string]string — file glob pattern → strategy name
 - chunkers: []ChunkerConfig — language definitions from `[[chunker]]` entries. Carries easy-form `strings`/`brackets` flat pairs and full-form `string_defs`/`bracket_defs` structs; full-form bracket entries also accept optional `escape`, `allowed_inner`, and `allowed_parent` to mirror microfts2's BracketGroup model (R2147, R2148, R2149, R2150)
 - sessionTTL: time.Duration — session cache TTL (default 30s, from `session_ttl` in ark.toml)
-- searchExclude: []string — glob patterns excluded from search results by default (R938)
+- searchExclude: *[]string — the noise filter (R938). nil means the key is absent and the built-in default applies; a pointer to an empty slice is an explicit `[]` (R3582, R3583). TOML key `search_exclude`, `omitempty`, so only nil is dropped on save.
+- systemExclude: *[]string — the fence, same nil/empty convention (R3581, R3583). TOML key `system_exclude`.
+- dbPath: string — unexported (`toml:"-"`); the directory `LoadConfig` read `ark.toml` from, reassigned by DB.Open. The fence default names the scheduler's log directory under it (R3581).
 - scheduleTags: map[string]ScheduleTagConfig — declared schedule tags by name. Populated from `[schedule.tag.X]` blocks in `ark.toml` (block presence = declaration). (R2830, R2833)
 - scheduleFilterFiles: []string — glob patterns restricting schedule scanning, from top-level `[schedule] filter_files` (R953)
 - scheduleExcludeFiles: []string — glob patterns excluding files from schedule scanning, from top-level `[schedule] exclude_files` (R954)
@@ -69,6 +71,8 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
   and per-chime `[schedule.tag.chime-Nm]` blocks for each of the
   six standard cadences. All chimes default to `lifecycle = "disk"`
   with `log_cap = 1000`. (R2781, R2834)
+- SearchExcludes() []string: the effective noise filter: the configured list, or `defaultSearchExclude` (`~/.claude/projects/**`, tilde-expanded) when nil. Every reader of the setting calls this, never the field (R3582, R3583).
+- SystemExcludes() []string: the effective fence: the configured list, or `scheduleDirFor(dbPath)/**` when nil; empty when `dbPath` is unset (a zero-value Config in a test has no fence) (R3581, R3583).
 - EnsureArkSource(): add a synthetic `~/.ark` source entry to the
   Sources list if not already present. Uses the
   `arkSourceIncludePatterns` constant — top-level standard files

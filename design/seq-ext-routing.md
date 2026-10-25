@@ -32,6 +32,21 @@ rebuild are shared across classes.
 - TmpTagStore
 - microfts2
 
+## Flow: publishing routed tags (R3594)
+
+```
+Indexer (mirror file indexed, after runExtRouting and the file's own publish)
+   │
+   ├── ExtMap.RoutedByTarget(fileID, db) → targetPath → []TagValue
+   │     (tvidsForFile → each @ext tvid's target chunks → routed tag values)
+   │
+   └── for each targetPath: PubSub.PublishRouted("", targetPath, values)
+         └── chunk pass + file-tag pass, admits(sub, targetPath, routed=true):
+               fence refuses; inherited noise skipped; sub's own rows apply
+```
+
+The re-resolve flow below (a target file re-indexed) does not publish.
+
 ## Flow: indexing @ext at write time
 
 ```

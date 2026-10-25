@@ -297,6 +297,9 @@ type recallScope struct {
 	active  bool
 	allowed map[uint64]bool
 	only    map[uint64]struct{} // allowed, in the shape microfts2.WithOnly takes (R3570)
+	// denied is the fence-only form (R3591): an unscoped recall rejects the
+	// fenced files, usually one, instead of allowing every other file.
+	denied  map[uint64]struct{}
 	empty   bool
 	verdict map[uint64]bool
 }
@@ -306,10 +309,20 @@ type recallScope struct {
 // pathMatchesGlob, the matcher `ark search -files` uses, so a hunt's Go-side
 // seed and the secretary's own CLI searches read a glob the same way (R3192).
 // CRC: crc-Librarian.md | R3185, R3186, R3188, R3192
+//
+// The fence (system_exclude) joins the exclusions, so it beats any positive
+// match and no hunt scope lifts it (R3591, R3593). Recall never reads
+// search_exclude (R3592).
 func (op *recallOp) resolveRecallScope(filterFiles, excludeFiles []string) recallScope {
-	if len(filterFiles) == 0 && len(excludeFiles) == 0 {
-		return recallScope{}
+	// R3592: recall reads the fence only; search_exclude is never consulted.
+	var fence []string
+	if cfg := op.db.Config(); cfg != nil {
+		fence = cfg.SystemExcludes()
 	}
+	if len(filterFiles) == 0 && len(excludeFiles) == 0 {
+		return op.fenceOnlyScope(fence)
+	}
+	excludeFiles = appendGlobs(excludeFiles, fence)
 	paths, err := op.db.fts.FileIDPaths()
 	if err != nil {
 		// Without the path cache no scope can be honored. Failing open
@@ -334,6 +347,29 @@ func (op *recallOp) resolveRecallScope(filterFiles, excludeFiles []string) recal
 		empty:   len(filterFiles) > 0 && len(allowed) == 0,
 		verdict: make(map[uint64]bool),
 	}
+}
+
+// fenceOnlyScope is the scope of an unscoped recall: inactive with no fence,
+// else a deny set of the fenced files (R3591).
+// CRC: crc-Librarian.md | R3591
+func (op *recallOp) fenceOnlyScope(fence []string) recallScope {
+	if len(fence) == 0 {
+		return recallScope{}
+	}
+	paths, err := op.db.fts.FileIDPaths()
+	if err != nil {
+		// Unlike a hunt scope, failing here must not empty the corpus: the
+		// caller asked for no scope. Admission still rejects unplaceable
+		// chunks, so a fenced file cannot slip through by being unresolved.
+		log.Printf("recall: fence resolution failed, no paths: %v", err)
+	}
+	denied := make(map[uint64]struct{})
+	for fileID, path := range paths {
+		if !scopeAdmitsPath(path, nil, fence) {
+			denied[fileID] = struct{}{}
+		}
+	}
+	return recallScope{active: true, denied: denied, verdict: make(map[uint64]bool)}
 }
 
 // scopeAdmitsPath applies the positive-then-negative glob rule: with any
@@ -384,7 +420,13 @@ func (s *recallScope) admitsWith(chunkID uint64, fileOf func(uint64) (uint64, bo
 		return v
 	}
 	fileID, ok := fileOf(chunkID)
-	v := ok && s.allowed[fileID]
+	var v bool
+	if s.denied != nil {
+		_, fenced := s.denied[fileID]
+		v = ok && !fenced
+	} else {
+		v = ok && s.allowed[fileID]
+	}
 	s.verdict[chunkID] = v
 	return v
 }
@@ -612,7 +654,11 @@ func (l *Librarian) Recall(inputs []ConnectionsInput, opts RecallOpts) (*RecallR
 		// Jaccard(Tq, Tc) with a query-coverage floor. R2643, R2644
 		if queryText != "" && op.db.search != nil {
 			fuzzyOpts := SearchOpts{K: 50}
-			if scope.active {
+			switch {
+			case scope.denied != nil:
+				// R3591: the fence-only scope excludes rather than allows.
+				fuzzyOpts.SetExtraOpts(microfts2.WithExcept(scope.denied))
+			case scope.active:
 				// R3570: search within the scope's files, not the corpus.
 				fuzzyOpts.SetExtraOpts(microfts2.WithOnly(scope.only))
 			}

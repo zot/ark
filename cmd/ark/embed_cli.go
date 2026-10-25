@@ -178,7 +178,7 @@ func runEmbedValidate(fix, verbose bool) {
 		}
 
 		// R1856, R1865: collect chunkIDs partitioned by search_exclude
-		excludePatterns := db.Config().SearchExclude
+		excludePatterns := db.Config().SearchExcludes()
 		ftsChunkIDs, excludedChunkIDs, err := db.AllChunkIDsPartitioned(excludePatterns)
 		if err != nil {
 			fatal(fmt.Errorf("scan chunk IDs: %w", err))

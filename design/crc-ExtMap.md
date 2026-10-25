@@ -1,5 +1,5 @@
 # ExtMap
-**Requirements:** R1992, R1993, R1994, R1995, R1996, R1997, R1998, R1999, R2000, R2001, R2002, R2003, R2004, R2005, R2006, R2007, R2008, R2009, R2010, R2011, R2012, R2013, R2014, R2015, R2016, R2017, R2018, R2019, R2020, R2021, R2022, R2023, R2024, R2025, R2026, R2027, R2029, R2030, R2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120, R2121, R2122, R2123, R2124, R2344, R2352, R2380, R2915, R3058, R3059, R3060, R3062, R3063, R3064, R3065, R3066, R3074, R3254, R3367, R3368, R3382, R3384, R3385, R3386, R3387, R3388
+**Requirements:** R1992-2027, R2029-2031, R2065, R2073, R2079, R2096, R2100, R2108, R2109, R2114, R2120-2124, R2344, R2352, R2380, R2915, R3058-3060, R3062-3066, R3074, R3254, R3367, R3368, R3382, R3384-3388, R3594
 
 Owns the in-memory state and orchestration for the **tag-derived
 record family** — `@ext`→X (committed routing), `@ext-candidate`→RC
@@ -207,6 +207,10 @@ sources index, dropped as overlay items disappear.
   contain (tag, value), append `targetToChunk[tvid_ext]` to the
   result. Covers both persistent and overlay routings under a
   single RLock. Used by Store.TagValueChunks. (R2120, R2124)
+- RoutedByTarget(sourceFileID, db) map[string][]TagValue: for each `@ext`
+  tvid the source file authors (`tvidsForFile`), its target chunks and their
+  routed tag values, grouped by the target chunk's file path. Feeds the
+  indexer's routed publish (R3594).
 - ExtTagFiles(tags []string) []TagFileRecord: walk
   `routedTagsByTvidExt`; for each (tvid_ext, routed) where any
   routed.Tag is in `tags`, emit a TagFileRecord per

@@ -158,6 +158,13 @@ After allocation, resolve each surfaced chunk's path/range/tags
 (`ChunkInfo` + `AllTagsForChunk`) and content (if `IncludeContent`) from the
 chunk cache. Self-chunkID is excluded from its own results.
 
+**The fence.** A chunk whose file matches `system_exclude`
+([search-filtering.md](search-filtering.md)) is never a candidate, on any
+leg: it is dropped where candidates are admitted, before allocation, so it
+neither surfaces nor takes a cell's slot. The tag axis is a leg like the
+others, so a fenced file's tags cannot carry it in. `search_exclude` does not
+apply to recall: the conversation logs are memory recall exists to reach.
+
 ## Empty / Error Cases
 
 - Empty input → reject at enqueue with

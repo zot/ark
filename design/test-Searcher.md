@@ -75,3 +75,43 @@ between the call and a nil-receiver deref.
 guard the call panicked at `microfts2.(*DB).readFRecord` on a nil receiver.
 **Refs:** crc-Searcher.md, R2959, R1401
 **Code:** search_nildb_test.go
+
+## Test: the fence holds against every file filter
+**Purpose:** no `-files` row and no structural filter lifts the fence (R3584)
+**Input:** system_exclude=`**/fenced/**`, candidates in `fenced/` and `open/`; SearchTagChunks with (a) no filters, (b) a positive `-files '**/fenced/**'` row, (c) structural `FilterFiles`, (d) structural `ExcludeFiles` of something else
+**Expected:** no case returns a `fenced/` chunk; (b) and (c) still disable the noise filter (R940 unchanged)
+**Refs:** crc-Searcher.md, seq-search.md
+**Code:** search_tag_funnel_test.go
+**Fire alarm:** let a positive `-files` row disable the fence as it disables the noise filter (return nil fence from the same early exit); red on (b). Case (d) also guards the append: assigning `opts.ExcludeFiles = fence` instead of appending loses the explicit exclude, and `other/` comes back
+**Inject:** search.go:Searcher.defaultExcludes, search.go:Searcher.SearchTagChunks
+**Pulled:** 2026-10-25 — rang
+
+## Test: -system lifts only the fence
+**Purpose:** the one way past the fence leaves the noise filter alone (R3590)
+**Input:** as above plus search_exclude=`**/noise/**`; SearchTagChunks with `opts.System`
+**Expected:** `fenced/` chunks return; `noise/` chunks stay hidden
+**Refs:** crc-Searcher.md
+**Code:** search_tag_funnel_test.go
+**Fire alarm:** clear the noise list too when `opts.System` is set; red on the noise chunk
+**Inject:** search.go:Searcher.defaultExcludes
+**Pulled:** 2026-10-25 — rang
+
+## Test: a routed tag passes the noise filter in a tag primary
+**Purpose:** ext-routed values are exempt from search_exclude, not from the fence (R3587)
+**Input:** search_exclude=`**/noise/**`, system_exclude=`**/fenced/**`; candidates: an inline-tagged chunk in `noise/`, a routed one in `noise/`, a routed one in `fenced/`; `routed` holds the two routed IDs
+**Expected:** only the routed `noise/` chunk returns
+**Refs:** crc-Searcher.md
+**Code:** search_tag_funnel_test.go
+**Fire alarm:** apply the noise list to every candidate, ignoring `routed`; red on the routed noise chunk
+**Inject:** search.go:Searcher.SearchTagChunks
+**Pulled:** 2026-10-25 — rang
+
+## Test: routedPrimaryChunks picks only matching routed values
+**Purpose:** the exempt set is routed values that satisfy the predicate, not any routed value (R3587)
+**Input:** a fake ExtMap view with chunk A routed `@status: done`, chunk B routed `@owner: bill`, chunk C with only inline `@status: done`; predicate `status:done`
+**Expected:** {A}
+**Refs:** crc-Searcher.md
+**Code:** search_tag_funnel_test.go
+**Fire alarm:** skip the value check (`p.MatchValue`); red when a `status:open` predicate still returns A
+**Inject:** search.go:routedPrimaryChunks
+**Pulled:** 2026-10-25 — rang

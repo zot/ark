@@ -125,3 +125,33 @@ further properties: resolving with a parameter leaves `lc.Model` untouched (a
 parameter never writes config, which is what makes a UI chooser safe), and
 mutating the returned slice does not reach back into the loaded config.
 **Refs:** crc-Config.md, R3329, R3330, R3331
+
+## Test: the two exclude settings take built-in defaults
+**Purpose:** an absent key means the default, for both settings (R3581, R3582, R3583)
+**Input:** LoadConfig of an ark.toml with neither `search_exclude` nor `system_exclude`, from a temp db dir
+**Expected:** `SearchExcludes()` is the tilde-expanded `~/.claude/projects/**`; `SystemExcludes()` is `<dir>/schedule/**`, the same directory `scheduleDirFor` gives the scheduler
+**Refs:** crc-Config.md
+**Code:** config_test.go
+**Fire alarm:** return the raw field from `SearchExcludes()` (the pre-#165 behaviour, nil means no patterns); red names the missing default
+**Inject:** config.go:Config.SearchExcludes
+**Pulled:** 2026-10-25 — rang
+
+## Test: a set list replaces the default and an explicit [] turns it off
+**Purpose:** replace, never amend; empty is not absent (R3583)
+**Input:** three configs: `search_exclude = ["~/notes/**"]`, `search_exclude = []`, `system_exclude = []`
+**Expected:** the first yields only `~/notes/**` (no chat-log pattern added); the second and third yield empty lists, not the defaults
+**Refs:** crc-Config.md
+**Code:** config_test.go
+**Fire alarm:** treat an empty slice like nil in the accessor (`len == 0` instead of `== nil`); red on the `[]` cases
+**Inject:** config.go:Config.SearchExcludes, config.go:Config.SystemExcludes
+**Pulled:** 2026-10-25 — rang
+
+## Test: an explicit [] survives SaveConfig
+**Purpose:** a config edit must not turn an explicitly disabled setting back on (R3583)
+**Input:** load `search_exclude = []`, SaveConfig, reload
+**Expected:** the saved file still carries `search_exclude = []`, and the reloaded accessor is empty
+**Refs:** crc-Config.md
+**Code:** config_test.go
+**Fire alarm:** normalise an empty list to nil at the top of SaveConfig, which is what `omitempty` on a plain `[]string` did (changing the field type itself breaks the build, so it cannot ring); red, the saved file lost `search_exclude = []`
+**Inject:** config.go:Config.SaveConfig
+**Pulled:** 2026-10-25 — rang

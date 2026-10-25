@@ -229,6 +229,10 @@ func (srv *Server) watchLoop() {
 			} else {
 				srv.db.Config().EnsureArkSource()
 				srv.db.Config().EnsureLuhmannSource() // R3135
+				if srv.pubsub != nil {                // R3595: subscriptions follow the reload
+					cfg := srv.db.Config()
+					srv.pubsub.SetExcludes(cfg.SystemExcludes(), cfg.SearchExcludes())
+				}
 				if srv.scheduler != nil {
 					// Re-point scheduler at the new config pointer.
 					// ReloadConfig swaps db.config; the scheduler's

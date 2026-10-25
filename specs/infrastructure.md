@@ -100,7 +100,7 @@ ui: not available
 ## Tilde expansion in paths
 
 `~` and `~user` are expanded wherever ark accepts path patterns:
-ark.toml fields (include, exclude, search_exclude, source dirs),
+ark.toml fields (include, exclude, system_exclude, search_exclude, source dirs),
 CLI filter-stack `-files` rows, and any other glob or path argument.
 Tilde expansion happens on every surface; the *anchoring* of an
 unanchored pattern is what differs by surface (see

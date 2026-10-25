@@ -14,8 +14,8 @@ chunk/file retrieval.
 ## Post-filter funnel (invariant)
 
 Every primary mode produces an initial candidate set and then that set
-flows through the **same** post-filter stack and default
-`search_exclude` scope. The choice of primary mode (`-contains`,
+flows through the **same** post-filter stack and default scope (the
+`system_exclude` fence and the `search_exclude` noise filter). The choice of primary mode (`-contains`,
 `-fuzzy`, `-regex`, `-tag`, `-file-tag`, `-about`) selects only the
 candidate set; it never decides whether post-filters run. R2951, R1778.
 
@@ -28,9 +28,12 @@ candidate set; it never decides whether post-filters run. R2951, R1778.
   stack *post-hoc* against the resolved candidate chunkIDs via
   `Searcher.postFilterChunkIDs` (same per-row predicates as
   `BuildChunkFilters`, shared through `rowChunkFilter`).
-- The default `search_exclude` scope (R939/R940) is injected the same
-  way on every path: `effectiveExcludeFiles` computes it (a positive
-  `-files` row disables it), and the path-glob filter applies it.
+- The default scope is injected the same way on every path:
+  `defaultExcludes` computes it from the caller's opts and the caller
+  **appends** it to `opts.ExcludeFiles`. The fence always applies unless
+  `-system` (R3584, R3590); the noise filter yields to a positive `-files`
+  row or an explicit structural filter (R939/R940). The path-glob filter
+  applies both.
 
 ## Flow: Combined Search
 
@@ -38,8 +41,9 @@ candidate set; it never decides whether post-filters run. R2951, R1778.
 CLI ──> Searcher.SearchCombined(query, opts)
          │
          ├──> resolveFilters(opts)
-         │     ├── effectiveExcludeFiles: inject search_exclude default
-         │     │   (R939/R940) unless an explicit/positive file filter
+         │     ├── defaultExcludes: append the fence (unless -system) and
+         │     │   the noise filter (R939/R940: unless an explicit/positive
+         │     │   file filter) to opts.ExcludeFiles
          │     ├── path filters: glob -files against indexed paths → IDs
          │     ├── content filters → file ID sets
          │     ├── positives intersect, negatives subtract
@@ -111,11 +115,12 @@ R2951.
 ```
 CLI/Server ──> resolvePrimaryTagChunks(predicate, fileTag) → chunkIDs
          │       (TagChunkFilter / FileTagChunkFilter predicate locations)
+         ├──> routedPrimaryChunks(predicate, chunkIDs) → routed   [R3587]
          │
-         └──> Searcher.SearchTagChunks(chunkIDs, opts)
+         └──> Searcher.SearchTagChunks(chunkIDs, routed, opts)
                │
-               ├──> inject default search_exclude into opts.ExcludeFiles
-               │     via effectiveExcludeFiles (R939/R940-aware)
+               ├──> defaultExcludes(opts): fence → opts.ExcludeFiles;
+               │     noise held aside (R939/R940-aware)
                │
                ├──> postFilterChunkIDs(chunkIDs, opts, cache)   [R2951]
                │     ├── build per-row predicates for opts.ChunkFilters

@@ -53,9 +53,12 @@ type Config struct {
 	Strategies      map[string]string `toml:"strategies,omitempty"`
 	Sources         []Source          `toml:"source"`
 	Chunkers        []ChunkerConfig   `toml:"chunker"`
-	SessionTTL      string            `toml:"session_ttl,omitempty"`    // R646: duration string, default "30s"
-	SearchExclude   []string          `toml:"search_exclude,omitempty"` // R938: default exclude patterns for search
-	Embedding       EmbeddingConfig   `toml:"embedding"`                // R2964-R2968: model, tiers, lib provisioning
+	SessionTTL      string            `toml:"session_ttl,omitempty"` // R646: duration string, default "30s"
+	// R938, R3581-R3583: nil = key absent (built-in default), pointer to an
+	// empty slice = explicit []. Read through SearchExcludes / SystemExcludes.
+	SearchExclude *[]string       `toml:"search_exclude,omitempty"` // the noise filter
+	SystemExclude *[]string       `toml:"system_exclude,omitempty"` // the fence
+	Embedding     EmbeddingConfig `toml:"embedding"`                // R2964-R2968: model, tiers, lib provisioning
 	// CRC: crc-Config.md | R1919, R1920, R1938
 	AboutCentroidFilter    bool    `toml:"about_centroid_filter,omitempty"`
 	AboutCentroidThreshold float64 `toml:"about_centroid_threshold,omitempty"`
@@ -787,8 +790,9 @@ func LoadConfig(path string) (*Config, error) {
 	// R950, R951: expand tilde in all path fields at load time
 	cfg.DefaultInclude = ExpandTildeSlice(cfg.DefaultInclude)
 	cfg.DefaultExclude = ExpandTildeSlice(cfg.DefaultExclude)
-	cfg.SearchExclude = ExpandTildeSlice(cfg.SearchExclude) // R943: search_exclude carried through LoadConfig (startup + reload)
-	cfg.PatternsDir = ExpandTilde(cfg.PatternsDir)          // R3268: adopt-in-place paths are typed as ~/...
+	cfg.SearchExclude = expandTildeList(cfg.SearchExclude) // R943: carried through LoadConfig (startup + reload)
+	cfg.SystemExclude = expandTildeList(cfg.SystemExclude) // R3589
+	cfg.PatternsDir = ExpandTilde(cfg.PatternsDir)         // R3268: adopt-in-place paths are typed as ~/...
 	cfg.Schedule.FilterFiles = ExpandTildeSlice(cfg.Schedule.FilterFiles)
 	cfg.Schedule.ExcludeFiles = ExpandTildeSlice(cfg.Schedule.ExcludeFiles)
 	for k, tc := range cfg.Schedule.Tag {
@@ -1270,6 +1274,56 @@ func (c *Config) initEmbedTiers() {
 	sort.Slice(c.Embedding.Tiers, func(i, j int) bool {
 		return c.Embedding.Tiers[i].ByteLimit() < c.Embedding.Tiers[j].ByteLimit()
 	})
+}
+
+// Built-in defaults for the two exclude settings (R3581, R3582).
+const (
+	defaultSearchExclude = "~/.claude/projects/**"
+	scheduleDirName      = "schedule"
+)
+
+// scheduleDirFor is the scheduler's log directory under a db path. The
+// server builds the scheduler from it and the fence's default names it, so
+// the two cannot disagree under --db (R3581).
+func scheduleDirFor(dbPath string) string {
+	return filepath.Join(dbPath, scheduleDirName)
+}
+
+// SearchExcludes returns the effective noise filter: the configured list,
+// or the built-in default when the key is absent. An explicit [] is empty.
+// CRC: crc-Config.md | R3582, R3583
+func (c *Config) SearchExcludes() []string {
+	if c.SearchExclude != nil {
+		return *c.SearchExclude
+	}
+	return []string{ExpandTilde(defaultSearchExclude)}
+}
+
+// SystemExcludes returns the effective fence: the configured list, or the
+// scheduler's log directory when the key is absent. A Config with no db
+// path (a test's zero value) has no default fence.
+// CRC: crc-Config.md | R3581, R3583
+func (c *Config) SystemExcludes() []string {
+	if c.SystemExclude != nil {
+		return *c.SystemExclude
+	}
+	if c.dbPath == "" {
+		return nil
+	}
+	return []string{scheduleDirFor(c.dbPath) + "/**"}
+}
+
+// expandTildeList is ExpandTildeSlice for an optional list, keeping nil
+// (absent) and empty (explicit []) apart.
+func expandTildeList(p *[]string) *[]string {
+	if p == nil {
+		return nil
+	}
+	out := ExpandTildeSlice(*p)
+	if out == nil {
+		out = []string{}
+	}
+	return &out
 }
 
 // SaveConfig writes the current config state to an ark.toml file.

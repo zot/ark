@@ -296,8 +296,9 @@ func Serve(dbPath string, opts ServeOpts) error {
 	// after the actor write commits. PubSub already has SetDB for
 	// its watchdog-write path; the wiring is bidirectional.
 	db.SetPubSub(ps)
-	schedDir := filepath.Join(dbPath, "schedule")
-	sched := NewEventScheduler(ps, nil, schedDir, db.Config()) // TODO: wire ErrorReporter when tmp:// append lands
+	ps.SetExcludes(db.Config().SystemExcludes(), db.Config().SearchExcludes()) // R3586, R3595
+	schedDir := scheduleDirFor(dbPath)                                         // R3581: the fence default names the same dir
+	sched := NewEventScheduler(ps, nil, schedDir, db.Config())                 // TODO: wire ErrorReporter when tmp:// append lands
 	// R2780: auto-create ~/.ark/chimes.md so the indexer can pick up
 	// chime tag declarations on the normal `[schedule].tags` path.
 	// EnsureUpcoming now enqueues live (R2778), so the events fire in
@@ -1104,7 +1105,7 @@ func (srv *Server) noteStoredFile(db *DB, path string) {
 	if srv.librarian == nil || !srv.librarian.EmbeddingAvailable() {
 		return
 	}
-	if matchesAnyGlob(path, db.Config().SearchExclude) {
+	if matchesAnyGlob(path, db.Config().SearchExcludes()) {
 		return
 	}
 	if arm, delay := srv.embedWait.note(path, time.Now()); arm {
@@ -1275,6 +1276,7 @@ type searchRequest struct {
 	Session         string           `json:"session,omitempty"`      // R657: optional session name
 	Fuzzy           bool             `json:"fuzzy,omitempty"`        // R748: typo-tolerant search
 	NoTmp           bool             `json:"noTmp,omitempty"`        // R687: exclude tmp:// documents
+	System          bool             `json:"system,omitempty"`       // R3590: lift the system_exclude fence
 	OnlyIfTmp       bool             `json:"onlyIfTmp,omitempty"`    // R686: return 204 if no tmp files
 	ChunkFilters    []ChunkFilterRow `json:"chunkFilters,omitempty"` // CRC: crc-Server.md | R1783, R1784
 	// R2442, R2453: primary tag predicate in sigil form. Set when
@@ -1344,6 +1346,7 @@ func buildSearchOpts(req searchRequest) SearchOpts {
 		ExcludeFileTags: req.ExcludeFileTags,
 		Fuzzy:           req.Fuzzy,
 		NoTmp:           req.NoTmp,
+		System:          req.System,
 		ChunkFilters:    req.ChunkFilters,
 	}
 	if req.After != "" {
@@ -1443,9 +1446,9 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// chunkIDs (and fileIDs for file-tag mode) — bypass FTS entirely
 	// when no other text primary is set. Stale IDs are skipped.
 	if req.PrimaryTagQuery != "" && req.About == "" && req.Contains == "" && len(req.Regex) == 0 && req.LikeFile == "" && !req.Fuzzy {
-		chunkIDs := srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
+		chunkIDs, routed := srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
 		results, err := Sync(srv.db, func(db *DB) ([]SearchResultEntry, error) {
-			entries, terr := db.SearchTagChunks(chunkIDs, opts)
+			entries, terr := db.SearchTagChunks(chunkIDs, routed, opts)
 			if terr != nil {
 				return nil, terr
 			}
@@ -3282,16 +3285,9 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	// Subscribe
 	var subs []*TagSub
 	for _, s := range req.Subs {
-		// R941, R942: inherit search_exclude when no explicit file filters
-		excludeFiles := s.ExcludeFiles
-		if len(s.FilterFiles) == 0 && len(s.ExcludeFiles) == 0 {
-			defaultExcl, _ := Sync(srv.db, func(db *DB) ([]string, error) {
-				return db.Config().SearchExclude, nil
-			})
-			if len(defaultExcl) > 0 {
-				excludeFiles = defaultExcl
-			}
-		}
+		// R941, R3595: a sub with no file filters inherits search_exclude,
+		// read from the current config at delivery rather than copied here.
+		inheritNoise := len(s.FilterFiles) == 0 && len(s.ExcludeFiles) == 0
 		p, err := ParseMatchSyntax(s.Tag)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("bad tag %q: %v", s.Tag, err), http.StatusBadRequest)
@@ -3305,7 +3301,8 @@ func (srv *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 			Kind:         kind,
 			Predicate:    p,
 			FilterFiles:  s.FilterFiles,
-			ExcludeFiles: excludeFiles,
+			ExcludeFiles: s.ExcludeFiles,
+			InheritNoise: inheritNoise,
 		}
 		subs = append(subs, sub)
 	}
@@ -4148,8 +4145,9 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	// doesn't force a regex-with-chunk-filter.
 	tagOnly := false
 	var tagChunkIDs []uint64
+	var tagRouted map[uint64]bool // R3587
 	if req.PrimaryTagQuery != "" {
-		tagChunkIDs = srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
+		tagChunkIDs, tagRouted = srv.resolvePrimaryTagChunks(req.PrimaryTagQuery, req.PrimaryFileTag)
 		hasTextPrimary := query != "" && (req.Mode == "contains" || req.Mode == "about" || req.Mode == "regex" || req.Mode == "fuzzy")
 		tagOnly = !hasTextPrimary
 		if !tagOnly {
@@ -4186,7 +4184,7 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if tagOnly {
 		results, err = Sync(srv.db, func(db *DB) ([]GroupedResult, error) {
-			return db.GroupTagChunks(tagChunkIDs, opts)
+			return db.GroupTagChunks(tagChunkIDs, tagRouted, opts)
 		})
 	} else if req.Session != "" {
 		sess := srv.GetOrCreateSession(req.Session)
@@ -4213,11 +4211,14 @@ func (srv *Server) handleSearchGrouped(w http.ResponseWriter, r *http.Request) {
 // resolvePrimaryTagChunks parses the sigil-form predicate and returns
 // the chunkIDs (file-scoped or tag-scoped) selected by the predicate.
 // CRC: crc-Server.md | R2442, R2453
-func (srv *Server) resolvePrimaryTagChunks(query string, fileTag bool) []uint64 {
+// The second result is the candidates a routed value reached, which the
+// noise filter spares (R3587).
+func (srv *Server) resolvePrimaryTagChunks(query string, fileTag bool) ([]uint64, map[uint64]bool) {
 	p, err := ParseMatchSyntax(query)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
+	var routed map[uint64]bool
 	ids, _ := Sync(srv.db, func(db *DB) ([]uint64, error) {
 		chunkIDs, fileIDs := resolvePredicateLocations(p, db.Store())
 		if !fileTag {
@@ -4225,6 +4226,7 @@ func (srv *Server) resolvePrimaryTagChunks(query string, fileTag bool) []uint64 
 			for cid := range chunkIDs {
 				out = append(out, cid)
 			}
+			routed = routedPrimaryChunks(p, db.Store(), out)
 			return out, nil
 		}
 		// File-tag primary: every chunk on a matching file. Walk the
@@ -4243,9 +4245,10 @@ func (srv *Server) resolvePrimaryTagChunks(query string, fileTag bool) []uint64 
 				out = append(out, ch.ChunkID)
 			}
 		}
+		routed = routedPrimaryChunks(p, db.Store(), out)
 		return out, nil
 	})
-	return ids
+	return ids, routed
 }
 
 // handleTagComplete returns tag name completions matching a prefix.

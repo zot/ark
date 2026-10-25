@@ -161,7 +161,7 @@ measured against, and there are exactly three contexts:
   what it means in a shell (top level only).
 - **Source-scoped config** — root is the source's directory, so bare
   `X` means `SOURCE/**/X`.
-- **Rootless** (`search_exclude`, `[schedule]` filters, and the
+- **Rootless** (`system_exclude`, `search_exclude`, `[schedule]` filters, and the
   Lua/MCP `filter_files` opts) — no root exists, so bare `X` means
   `**/X`. The server has no cwd to anchor against.
 

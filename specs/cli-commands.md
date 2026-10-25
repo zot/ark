@@ -1337,6 +1337,7 @@ Conventional flags:
 | `-proximity`       | `false` | Rerank top 2k candidates by query-term proximity                                                   |
 | `-session NAME`    | —       | Named session for cross-query cache (server only)                                                  |
 | `-no-tmp`          | `false` | Exclude tmp:// documents                                                                           |
+| `-system`          | `false` | Lift the `system_exclude` fence for this search; no file filter lifts it (see [search-filtering.md](search-filtering.md)) |
 | `-tags`            | `false` | Output extracted @tag activity as markdown bullets. See [tags-baby-food.md](tags-baby-food.md). Each `-with -tag NAME[:VALUE]` suppresses its own subtree from the output (the agent already knows what it filtered for) |
 | `-no-values`       | `false` | With `-tags`: collapse the value layer (tag → files/chunks). Orthogonal to the file/chunk axis     |
 | `-no-chunks`       | `false` | With `-tags`: drop `:range` from locations (file paths only); duplicate files dedup under one value |

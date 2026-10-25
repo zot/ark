@@ -201,11 +201,10 @@ full-text search library. Optional vector search enhances results but
 the system is fully functional without it. Search supports:
 
 - Full-text queries with scoring strategies
-- Tag-based filtering (`--filter-file-tags`, `--exclude-file-tags`)
-- Content-based filtering (`--filter`, `--except`)
-- Regex matching (`--regex`)
-- Chunk retrieval with preview windows (`--chunks`, `--preview`)
-- Source type filtering (`--filter-files`, `--exclude-files`)
+- A filter stack that narrows a search by content, tag, or path: `-with`
+  and `-without` rows of `-contains`, `-tag`, `-file-tag`, and `-files`
+- Regex matching (`-regex`)
+- Chunk retrieval with preview windows (`-chunks`, `-preview`)
 
 ## The Inside-Out Graph
 

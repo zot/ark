@@ -86,7 +86,9 @@ Post-reconcile, after tag embeddings complete, the Librarian runs
    content (markdown, code), then JSONL conversation logs. A file is a
    conversation log by the strategy it was indexed under (`chat-jsonl`),
    the same test recall uses, not by its `.jsonl` suffix. Files
-   matching `search_exclude` are skipped entirely.
+   matching `search_exclude` (by default the conversation logs; see
+   [search-filtering.md](search-filtering.md)) are skipped entirely.
+   `system_exclude` does not gate embedding.
 3. For each file, read chunk content via `AllChunks(path)`.
    A stale chunk (one the current chunker no longer produces; see
    [chunk-context.md](chunk-context.md#a-stale-chunk)) is skipped and

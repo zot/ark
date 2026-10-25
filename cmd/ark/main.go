@@ -1572,6 +1572,8 @@ func cmdSearch(args []string) {
 	// CRC: crc-CLI.md | R654, R655, R656, R681 — --session NAME routes via the server proxy (req.Session, requires a running server; R681: --session always proxies); without it search runs the normal direct/proxy path
 	session := fs.String("session", "", "named session for cross-query cache (requires server)")
 	noTmp := fs.Bool("no-tmp", false, "exclude tmp:// documents from results")
+	// CRC: crc-CLI.md | R3590 — the only way past the system_exclude fence
+	systemFiles := fs.Bool("system", false, "lift the system_exclude fence for this search (no -files row lifts it)")
 	tags := fs.Bool("tags", false, "output extracted @tag activity as markdown bullets (see -no-values/-no-chunks/-no-files)")
 	noValues := fs.Bool("no-values", false, "with -tags: collapse the value layer (tag → files/chunks)")
 	noChunks := fs.Bool("no-chunks", false, "with -tags: drop :range from locations (file paths only)")
@@ -1782,6 +1784,7 @@ func cmdSearch(args []string) {
 			ChunkFilters    []ark.ChunkFilterRow `json:"chunkFilters,omitempty"`
 			Session         string               `json:"session,omitempty"`
 			NoTmp           bool                 `json:"noTmp,omitempty"`
+			System          bool                 `json:"system,omitempty"`
 			PrimaryTagQuery string               `json:"primaryTagQuery,omitempty"`
 			PrimaryFileTag  bool                 `json:"primaryFileTag,omitempty"`
 		}{
@@ -1801,6 +1804,7 @@ func cmdSearch(args []string) {
 			ChunkFilters:    chunkFilters,
 			Session:         *session,
 			NoTmp:           *noTmp,
+			System:          *systemFiles,
 			PrimaryTagQuery: primaryTagQuery,
 			PrimaryFileTag:  primaryFileTag,
 		}
@@ -1845,6 +1849,7 @@ func cmdSearch(args []string) {
 			Fuzzy:     primaryFuzzy,
 			Proximity: *proximity,
 			NoTmp:     *noTmp,
+			System:    *systemFiles,
 			// R2951: index-lookup primaries (tag/file-tag/about) apply the
 			// post-filter stack via opts.ChunkFilters in SearchTagChunks /
 			// the vec-only path — the server path sets this in buildSearchOpts;
@@ -1887,7 +1892,8 @@ func cmdSearch(args []string) {
 		case primaryTagPredicate != nil && !isSplit && !primaryFuzzy && !*multi:
 			// R2442, R2453: predicate-driven bypass (local fallback).
 			chunkIDs := d.ResolveTagPredicateChunks(*primaryTagPredicate, primaryFileTag)
-			results, err = d.SearchTagChunks(chunkIDs, opts)
+			routed := d.RoutedTagPredicateChunks(*primaryTagPredicate, chunkIDs) // R3587
+			results, err = d.SearchTagChunks(chunkIDs, routed, opts)
 		// CRC: crc-CLI.md | R585, R591 — --multi runs all strategies; works with a combined query or --contains
 		case *multi:
 			if query == "" && primaryContains != "" {

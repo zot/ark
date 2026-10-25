@@ -2418,14 +2418,14 @@ func (db *DB) SearchGrouped(query string, opts SearchOpts) ([]GroupedResult, err
 
 // GroupTagChunks builds GroupedResult straight from a tag-derived chunkID set,
 // bypassing FTS. CRC: crc-Searcher.md | R2442
-func (db *DB) GroupTagChunks(chunkIDs []uint64, opts SearchOpts) ([]GroupedResult, error) {
-	return db.search.GroupTagChunks(chunkIDs, opts)
+func (db *DB) GroupTagChunks(chunkIDs []uint64, routed map[uint64]bool, opts SearchOpts) ([]GroupedResult, error) {
+	return db.search.GroupTagChunks(chunkIDs, routed, opts)
 }
 
 // SearchTagChunks returns a flat SearchResultEntry list from a tag-derived
 // chunkID set, bypassing FTS. CRC: crc-Searcher.md | R2442
-func (db *DB) SearchTagChunks(chunkIDs []uint64, opts SearchOpts) ([]SearchResultEntry, error) {
-	return db.search.SearchTagChunks(chunkIDs, opts)
+func (db *DB) SearchTagChunks(chunkIDs []uint64, routed map[uint64]bool, opts SearchOpts) ([]SearchResultEntry, error) {
+	return db.search.SearchTagChunks(chunkIDs, routed, opts)
 }
 
 // PathFileID resolves a path to its fileID. tmp:// paths route
@@ -2479,6 +2479,14 @@ func (db *DB) ResolveTagPredicateChunks(p MatchPredicate, fileTag bool) []uint64
 		}
 	}
 	return out
+}
+
+// RoutedTagPredicateChunks returns the candidates a routed value matching p
+// reached, which the noise filter spares in a tag primary. The cold-path
+// twin of the server's tag primary.
+// CRC: crc-Searcher.md | R3587
+func (db *DB) RoutedTagPredicateChunks(p MatchPredicate, candidates []uint64) map[uint64]bool {
+	return routedPrimaryChunks(p, db.store, candidates)
 }
 
 // GetChunks returns the target chunk and its positional neighbors.
@@ -3941,7 +3949,9 @@ func (db *DB) DiffConfig() ([]ConfigChange, error) {
 	checkJSON(IFieldStrategies, stored.Strategies, db.config.Strategies)
 	checkJSON(IFieldSources, stored.Sources, db.config.Sources)
 	checkJSON(IFieldChunkers, stored.Chunkers, db.config.Chunkers)
-	checkJSON(IFieldSearchExclude, stored.SearchExclude, db.config.SearchExclude)
+	// R3589: stored values are effective lists; compare against the effective ones.
+	checkJSON(IFieldSearchExclude, stored.SearchExclude, db.config.SearchExcludes())
+	checkJSON(IFieldSystemExclude, stored.SystemExclude, db.config.SystemExcludes())
 	checkJSON(IFieldSchedule, stored.Schedule, db.config.Schedule)
 	checkJSON(IFieldEmbedTiers, stored.Embedding.Tiers, db.config.Embedding.Tiers)
 

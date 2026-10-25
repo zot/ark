@@ -1,8 +1,10 @@
 package ark
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -39,7 +41,7 @@ func TestSearchTagChunksPostFilterFunnel(t *testing.T) {
 	}
 	idx.store.LoadTvidMap()
 
-	cfg := &Config{SearchExclude: []string{"**/excluded.md"}}
+	cfg := &Config{SearchExclude: &[]string{"**/excluded.md"}}
 	s := &Searcher{fts: idx.fts, store: idx.store, config: cfg}
 
 	// Tag-primary candidate set: every chunk carrying @guard.
@@ -77,7 +79,7 @@ func TestSearchTagChunksPostFilterFunnel(t *testing.T) {
 	}
 
 	// 1. -files restricts the tag set to the matching path.
-	r1, err := s.SearchTagChunks(chunkIDs, SearchOpts{
+	r1, err := s.SearchTagChunks(chunkIDs, nil, SearchOpts{
 		K:            100,
 		ChunkFilters: []ChunkFilterRow{{Polarity: "with", Mode: "files", Query: "**/keep.md"}},
 	})
@@ -90,7 +92,7 @@ func TestSearchTagChunksPostFilterFunnel(t *testing.T) {
 	}
 
 	// 2. -contains restricts to the chunk carrying the term — a strict subset.
-	r2, err := s.SearchTagChunks(chunkIDs, SearchOpts{
+	r2, err := s.SearchTagChunks(chunkIDs, nil, SearchOpts{
 		K:            100,
 		ChunkFilters: []ChunkFilterRow{{Polarity: "with", Mode: "contains", Query: "needle"}},
 	})
@@ -102,12 +104,164 @@ func TestSearchTagChunksPostFilterFunnel(t *testing.T) {
 	}
 
 	// 3. The default search_exclude scope applies with no explicit file filter.
-	r3, err := s.SearchTagChunks(chunkIDs, SearchOpts{K: 100})
+	r3, err := s.SearchTagChunks(chunkIDs, nil, SearchOpts{K: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := bases(r3); !eq(got, []string{"keep.md", "other.md"}) {
 		t.Errorf("R2951 default-scope bypass: -tag guard = %v, want [keep.md other.md] "+
 			"(search_exclude '**/excluded.md' not applied to the tag primary)", got)
+	}
+}
+
+// fenceFixture indexes one @guard chunk in each of fenced/, noise/, other/
+// and open/, with system_exclude naming fenced/ and search_exclude naming
+// noise/. It returns the searcher, every chunk ID, and the ID per directory.
+// CRC: crc-Searcher.md | R3584, R3587, R3590
+func fenceFixture(t *testing.T) (*Searcher, []uint64, map[string]uint64) {
+	t.Helper()
+	idx, dir := testIndexer(t)
+	byDir := make(map[string]uint64)
+	for _, d := range []string{"fenced", "noise", "other", "open"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		fp := writeFile(t, dir, filepath.Join(d, "f.md"), "@guard: yes body of "+d+"\n") // distinct text: identical chunks dedup to one
+		if _, err := idx.AddFile(fp, "line"); err != nil {
+			t.Fatalf("AddFile %s: %v", fp, err)
+		}
+	}
+	idx.store.LoadTvidMap()
+	cfg := &Config{
+		SystemExclude: &[]string{"**/fenced/**"},
+		SearchExclude: &[]string{"**/noise/**"},
+	}
+	s := &Searcher{fts: idx.fts, store: idx.store, config: cfg}
+	p, err := ParseMatchSyntax("guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := resolvePredicateLocations(p, idx.store)
+	var ids []uint64
+	for cid := range set {
+		ids = append(ids, cid)
+	}
+	entries, err := s.ChunksByID(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		byDir[filepath.Base(filepath.Dir(e.Path))] = e.ChunkNum
+	}
+	if len(byDir) != 4 {
+		t.Fatalf("setup: expected one chunk per dir, got %v", byDir)
+	}
+	return s, ids, byDir
+}
+
+func dirsOf(results []SearchResultEntry) []string {
+	var out []string
+	for _, r := range results {
+		out = append(out, filepath.Base(filepath.Dir(r.Path)))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestFenceHoldsAgainstEveryFileFilter: no -files row and no structural
+// filter lifts the fence, while (b) and (c) still disable the noise filter.
+// Refs: R3584, R940
+func TestFenceHoldsAgainstEveryFileFilter(t *testing.T) {
+	s, ids, _ := fenceFixture(t)
+	cases := []struct {
+		name string
+		opts SearchOpts
+		want []string
+	}{
+		{"no filters", SearchOpts{K: 100}, []string{"open", "other"}},
+		{"positive -files into the fence", SearchOpts{K: 100, ChunkFilters: []ChunkFilterRow{{Mode: "files", Query: "**/fenced/**", Polarity: "with"}}}, nil},
+		{"structural FilterFiles", SearchOpts{K: 100, FilterFiles: []string{"**/*.md"}}, []string{"noise", "open", "other"}},
+		{"structural ExcludeFiles", SearchOpts{K: 100, ExcludeFiles: []string{"**/other/**"}}, []string{"noise", "open"}},
+	}
+	for _, c := range cases {
+		got, err := s.SearchTagChunks(ids, nil, c.opts)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		dirs := dirsOf(got)
+		if strings.Join(dirs, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%s: got %v, want %v (a fenced/ hit means a file filter lifted the fence)", c.name, dirs, c.want)
+		}
+	}
+}
+
+// TestSystemLiftsOnlyTheFence: -system reaches fenced files and leaves the
+// noise filter in force. Refs: R3590
+func TestSystemLiftsOnlyTheFence(t *testing.T) {
+	s, ids, _ := fenceFixture(t)
+	got, err := s.SearchTagChunks(ids, nil, SearchOpts{K: 100, System: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirs := strings.Join(dirsOf(got), ","); dirs != "fenced,open,other" {
+		t.Errorf("-system: got %s, want fenced,open,other (noise must stay hidden)", dirs)
+	}
+}
+
+// TestRoutedTagPassesNoiseNotFence: a routed candidate in noise/ survives,
+// one in fenced/ does not, and an unrouted noise/ candidate stays hidden.
+// Refs: R3587
+func TestRoutedTagPassesNoiseNotFence(t *testing.T) {
+	s, ids, byDir := fenceFixture(t)
+	routed := map[uint64]bool{byDir["noise"]: true, byDir["fenced"]: true}
+	got, err := s.SearchTagChunks(ids, routed, SearchOpts{K: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirs := strings.Join(dirsOf(got), ","); dirs != "noise,open,other" {
+		t.Errorf("routed: got %s, want noise,open,other", dirs)
+	}
+	got, err = s.SearchTagChunks(ids, map[uint64]bool{byDir["open"]: true}, SearchOpts{K: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirs := strings.Join(dirsOf(got), ","); dirs != "open,other" {
+		t.Errorf("unrouted noise: got %s, want open,other", dirs)
+	}
+}
+
+// TestRoutedPrimaryChunksMatchesOnlyRoutedValues: the exempt set is routed
+// values the predicate accepts, never an inline match or another tag.
+// Refs: R3587
+func TestRoutedPrimaryChunksMatchesOnlyRoutedValues(t *testing.T) {
+	const a, b, c = 11, 12, 13
+	em := &ExtMap{
+		chunkToTargets: map[uint64][]uint64{a: {1}, b: {2}},
+		routedTagsByTvidExt: map[uint64][]TagValue{
+			1: {{Tag: "status", Value: "done"}},
+			2: {{Tag: "owner", Value: "bill"}},
+		},
+	}
+	store := &Store{extmap: em}
+	for _, q := range []struct {
+		pred string
+		want []uint64
+	}{
+		{"status:done", []uint64{a}},
+		{"status:open", nil},
+		{"status", []uint64{a}},
+	} {
+		p, err := ParseMatchSyntax(q.pred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := routedPrimaryChunks(p, store, []uint64{a, b, c})
+		var ids []uint64
+		for id := range got {
+			ids = append(ids, id)
+		}
+		if len(ids) != len(q.want) || (len(ids) == 1 && ids[0] != q.want[0]) {
+			t.Errorf("%s: got %v, want %v", q.pred, ids, q.want)
+		}
 	}
 }

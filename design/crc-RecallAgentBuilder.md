@@ -1,5 +1,5 @@
 # RecallAgentBuilder
-**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757, R2758, R2759, R2761, R2762, R2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869, R2870, R2871, R2872, R2873, R2888, R2889, R2890, R2891, R2894, R2896, R2898, R2899, R2900, R2901, R2902, R2903, R2909, R2937, R2938, R2939, R2940, R2943, R2944, R2945, R2946, R2948, R2950, R3006, R3021, R3025, R3027, R3028, R3031, R3032, R3029, R3108, R3109, R3111, R3110, R3112, R3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305, R3306, R3307, R3317, R3318, R3319, R3322
+**Requirements:** R2747, R2748, R2750, R2754, R2755, R2757-2759, R2761-2763, R2772, R2774, R2777, R2807, R2808, R2857, R2858, R2865, R2866, R2869-2873, R2888-2891, R2894, R2896, R2898-2903, R2909, R2937-2940, R2943-2946, R2948, R2950, R3006, R3021, R3025, R3027-3029, R3031, R3032, R3108-3113, R3189, R3194, R3279, R3283, R3294, R3302, R3303, R3305-3307, R3317-3319, R3322, R3593
 
 In-server state machine that owns the curation-doc and result-
 doc builders for the Simple Recall v2 pipeline. Two callers
@@ -391,6 +391,8 @@ the shared `@ark-secretary-work` tube; the bloodhound's output is its
   model (Baby Food / Shoulder the Fat). The string composes with the
   crank handle's own `scope`-word mapping rather than replacing it —
   both are `-with -files` rows, which intersect (R3194).
+  The ready-made filter string never carries `-system`, so a secretary's
+  own searches cannot lift the fence whatever the hunt's scope (R3593).
 - `next` dispatch priority (R2939, R2940): `RecallNext`'s loop scans
   `db.Files()` once and prioritizes a pending
   `ARK-BLOODHOUND/task-` doc over any `ARK-RECALL/curation-` doc for

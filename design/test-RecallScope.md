@@ -153,6 +153,44 @@ line, an empty-valued key, and a clue body
 **Expected:** globs collected in order per direction, the empty one dropped,
 and `clueOf` leaving no scope metadata in the text the seed searches
 
+## Test: an unscoped recall never admits a fenced chunk
+**Purpose:** the fence applies on every leg with no hunt scope (R3591)
+**Input:** setupRecall with system_exclude naming a `fenced/` dir; the TagAxisScopedBeforeItsCut fixture with the outranking values placed in `fenced/` and the kept value outside it; Recall with no FilterFiles
+**Expected:** the kept chunk returns and no `fenced/` chunk does, though the fenced values outrank it
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** build no scope when the hunt has no globs (the pre-#165 early return); red reads a fenced chunk in the result
+**Inject:** recall.go:recallOp.resolveRecallScope
+**Pulled:** 2026-10-25 — rang
+
+## Test: a hunt scope pointing into the fence still yields nothing from it
+**Purpose:** no scope lifts the fence (R3593)
+**Input:** Recall with `FilterFiles: [fencedDir + "/**"]`
+**Expected:** no chunks, and the result reports the scope as matching no admissible file (R3188's wrong-scope signal), not a silent widening
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** append the fence only when the hunt has no positive globs; red on a fenced chunk
+**Inject:** recall.go:recallOp.resolveRecallScope
+**Pulled:** 2026-10-25 — rang
+
+## Test: the fence-only scope is a deny set
+**Purpose:** an unscoped recall does not build an allow set over every file (R3591)
+**Input:** resolveRecallScope with no globs and a one-file fence
+**Expected:** the scope is active, `denied` holds the one fenced file, `only` is nil, and admission rejects only that file
+**Refs:** crc-Librarian.md
+**Code:** recall_scope_test.go
+**Fire alarm:** none; this pins a cost decision, and its break (an allow set) changes no result.
+
+## Test: the scope directive never carries -system
+**Purpose:** a secretary's own searches cannot lift the fence (R3593)
+**Input:** scopeDirective for a request with both filter and exclude globs, including one into `~/.ark/schedule/`
+**Expected:** the string contains `-files` rows only and no `-system`
+**Refs:** crc-RecallAgentBuilder.md
+**Code:** recall_scope_test.go
+**Fire alarm:** append `-system` to the directive; red names the flag
+**Inject:** recall_agent_builder.go:scopeDirective
+**Pulled:** 2026-10-25 — rang
+
 ## Not covered
 
 - **End-to-end watermark → task doc with a scope.** The

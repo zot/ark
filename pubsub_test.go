@@ -3,6 +3,8 @@ package ark
 // CRC: crc-PubSub.md | Test: test-TmpSubscription.md
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -359,5 +361,115 @@ func TestSubscriptionFileFiltersO160(t *testing.T) {
 	// tmp:// paths stay first-class citizens of the same filter (R2278).
 	if !matchFileFilters("tmp://watchdog/possible-typos", []string{"tmp://watchdog/**"}, nil) {
 		t.Error("tmp:// subscriptions must keep matching")
+	}
+}
+
+// CRC: crc-PubSub.md | Test: test-PubSub.md | R3586, R3587, R3594, R3595
+
+// quiet is long enough for a queued event to show and short enough that
+// the "nothing delivered" cases stay cheap.
+const quiet = 30 * time.Millisecond
+
+func excludeSub(t *testing.T, inherit bool, filterFiles ...string) *TagSub {
+	t.Helper()
+	return &TagSub{Predicate: mustParseSub(t, "status"), FilterFiles: filterFiles, InheritNoise: inherit}
+}
+
+var statusDone = []TagValue{{Tag: "status", Value: "done"}}
+
+// TestSubscriptionNeverReceivesFencedPath: the fence holds with or without
+// explicit file filters. Refs: R3586
+func TestSubscriptionNeverReceivesFencedPath(t *testing.T) {
+	ps := NewPubSub(time.Minute, 16)
+	ps.SetExcludes([]string{"**/fenced/**"}, nil)
+	ps.Subscribe("inherit", []*TagSub{excludeSub(t, true)})
+	ps.Subscribe("explicit", []*TagSub{excludeSub(t, false, "**/fenced/**")})
+	ps.Publish("", "/w/fenced/x.md", statusDone)
+	for _, sid := range []string{"inherit", "explicit"} {
+		if ev := ps.Listen(sid, quiet); len(ev) != 0 {
+			t.Errorf("%s: got %d events for a fenced path, want none", sid, len(ev))
+		}
+	}
+}
+
+// TestInheritedNoiseFollowsReload: the inherited list is read at delivery,
+// so a SetExcludes after subscribing applies. Refs: R3595
+func TestInheritedNoiseFollowsReload(t *testing.T) {
+	ps := NewPubSub(time.Minute, 16)
+	ps.Subscribe("s", []*TagSub{excludeSub(t, true)})
+	ps.SetExcludes(nil, []string{"**/noise/**"})
+	ps.Publish("", "/w/noise/x.md", statusDone)
+	if ev := ps.Listen("s", quiet); len(ev) != 0 {
+		t.Errorf("got %d events after the reload added noise, want none", len(ev))
+	}
+}
+
+// TestExplicitFiltersReplaceInheritedNoise: a sub with its own -files rows
+// is not subject to search_exclude (R941). Refs: R941, R3595
+func TestExplicitFiltersReplaceInheritedNoise(t *testing.T) {
+	ps := NewPubSub(time.Minute, 16)
+	ps.SetExcludes(nil, []string{"**/noise/**"})
+	ps.Subscribe("s", []*TagSub{excludeSub(t, false, "**/noise/**")})
+	ps.Publish("", "/w/noise/x.md", statusDone)
+	if ev := ps.Listen("s", quiet); len(ev) != 1 {
+		t.Errorf("got %d events, want 1: explicit rows replace the inherited noise filter", len(ev))
+	}
+}
+
+// TestRoutedEventPassesNoiseNotFence: routed values pass inherited noise,
+// never the fence; the same value published inline stays filtered.
+// Refs: R3587, R3594
+func TestRoutedEventPassesNoiseNotFence(t *testing.T) {
+	ps := NewPubSub(time.Minute, 16)
+	ps.SetExcludes([]string{"**/fenced/**"}, []string{"**/noise/**"})
+	ps.Subscribe("s", []*TagSub{excludeSub(t, true)})
+	ps.PublishRouted("", "/w/noise/x.md", statusDone)
+	if ev := ps.Listen("s", quiet); len(ev) != 1 || ev[0].Path != "/w/noise/x.md" {
+		t.Errorf("routed under noise/: got %+v, want one event at the target path", ev)
+	}
+	ps.PublishRouted("", "/w/fenced/y.md", statusDone)
+	if ev := ps.Listen("s", quiet); len(ev) != 0 {
+		t.Errorf("routed under fenced/: got %d events, want none", len(ev))
+	}
+	ps.Publish("", "/w/noise/x.md", statusDone)
+	if ev := ps.Listen("s", quiet); len(ev) != 0 {
+		t.Errorf("inline under noise/: got %d events, want none", len(ev))
+	}
+}
+
+// TestMirrorIndexPublishesRoutedTags: indexing a mirror file publishes the
+// tag values its @ext routes, under the target's path, past the target's
+// inherited noise filter. No ExtMap.Rebuild: the publish must see the
+// routing the index pass just wrote. Refs: R3594, R3587
+func TestMirrorIndexPublishesRoutedTags(t *testing.T) {
+	_, db := setupFileBackedRecall(t)
+	targetPath := filepath.Join(db.dbPath, "target.md")
+	if err := os.WriteFile(targetPath, []byte("alpha line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(targetPath, "line"); err != nil {
+		t.Fatalf("index target: %v", err)
+	}
+	ps := NewPubSub(time.Minute, 16)
+	ps.SetExcludes(nil, []string{targetPath}) // the target is noise, as a chat log would be
+	ps.SetDB(db)
+	db.indexer.pubsub = ps
+	ps.Subscribe("s", []*TagSub{{Predicate: mustParseSub(t, "note"), InheritNoise: true}})
+
+	srcPath := extMirrorSource(t, db, "notes.md")
+	if err := os.WriteFile(srcPath, []byte("@ext: "+targetPath+" @note: hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.indexer.AddFile(srcPath, "line"); err != nil {
+		t.Fatalf("index mirror: %v", err)
+	}
+	var got []Event
+	for _, ev := range ps.Listen("s", 200*time.Millisecond) {
+		if ev.Tag == "note" {
+			got = append(got, ev)
+		}
+	}
+	if len(got) != 1 || got[0].Path != targetPath || got[0].Value != "hello" {
+		t.Fatalf("want one note:hello event at %s, got %+v", targetPath, got)
 	}
 }

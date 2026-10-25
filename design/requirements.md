@@ -425,10 +425,19 @@
 ### Default Search Excludes
 - **R938:** `search_exclude` is a top-level list of glob patterns in ark.toml
 - **R939:** `search_exclude` patterns apply as the default exclude scope when the search carries no explicit file filter — no positive `-files GLOB` row and no structural `filter_files`/`exclude_files` (the `SearchOpts` fields the Lua UI sets). (Flag rename: the user-facing `--filter-files`/`--exclude-files` were subsumed by the filter stack's `-files` / `-without -files` — see search-cli-filters.md; the `filter_files`/`exclude_files` struct fields and JSON remain for the Lua UI.)
-- **R940:** An explicit file filter replaces the default scope entirely: a **positive** `-files GLOB` row (or a structural `filter_files`/`exclude_files`) disables `search_exclude`, so a positive `-files` pointed at a default-excluded path includes it. A `-without -files GLOB` subtracts the glob *without* disabling the default scope. Implemented by `Searcher.effectiveExcludeFiles` (R2951's funnel injects the same default on the index-lookup paths).
+- **R940:** An explicit file filter replaces the default scope entirely: a **positive** `-files GLOB` row (or a structural `filter_files`/`exclude_files`) disables `search_exclude`, so a positive `-files` pointed at a default-excluded path includes it. A `-without -files GLOB` subtracts the glob *without* disabling the default scope. Implemented by `Searcher.defaultExcludes` (R2951's funnel injects the same default on the index-lookup paths).
 - **R941:** Subscriptions without explicit file filters inherit `search_exclude` as their exclude-files list
 - **~~R942:~~** (Retired T268 — see R3204) Subscriptions with explicit `--filter-files` or `--exclude-files` use those instead of `search_exclude`
 - **R943:** (inferred) `search_exclude` is loaded from config at startup and on config reload
+- **R3581:** `system_exclude` (the fence) is a top-level list of rootless glob patterns in ark.toml with the built-in default `<db>/schedule/**`, the scheduler's log directory (`~/.ark/schedule/**` in a default install). The default names ark's system directories one by one, never the ark home as a whole, and does not include `~/.ark/chimes.md`.
+- **R3582:** `search_exclude` (the noise filter) has the built-in default `["~/.claude/projects/**"]`.
+- **R3583:** For each of `system_exclude` and `search_exclude`, a list set in ark.toml replaces the built-in default entirely, never adds to it; an absent or commented-out key means the default, and an explicit empty list `[]` means no patterns.
+- **R3584:** Search excludes files matching `system_exclude` from every candidate set in every primary mode, regardless of file filters of either polarity (filter-stack `-files` rows and the structural `filter_files`/`exclude_files`); the yielding in R939 and R940 applies to `search_exclude` only. The one exception is `-system` (R3590).
+- **R3585:** A tag-value lookup that resolves a tag value to file paths excludes paths matching `system_exclude`.
+- **R3586:** A subscription never delivers an event for a path matching `system_exclude`, with or without explicit file filters.
+- **R3587:** A tag value that reaches a chunk through an `@ext` routing is never removed by `search_exclude`, in tag search, tag-value lookups, or subscription delivery, even when the target chunk's file matches it. `system_exclude` still applies to routed tag values.
+- **R3588:** `system_exclude` does not gate the embedding pass.
+- **R3589:** `system_exclude` is handled like `search_exclude` for loading (startup and reload, R943), tilde expansion (R950), rootless anchoring (R3199), benign config-change classification (R1554), and I-record storage (`system_exclude`, specs/record-formats.md).
 
 ### Naming Normalization
 - **~~R944:~~** (Retired T269 — see R3204) Pubsub `--except-files` CLI flag is renamed to `--exclude-files` for consistency with search
@@ -1420,6 +1429,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R818:** `ark subscribe --stats --session ID` shows stats for one session
 - **R819:** PubSub tracks per-subscription hit count (events enqueued) and drop count (events lost to full queue)
 - **R820:** Stats are in-memory, reset on server restart
+- **R3594:** When a mirror file is indexed, every tag value its `@ext` routings carry is published to subscribers under the target chunk's file path, marked as routed; it repeats on each index of the mirror, and re-resolving a routing on a target re-index publishes nothing.
+- **R3595:** A subscription's inherited `search_exclude` is read from the current config at delivery time, not copied into the subscription when it is made, so a config reload reaches existing subscriptions (R941's inheritance is otherwise unchanged).
 
 ## Feature: app-source-tree
 **Source:** specs/app-source-tree.md
@@ -3032,6 +3043,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 - **R1788:** `ark search --help` groups options by purpose: output format, scoring/analysis, and profiling. Filter stack syntax and examples appear above the grouped options.
 - **R1789:** Help text includes concrete examples showing bare terms, polarity toggles, mixed modes, and `-parse` usage.
+- **R3590:** `ark search -system` lifts the `system_exclude` fence for that one search. It is the only way past the fence, no filter-stack row or structural field implies it, and it leaves `search_exclude`'s behavior (R939, R940) unchanged.
 
 ## Feature: Embed Subcommands
 **Source:** specs/embed-subcommands.md
@@ -4321,6 +4333,8 @@ implementation, not a separate format break.
 - **R2645:** When a chunk has tags that carry non-empty values, the markdown stencil emits one sub-list item per such tag under the chunk: `- @chunk-tag-value: <name>: <value>`. `@chunk-tags` carries names only (comma-separated). `@chunk-tag-value` is a legal ark tag whose value is the literal `<name>: <value>` text; an agent splits on the first `": "` to recover the original tag's name and value. Sub-items appear in the same order as the names in `@chunk-tags`.
 - **R2646:** If the server is not running and `[embedding] model` is configured in `ark.toml` but the model file at `<arkDir>/<model>` is missing, the CLI exits non-zero with `error: configured embedding model not found at <PATH>`. Distinct from the "server not running; model configured" case (R2632), which assumes the file exists.
 - **R2647:** The recall substrate's chunk-similarity pipeline drops candidate chunks with no V records (tagless chunks) during scoring, since they cannot contribute tag information to downstream tag-shaped recall. The `RecallOpts.KeepTagless` field defaults to false (drop tagless); setting it to true retains tagless chunks. The CLI exposes this as `ark connections recall -all`; the Lua bridge exposes `keepTagless`. The filter happens during admission to the scoring map so the substrate's top-K contract is honored against tagged candidates only (no padding fog). The tag lookup performed for the filter is cached on the per-chunk accumulator and reused during result enrichment.
+- **R3591:** Recall never admits a chunk whose file matches `system_exclude`, on any leg (meaning, text trigram, tag axis, conversation funnel). The fence is applied where a hunt scope is (R3186, R3570): inside each leg's candidate retrieval before its cap, so a fenced chunk neither surfaces nor takes a leg's or a cell's slot.
+- **R3592:** Recall does not apply `search_exclude`; the conversation logs are memory recall exists to reach.
 
 ## Feature: Discussed Tags (Recall dedup)
 **Source:** specs/discussed-tags.md
@@ -4806,6 +4820,7 @@ reason.
 - **R3194:** A hunt's filter string **composes with** the `scope` word's own crank-handle mapping rather than replacing it — both are `-with -files` rows, which intersect, so `scope: code` plus `filter-files="~/work/ark/**"` means Go files under that tree. The seed applies the file globs but **not** the `scope` word (R3044 — a directive, not a search idea); that asymmetry is pre-existing and untouched. The file globs are the part of a hunt's scope made consistent across both enforcement points (R3192).
 - **R3190:** A scope is **opt-in per hunt and never inherited** — it lives on the watermark carrying it and nowhere else. Ambient recall does not read the `<BLOODHOUND>` tag and so cannot acquire a scope from it, leaving the standing rule that ambient recall must not filter by current-project scope untouched.
 - **R3576:** A hunt-metadata line (`scope:`, `depth:`, `want:`, `curate:`, `filter-files:`, `exclude-files:`) is dropped from the seed input wherever it sits in the payload, after the clue as well as before it (R3044); a paragraph left with no other text is not seeded. The task doc still carries the whole payload.
+- **R3593:** No hunt scope lifts the `system_exclude` fence: the seed applies it through R3591 whatever the watermark's `filter-files=` says, and the crank handle's ready-made filter string for the secretary never carries `-system`.
 
 
 ## Feature: Per-capability recall subscriptions (level decoupling)
