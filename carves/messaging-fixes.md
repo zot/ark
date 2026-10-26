@@ -21,6 +21,8 @@ Opened by Bill, 2026-10-22.
       Hook and skill-file edits, no skill. See Item 1.
 - [ ] **Item 2 — a body verb and a confirmation stanza.** **OPEN (#150.)** `/mini-spec`. See Item 2.
 - [ ] **Item 3 — sweep the trajectory for messaging stragglers.** **OPEN (#151.)** No skill. See Item 3.
+- [ ] **Item 4 — delegate messaging to Luhmann's pool when it is running.** **OPEN, not queued.**
+      Design not settled. See Item 4.
 
 ## Evidence
 
@@ -54,6 +56,14 @@ was told to run it again.
   server was down and bootstrap was deadlocked. The server had been up for 40
   minutes. It had read the guard's first-call denial as a fact about the world.
 - *2026-10-22, Frictionless.* The blocked-success report above.
+
+**Two older complaints, folded in here.** The roadmap carried two lines with
+no detail: the messenger "has a lot of trouble getting messages" and "often
+can't find responses". Neither records a symptom. Their likely causes are all
+accounted for: the Hermes bootstrap fetched a symlinked path ark did not index
+and got a 404 (fixed 2026-08-03), the guard's unexplained denials (Item 1), and
+the missing body verb (Item 2). Closed against those; if the complaint
+survives Items 1 and 2, it comes back here with a symptom attached.
 
 **What was tried before, so it is not re-proposed.** The prefix allowlist for
 `~/.ark/ark` (2026-04-22, after the guard blocked the CLI itself);
@@ -125,3 +135,39 @@ the cracks. Known starting points: a queue heading about delegating messaging
 to Luhmann when it is running, and a roadmap line saying the messenger "has a
 lot of trouble getting messages" with no detail. Done when every hit has been
 folded in or closed and its source replaced by the note.
+
+**Progress, 2026-10-26.** Swept the queue, the current-step notes, the roadmap,
+and the problem-shaped planning scratch. Folded in: the Luhmann heading (Item 4)
+and the two vague roadmap lines (Evidence). Closed, each checked against today's
+code:
+
+- the guard blocking `~/.ark/ark` itself: the prefix is allowlisted
+  (`hermes-guard.sh`);
+- `message inbox --project` not showing outgoing messages: it does, measured;
+- the inbox never reading `FileTagValues`: `readInboxFields` calls it;
+- `message inbox` swallowing the server's error: it goes through
+  `proxyOrLocal` now (R3398);
+- the messenger stuffing bodies into invented tags: stdin body support landed;
+- checking open messages at session start: the `/ark` bootstrap's messenger
+  sweep does it.
+
+Still to decide (Bill): two research ideas on the roadmap (a reality-check
+review of messaging, and a persona-versus-rules experiment for Hermes), a stray
+self-addressed request file in the planning scratch, and whether the
+bootstrap-fix note in the current-step notes becomes a pointer. The early
+messaging design notes were triaged by name and date, not read.
+
+## Item 4
+
+A known starting point from the queue (undated, before 2026-10-22). Make an
+`ark messenger` command for high-level messaging, and point the `/ark` skill's
+messaging section at it. When Luhmann is running, the command delegates to its
+agent pool; when it is not, it launches an agent and delegates. The recall
+agent (`ark-recall-agent.md`) learns messaging too.
+
+Unsettled, so recorded rather than designed: how this sits with
+the rule that ark never proactively starts Claude
+([managed-pty.md](../specs/managed-pty.md)) — "launch an agent" must be an explicit
+user action, never a fallback the CLI takes on its own — and whether Items 1
+and 2 shrink the need. A messenger that cannot misreport (Item 2's stanza) may
+make delegation a cost question rather than a correctness one.

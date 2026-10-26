@@ -27,7 +27,7 @@ Opened by Bill, 2026-10-22.
       reported so far. See Item 6.
   - [x] ~~**6.1 — pool-served hunts do not reach the emitting session.**~~ **LANDED (2026-10-22 — `#153`.)** Probably one defect with #106. See Item 6.
   - [x] ~~**6.2 — a stopped Luhmann session leaves its seat process running.**~~ **LANDED (2026-10-24 — `#163`.)**
-        **OPEN (not queued), NOT VERIFIED** beyond HollowRpg's report. See Item 6.
+        See Item 6.
   - [x] ~~**6.3 — a scoped hunt's seed is cut before its scope.**~~ **LANDED (2026-10-24 — `#159`.)**
         Measured 2026-10-24; not pool-specific, and not #107. All three legs cut inside the scope (the trigram leg through microfts2 70dbbcd). See Item 6.
   - [x] ~~**6.4 — the secretary loop quits while idle, and keepalives suggest
