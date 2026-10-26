@@ -172,6 +172,21 @@ read where 58 existed, nothing said. **For `design/` and `specs/` the rule is st
 remember** — the design-document readers do not report an unclosed run yet (gap `O22`); on
 `old-sdom` they did, after one unclosed run hid 78 of 115 gap entries for a day.
 
+### Backquote markdown specials — or the reader skips the line
+
+**Any glob, path, pattern or code expression holding `*`, `_` or `\` goes in backticks — not
+double quotes, not bare.** A quoted `"src/**"` begins with what the design-document reader
+takes for a `**Label:**` marker, a lone `*` pairs with a later one into italics, and a
+backslash path outside backticks does the same harm; the reader skips such a line without a
+word. Measured 2026-10-26 on ark's `design/test-Matcher.md`: 13 lines not read, every one of
+them a line like these, and none after backquoting. Leave bare what the tool parses as a
+value (`**Code:**`, `**Inject:**`, `**Refs:**`) and bold you meant. Inside backticks no
+escape processing happens, so a markdown-escaped `"file\\*name"` becomes `` `file\*name` ``.
+
+The only symptom today is a per-file count in `validate`'s "lines were not read" note, which
+names no line. When a count moves, find the line by bisecting variants of the file, not by
+guessing: the first guess on that file was wrong twice.
+
 ### Prose reaches the tool through a file — and the tool enforces it where it can
 
 **Every trajectory verb whose payload is prose takes a `--…-file` form**: `add-item

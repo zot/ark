@@ -2,7 +2,10 @@ package ark
 
 // CRC: crc-Matcher.md | Test: test-Matcher.md
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestMatchNameFormMatchesFileOnly(t *testing.T) {
 	m := &Matcher{Dotfiles: true}
@@ -176,10 +179,25 @@ func TestMatchGlobWildcards(t *testing.T) {
 	}
 }
 
+// R3632: off Windows only; there a backslash is a path separator.
 func TestMatchBackslashEscapes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows a backslash is a separator, not an escape (R3632)")
+	}
 	m := &Matcher{Dotfiles: true}
 	if !m.Match("file\\*name", "file*name", "", false) {
 		t.Error("\\* should match literal asterisk")
+	}
+}
+
+// R3632: the bracket form escapes a wildcard on every platform.
+func TestMatchBracketEscapes(t *testing.T) {
+	m := &Matcher{Dotfiles: true}
+	if !m.Match("file[*]name", "file*name", "", false) {
+		t.Error("[*] should match a literal asterisk")
+	}
+	if m.Match("file[*]name", "fileXname", "", false) {
+		t.Error("[*] should match only a literal asterisk")
 	}
 }
 

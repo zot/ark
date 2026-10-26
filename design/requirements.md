@@ -30,7 +30,10 @@
 - **R17:** `*` matches within a path component, `**` matches zero or more path components (must appear between separators or at pattern boundaries). Mid-pattern `**` without separators (e.g. `**.md`) acts as single `*` — use `**/*.md` for recursive matching.
 - **R18:** `*` and `**` match dotfiles by default (controlled by `dotfiles` config, default true)
 - **R19:** Standard glob wildcards (`?`, `[abc]`, `{alt1,alt2}`) are supported
-- **R20:** Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
+- **~~R20:~~** (Retired T295 — see R3632) Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
+- **R3632:** A literal wildcard character is written in bracket form (`[*]`, `[?]`, `[[]`) on every platform; off Windows a backslash also escapes one (`\*`). On Windows a backslash in a pattern is a path separator.
+- **R3633:** Glob matching runs on the slash form of both pattern and path (`filepath.ToSlash`, the identity off Windows), in `Matcher.Match` and in the librarian's embed-priority globs, so a pattern holding a separator, `**`, or a trailing `/` matches on Windows as it does elsewhere, whichever separator the pattern or path was written with.
+- **R3634:** A pattern starting with a volume (`C:/X`, `C:\X`) is filesystem-absolute, the same form as `/X`: matched against the file's absolute path.
 - **~~R21:~~** (Retired T48 — see R2133) Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
 - **R22:** `ark init` ships default excludes for `.git/`, `.env`, etc.
 - **R2954:** Explicit `ark add` of a single file with no `--strategy` resolves the chunking strategy from the file's enclosing source via `StrategyForFile` (per-source map over global, default `lines`), matching the directory-walk resolution — not the empty strategy passed straight to microfts2.

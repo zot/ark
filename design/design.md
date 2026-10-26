@@ -425,7 +425,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-BibleChunker.md → `biblechunker_test.go`
 - [x] test-VerseResolution.md → `verse_resolution_test.go`
 - [x] test-BibleRender.md → `bibleview_test.go`
-- [x] test-Matcher.md → `match_test.go`
+- [x] test-Matcher.md → `match_test.go`, `match_windows_test.go`
 - [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`, `search_nildb_test.go`
 - [x] test-ChatVoice.md → `chatvoice_test.go`
 - [x] test-Store.md → `store_test.go`
@@ -1295,3 +1295,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - A80: R3621 (Makefile theme-patch prepend step) — Makefile build infrastructure, not Go code (mirrors A11); verified 2026-10-26 by a bogus nosuch-patch.css failing the build and a rebuild leaving exactly one base-patch import at the head of base.css
 - T293: R1365 retired by R3622 (2026-10-26 ark-search rows are /content iframes (#168 doc check))
 - T294: R1373 retired by R3622 (2026-10-26 no renderTagSearchResults; rows are /content iframes (#168 doc check))
+- T295: R20 retired by R3632 (Windows: a backslash is a separator, so the escape is off-Windows only; bracket form escapes everywhere)

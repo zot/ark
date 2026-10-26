@@ -65,15 +65,25 @@ Wildcards:
 A `dotfiles` config preference controls whether `*` and `**`
 match dot-prefixed names — default true (match dotfiles), set to
 false for standard shell glob behavior.
-Backslash escapes literal wildcard characters (`\*`, `\?`, `\[`)
-for filenames that contain them.
+A literal wildcard character in a filename is written in bracket form
+(`[*]`, `[?]`, `[[]`), which works on every platform. Off Windows a
+backslash also escapes one (`\*`, `\?`, `\[`).
+
+**On Windows a backslash is a separator**, because that is what someone
+writing a Windows path means by it: `docs\*.md` and `docs/*.md` are the
+same pattern, and a path is matched the same way whichever separator it
+was written with. Matching runs on the slash form of both pattern and
+path, so every rule above, `**` and the trailing `/` among them, means
+the same thing on Windows as elsewhere. Measured 2026-10-26: before this,
+every pattern holding a separator failed on Windows, so a nested
+`node_modules/` or `.git/` from the default excludes was indexed.
 `ark init` ships with default excludes for `.git/`, `.env`, etc.
 
 ### Three anchoring forms
 
 | Form   | Meaning                                                                                                                                              |
 |--------|------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `/X`   | **Filesystem-absolute.** Matched against the file's absolute path on disk, whichever source it belongs to. Enables blanket rules such as `/tmp/**`.  |
+| `/X`   | **Filesystem-absolute.** Matched against the file's absolute path on disk, whichever source it belongs to. Enables blanket rules such as `/tmp/**`. On Windows a pattern that starts with a drive (`C:/X`, `C:\X`) is this form too. |
 | `./X`  | **Anchored to the contextual root.** After stripping `./`, the remainder matches against the path relative to that root.                              |
 | `X`    | **Relative to where you are standing.** What that means depends on the context below.                                                                 |
 
@@ -605,8 +615,9 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
 - `ark resolve [--dir <path>] <pattern>...`
   Dismiss unresolved files matching the given patterns (remove from
   unresolved list without adding a permanent rule). Patterns use the
-  same glob syntax as include/exclude. Backslash-escape literal
-  wildcard characters in filenames (`file\*name`).
+  same glob syntax as include/exclude. Write a literal wildcard
+  character in bracket form (`file[*]name`); off Windows a backslash
+  escape (`file\*name`) works too.
 
 ## HTTP API (over Unix domain socket)
 

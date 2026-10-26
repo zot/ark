@@ -72,8 +72,15 @@ func (m *Matcher) Classify(includes, excludes []string, absPath, sourceDir strin
 //
 // Trailing "/" on the pattern means directory-only.
 //
-// CRC: crc-Matcher.md | R16, R17, R18, R19, R20, R3196, R3198, R3199
+// Matching runs on the slash form of pattern and path (R3633): doublestar's
+// only separator is `/`, so a Windows path — and a pattern written the
+// Windows way — would otherwise be one long component that nothing with a
+// separator in it can match. ToSlash is the identity off Windows, which is
+// what keeps a backslash a glob escape there (R3632).
+//
+// CRC: crc-Matcher.md | R16, R17, R18, R19, R3196, R3198, R3199, R3632, R3633, R3634
 func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
+	pattern = filepath.ToSlash(pattern)
 	dirPattern := strings.HasSuffix(pattern, "/")
 	if dirPattern != isDir {
 		return false
@@ -90,8 +97,8 @@ func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 		if matchPath == "" {
 			return false
 		}
-	case strings.HasPrefix(pattern, "/"):
-		matchPath = absPath
+	case strings.HasPrefix(pattern, "/") || hasVolume(pattern): // R3634
+		matchPath = filepath.ToSlash(absPath)
 	default:
 		pattern = "**/" + pattern
 		matchPath = sourceRelative(absPath, sourceDir)
@@ -99,6 +106,7 @@ func (m *Matcher) Match(pattern, absPath, sourceDir string, isDir bool) bool {
 			return false
 		}
 	}
+	matchPath = filepath.ToSlash(matchPath) // R3633
 
 	matched, err := doublestar.Match(pattern, matchPath)
 	if err != nil || !matched {
@@ -172,6 +180,13 @@ func FilterPaths(paths []string, include, exclude []string) []string {
 // sourceDir is non-empty and absPath is under it. Falls back to
 // absPath when sourceDir is empty (ad-hoc Match callers). Returns
 // empty string when absPath is not under sourceDir.
+// hasVolume reports whether a slash-form pattern starts with a volume name
+// (`C:`, `\\server\share`), which makes it filesystem-absolute on Windows.
+// Always false elsewhere, where VolumeName is empty. R3634
+func hasVolume(pattern string) bool {
+	return filepath.VolumeName(filepath.FromSlash(pattern)) != ""
+}
+
 func sourceRelative(absPath, sourceDir string) string {
 	if sourceDir == "" {
 		return absPath

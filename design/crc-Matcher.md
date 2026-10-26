@@ -1,5 +1,5 @@
 # Matcher
-**Requirements:** R9, R10, R15, R16, R17, R18, R19, R20, R147, R3195, R3196, R3198, R3199
+**Requirements:** R9, R10, R15, R16, R17, R18, R19, R147, R3632, R3633, R3634, R3195, R3196, R3198, R3199
 
 Evaluates doublestar glob patterns against file paths with ark-level
 semantic modifiers (trailing `/` for directory-only). Stateless —
@@ -43,6 +43,14 @@ documented, not fixed (R3199).
 
 ## Knows
 - dotfiles: bool — whether * and ** match dotfiles
+
+**Separators (R3632–R3634).** Match converts pattern and path to slash form
+before matching (`filepath.ToSlash`, the identity off Windows), so on Windows a
+backslash is a separator and a drive-prefixed pattern is filesystem-absolute;
+off Windows a backslash stays a glob escape. A literal wildcard is written
+`[*]` on every platform. The librarian's embed-priority globs
+(`matchesAnyGlob`) are a second, older matcher outside this one; they take the
+same slash form.
 
 ## Does
 - Match(pattern, absPath, sourceDir, isDir): bool — does this

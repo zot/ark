@@ -271,14 +271,17 @@ and unknown items carry the negative marker rather than a false green.
         folding behind a create-time option, requested 2026-10-26. Then
         DECIDED (Bill, 2026-10-26): ark's half resolves case where paths
         enter, so ark's own path-keyed state needs no folding. See Item 8.
-  - [ ] **8.4 — the Matcher cannot match a Windows absolute path.** **OPEN
-        (not queued.)** Found by 8.3's tests, measured 2026-10-26 on the VM:
+  - [x] ~~**8.4 — the Matcher cannot match a Windows absolute path.**~~ **LANDED (2026-10-26 — `#173`.)** Found by 8.3's tests, measured 2026-10-26 on the VM:
         `Matcher.Match` of `C:\t172\src\CASEY.md` against itself is false,
         and so is the forward-slash spelling of the pattern. So on Windows
         `ark refresh <absolute path>` refreshes nothing, and any absolute path
         used as a pattern probably fails the same way. Likely `\` read as a
         glob escape; not yet traced. Path separators as data, 7.4's territory.
         `/mini-spec`. See Item 8.
+        Measured wider on pickup: on Windows every pattern holding a
+        separator failed, so a nested `node_modules/` or `.git/` from the
+        default excludes was indexed. Both matchers now work on the slash
+        form, and a drive-prefixed pattern is absolute.
 - **Item 7 — the audit past the grep seed.** **SPLIT (Bill, 2026-10-19.)**
       Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
@@ -289,7 +292,10 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**7.3 — the apps drop their shell-outs.**~~ **LANDED (2026-10-19 — `#144`.)**
   - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)** The Go-side
         audit: Unix-only `os/exec`, file modes, path separators as data,
-        case-insensitivity, CRLF. See Item 7.
+        case-insensitivity, CRLF. See Item 7. Its worklist exists now:
+        measured 2026-10-26 (8.4), the root package's own test suite fails
+        80 tests on Windows at 26e3f0b and 64 with 8.4, none of them new;
+        not yet sorted into tests that assume Unix and real defects.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

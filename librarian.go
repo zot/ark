@@ -555,9 +555,10 @@ func matchesAnyGlob(path string, patterns []string) bool {
 		if matched, _ := filepath.Match(pat, filepath.Base(path)); matched {
 			return true
 		}
-		// Also try matching against the full path for ** patterns
-		if strings.Contains(pat, "/") || strings.Contains(pat, "**") {
-			if matched, _ := doublestar.Match(pat, path); matched {
+		// Also try matching against the full path for ** patterns, in slash
+		// form so a Windows path has components to match (R3633).
+		if slashed := filepath.ToSlash(pat); strings.Contains(slashed, "/") || strings.Contains(slashed, "**") {
+			if matched, _ := doublestar.Match(slashed, filepath.ToSlash(path)); matched {
 				return true
 			}
 		}
