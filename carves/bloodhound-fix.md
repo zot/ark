@@ -21,8 +21,7 @@ Opened by Bill, 2026-10-22.
         See Item 2.
 - [x] ~~**Item 3 — a multi-paragraph watermark came back as one hunt.**~~ **LANDED (2026-10-22 — `#157`.)** See Item 3.
 - [x] ~~**Item 4 — a finding labels itself ambient recall.**~~ **LANDED (2026-10-22 — `#156`.)** See Item 4.
-- [ ] **Item 5 — nothing shows whether a watermark was recognized.** **OPEN
-      (not queued.)** Overlaps the observability carve. See Item 5.
+- [x] ~~**Item 5 — nothing shows whether a watermark was recognized.**~~ **LANDED (2026-10-26 — `#169`.)** Overlaps the observability carve. See Item 5.
 - **Item 6 — delegation through the Luhmann pool.** Split into the defects
       reported so far. See Item 6.
   - [x] ~~**6.1 — pool-served hunts do not reach the emitting session.**~~ **LANDED (2026-10-22 — `#153`.)** Probably one defect with #106. See Item 6.
@@ -239,6 +238,18 @@ for it either. HollowRpg reported the same blindness on 2026-10-20, for hunts
 routed to the Luhmann pool. The observability carve's hunt-path testbed
 ([observability.md](observability.md) Item 5) is the instrument. This part asks that it cover
 recognition, so that the first question in any lost hunt has an answer.
+
+*Narrowed and landed 2026-10-26 (Bill).* The testbed waits on observability's
+Items 1 and 2, so the part the server can already answer went in without it.
+Every watermark the watcher sees now leaves one log line at default verbosity:
+its session, hunt id, a short clue, and its route (the session's secretary,
+Luhmann's pool, not served with the reason, or dropped because the listener
+left before dispatch). A watermark in a session with no `listen` running is
+logged as seen with nobody listening, the likeliest lost hunt, and is still not
+recognized. What the log cannot show is a watermark the scan never matched,
+since there the evidence is an absence. That case stays with the observability
+testbed, which already carries HollowRpg's two watermarks that never got a hunt
+id.
 
 ## Item 6
 

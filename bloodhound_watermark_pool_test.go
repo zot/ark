@@ -585,3 +585,90 @@ func TestFixerTriggerIgnoresWatermarkBeforeItIsRecorded(t *testing.T) {
 			rec, pending, len(hub.queued))
 	}
 }
+
+// subscribeSecretaryWork stands in for a session secretary's `next` loop: a
+// subscriber on @ark-secretary-work=<session>, which secretaryPresent counts.
+func subscribeSecretaryWork(t *testing.T, db *DB, session string) {
+	t.Helper()
+	p, err := ParseMatchSyntax("ark-secretary-work=" + session)
+	if err != nil {
+		t.Fatalf("ParseMatchSyntax: %v", err)
+	}
+	db.pubsub.Subscribe("secretary-"+session, []*TagSub{{Kind: TagSubChunk, Predicate: p}})
+}
+
+// Every recognized watermark leaves one default-verbosity log line naming its
+// route, so a lost hunt and a slow one stop looking alike. Drives the real
+// dispatchBloodhound for each route.
+// Refs: R3623
+func TestDispatchLogsEveryWatermarkRoute(t *testing.T) {
+	const sess, bid = "sess-route", uint64(7)
+	req := bloodhoundReq{payload: "which chunker owns the voice tags? pointers"}
+	cases := []struct {
+		name      string
+		hub       *fakeLuhmannHub
+		listen    bool
+		secretary bool
+		wantRoute string
+	}{
+		{"own secretary", &fakeLuhmannHub{owner: ""}, true, true, routeSecretary},
+		{"pool", &fakeLuhmannHub{owner: "L"}, true, false, routePool},
+		{"not served", &fakeLuhmannHub{owner: ""}, true, false, routeNotServed + "no secretary"},
+		{"listener gone", &fakeLuhmannHub{owner: "L"}, false, false, routeListenerGone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir()) // the builder writes under ~/.ark/monitoring
+			lib, db := setupRecall(t) // the secretary route seeds through the librarian
+			if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
+				t.Fatalf("AddChunker(markdown): %v", err)
+			}
+			db.SetPubSub(NewPubSub(time.Minute, 32))
+			w := NewRecallWatcher(db, lib, nil, NewRecallAgentBuilder(db))
+			w.luhmann = tc.hub
+			if tc.listen {
+				subscribeFinding(t, w.db, sess)
+			}
+			if tc.secretary {
+				subscribeSecretaryWork(t, w.db, sess)
+			}
+			logs := captureCurationLog(t)
+			w.dispatchBloodhound(sess, bid, req)
+
+			want := "watermark session=" + sess + " B=7 clue=\"which chunker owns the voice tags? pointers\" route=" + tc.wantRoute
+			if n := strings.Count(logs.String(), "recall-watcher: watermark session="); n != 1 || !strings.Contains(logs.String(), want) {
+				t.Errorf("want exactly one route line containing %q; log:\n%s", want, logs.String())
+			}
+		})
+	}
+}
+
+// A watermark in a session nobody is listening to is logged as seen and not
+// recognized: no hunt id, no dispatch. An append with no watermark logs nothing.
+// Through OnAppend, so the gate's early return is what is under test.
+// Refs: R3624
+func TestUnheardWatermarkIsLoggedNotRecognized(t *testing.T) {
+	const sess = "sess-unheard"
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"<BLOODHOUND>did we discuss BM25? verdict</BLOODHOUND>"}]}}` + "\n"
+	db := newWatcherTestDB(RecallConfig{Enabled: true})
+	db.SetPubSub(NewPubSub(time.Minute, 32)) // real and empty: nobody is listening
+	w := NewRecallWatcher(db, nil, nil, nil)
+	logs := captureCurationLog(t)
+	path := "/p/" + sess + ".jsonl"
+
+	w.OnAppend(path, "chat-jsonl", []byte(`{"type":"assistant","message":{"content":"just chatting"}}`+"\n"), nil)
+	if logs.Len() != 0 {
+		t.Fatalf("an append without a watermark logged:\n%s", logs.String())
+	}
+	w.OnAppend(path, "chat-jsonl", []byte(line), nil)
+	got := logs.String()
+	if !strings.Contains(got, "session="+sess) || !strings.Contains(got, `clue="did we discuss BM25? verdict"`) || !strings.Contains(got, "no listener") {
+		t.Errorf("unheard watermark not logged with session and clue:\n%s", got)
+	}
+	if strings.Contains(got, "B=") {
+		t.Errorf("an unheard watermark must not get a hunt id:\n%s", got)
+	}
+	if n := len(w.bloodhoundCounters); n != 0 {
+		t.Errorf("logging allocated %d hunt counters; logging is not recognition", n)
+	}
+}

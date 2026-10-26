@@ -22,6 +22,10 @@ import (
 // opening tag's optional attribute run (parsed by parseBloodhoundAttrs), group
 // 2 the payload. The leading `\s` in group 1 is load-bearing: without it
 // `<BLOODHOUNDER>` would start matching. R2934, R3110, R3184
+// bloodhoundCloseTag is the watermark's closing tag; a cheap pre-check before
+// any transcript decode (R3624).
+const bloodhoundCloseTag = "</BLOODHOUND>"
+
 var bloodhoundRe = regexp.MustCompile(`(?s)<BLOODHOUND(\s[^>]*)?>(.*?)</BLOODHOUND>`)
 
 // bloodhoundAttrRe pulls one `name="value"` attribute out of the opening tag's
@@ -468,8 +472,11 @@ func (w *RecallWatcher) OnAppend(path, strategy string, newBytes []byte, added [
 	// state when the recall-result sub goes, which is the condition that actually
 	// means "stop accumulating".
 	// CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md#2.3 | R3279, R3294
-	if !w.bloodhoundEnabled(sessionID) && !w.ambientEnabled(sessionID) {
-		return
+	if !w.bloodhoundEnabled(sessionID) {
+		logUnheardWatermarks(sessionID, newBytes) // R3624
+		if !w.ambientEnabled(sessionID) {
+			return
+		}
 	}
 
 	w.mu.Lock()
@@ -794,7 +801,11 @@ const bloodhoundSeedK = 10
 // substrate filter and the secretary's ready-made filter string (R3185, R3189).
 // CRC: crc-RecallWatcher.md | Seq: seq-recall-watcher.md | R2937, R2947, R3006, R3007, R3185
 func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req bloodhoundReq) {
-	if w.builder == nil || !w.bloodhoundEnabled(sessionID) {
+	if w.builder == nil {
+		return
+	}
+	if !w.bloodhoundEnabled(sessionID) {
+		logWatermarkRoute(sessionID, bid, req.payload, routeListenerGone) // R3623
 		return
 	}
 	// R3280: server selection. The session's own secretary is preferred — it is
@@ -809,7 +820,9 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req blo
 		if err := w.enqueueWatermarkHunt(sessionID, bid, req); err != nil {
 			log.Printf("recall-watcher: watermark pool dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 			w.emitNotServed(sessionID, bid, req)
+			return
 		}
+		logWatermarkRoute(sessionID, bid, req.payload, routePool) // R3623
 		return
 	}
 	// Seed the hunt with the hypergraph-aware combined search (renderSeed):
@@ -822,7 +835,53 @@ func (w *RecallWatcher) dispatchBloodhound(sessionID string, bid uint64, req blo
 		log.Printf("recall-watcher: bloodhound dispatch failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
-	Logv(2, "recall-watcher: bloodhound dispatched session=%s B=%d", sessionID, bid)
+	logWatermarkRoute(sessionID, bid, req.payload, routeSecretary) // R3623
+}
+
+// Watermark routes, as the R3623 log line names them.
+const (
+	routeSecretary    = "session secretary"
+	routePool         = "Luhmann's pool"
+	routeListenerGone = "dropped: the listener left before dispatch"
+	routeNotServed    = "not served: "
+)
+
+// watermarkLogClueMax caps the clue echoed in a watermark log line: enough for
+// a reader to tell which watermark it was, short enough to keep one line.
+const watermarkLogClueMax = 60
+
+// logWatermarkRoute writes the one unconditional log line a recognized
+// watermark gets, naming where its hunt went. A lost hunt and a slow one are the
+// same silence to the session blocked on `listen`; this line is what tells them
+// apart. Watermarks are rare, so it is not behind -v.
+// CRC: crc-RecallWatcher.md | R3623
+func logWatermarkRoute(sessionID string, bid uint64, payload, route string) {
+	log.Printf("recall-watcher: watermark session=%s B=%d clue=%q route=%s",
+		sessionID, bid, logClue(payload), route)
+}
+
+// logUnheardWatermarks logs each watermark in newBytes for a session with no
+// bloodhound-result subscriber. Not recognition: no hunt id is issued and
+// nothing dispatches (R3279). The Contains check keeps an ordinary append from
+// paying for a transcript decode.
+// CRC: crc-RecallWatcher.md | R3624
+func logUnheardWatermarks(sessionID string, newBytes []byte) {
+	if !bytes.Contains(newBytes, []byte(bloodhoundCloseTag)) {
+		return
+	}
+	for _, req := range scanBloodhounds(newBytes) {
+		log.Printf("recall-watcher: watermark session=%s clue=%q seen with no listener; not recognized (start `ark bloodhound listen`)",
+			sessionID, logClue(req.payload))
+	}
+}
+
+// logClue is a watermark's clue cut to one short log-safe fragment.
+func logClue(payload string) string {
+	c := strings.Join(strings.Fields(clueOf(payload)), " ")
+	if r := []rune(c); len(r) > watermarkLogClueMax {
+		c = string(r[:watermarkLogClueMax]) + "…"
+	}
+	return c
 }
 
 // emitNotServed writes a `## Finding:` doc reporting that a recognized watermark
@@ -872,7 +931,7 @@ func (w *RecallWatcher) emitNotServedReason(sessionID string, bid uint64, clue, 
 		log.Printf("recall-watcher: not-served report failed session=%s B=%d: %v", sessionID, bid, err)
 		return
 	}
-	Logv(1, "recall-watcher: bloodhound not served session=%s B=%d (%s)", sessionID, bid, reason)
+	logWatermarkRoute(sessionID, bid, clue, routeNotServed+reason) // R3623
 }
 
 // renderBloodhoundSeed formats a Recall result as the `## Recall seed` block of

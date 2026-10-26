@@ -75,6 +75,27 @@ branch, independent of the turn-boundary arm/fire machinery:
 - The heavy step (writing the task doc) is posted to the watcher's jobs channel
   so `OnAppend` stays a fast line-scan on the indexer goroutine.
 
+### The log records every watermark's route
+
+A lost hunt and a slow one look the same from the session that asked: it is
+blocked on `listen` and hears nothing. So the server log carries one line for
+every watermark the watcher sees, at default verbosity, naming the session, the
+hunt id, and where the hunt went: the session's own secretary, Luhmann's pool,
+not served (with the reason), or dropped because the session's listener left
+between recognition and dispatch (Bill, 2026-10-26). Watermarks are rare, so the
+lines cost nothing a log reader would notice.
+
+A watermark that arrives while the session holds no bloodhound-result
+subscription is not recognized (above), and still gets a line saying it was seen
+with nobody listening. That is the likeliest way a hunt goes missing: a `listen`
+never started, or one that has exited. Logging it is not recognition. No hunt id
+is issued and nothing is dispatched.
+
+The log cannot show a watermark the scan never matched, malformed or written
+where the scan does not read, because there the evidence is an absence. The
+hunt-path view of [carves/observability.md](../carves/observability.md) (Item 5)
+is the instrument for that case.
+
 ## The bloodhound task doc (on the tube)
 
 For each recognized payload the watcher allocates a **bloodhound id** `<B>`

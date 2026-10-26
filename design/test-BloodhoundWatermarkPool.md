@@ -196,3 +196,36 @@ ever registered, across the four subscription combinations.
 `ambientEnabled` tracks the recall-result sub alone. Verified red by restoring
 the conjunct: the `recall only` and `both` cases fail.
 **Refs:** crc-RecallWatcher.md
+
+## Test: every watermark route is logged
+**Purpose:** R3623. A lost hunt and a slow one are the same silence to a session
+blocked on `listen`; one default-verbosity line per recognized watermark names
+where it went.
+**Input:** the real `dispatchBloodhound`, with a librarian-backed watcher and a
+builder (HOME pointed at a temp dir), over four routes: own secretary (both
+subs), pool (seated hub, no secretary), not served (no orchestrator), listener
+gone (no bloodhound-result sub at dispatch).
+**Expected:** exactly one `recall-watcher: watermark session=… B=7 clue="…"
+route=…` line per case, naming that case's route.
+**Refs:** crc-RecallWatcher.md
+**Code:** bloodhound_watermark_pool_test.go
+**Fire alarm:** drop the route line on the pool branch's success, the shape the
+silence had before; the `pool` case fails naming the missing line
+**Inject:** recall_watcher.go:dispatchBloodhound
+**Pulled:** 2026-10-26 — rang: without the pool line, the `pool` case fails "want exactly one route line containing … route=Luhmann's pool" with an empty log
+
+## Test: a watermark nobody hears is logged, not recognized
+**Purpose:** R3624. The likeliest lost hunt is a `listen` never started or
+already gone, and the gate used to return before anything looked.
+**Input:** `OnAppend` on a qualifying chat path, a real empty PubSub (the nil
+short-circuit would read as subscribed), first an assistant line with no
+watermark, then one with a watermark.
+**Expected:** nothing logged for the first; for the second, one line with the
+session, the clue, and "no listener", no `B=`, and no hunt counter allocated.
+**Refs:** crc-RecallWatcher.md, seq-recall-watcher.md
+**Code:** bloodhound_watermark_pool_test.go
+**Fire alarm:** restore the combined early return ahead of the log call, so a
+session with neither sub returns before looking; red reports the watermark not
+logged
+**Inject:** recall_watcher.go:OnAppend
+**Pulled:** 2026-10-26 — rang: the restored combined return fails "unheard watermark not logged with session and clue"

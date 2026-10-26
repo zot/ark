@@ -1,6 +1,6 @@
 # Sequence: Recall watcher turn-boundary flow (v2)
 
-**Requirements:** R2696, R2705, R2706, R2708, R2711, R2712, R2713,
+**Requirements:** R2696, R2705, R2706, R2708, R2711-2713, R3624
 R2729, R2730, R2731, R2732, R2733, R2734, R2735, R2736, R2739,
 R2740, R2741, R2746, R2747, R2748, R2753, R2754,
 R2806, R2867, R2868, R2869, R2898, R2901, R3009
@@ -35,11 +35,14 @@ is in `seq-recall-agent.md`.
          │
          ├── 2.2  sessionID = sessionFromJSONLPath(path)
          │
-         ├── 2.3  activation gate (R2867, R3279, R3294) — TWO INDEPENDENT
+         ├── 2.3  activation gate (R2867, R3279, R3294, R3624) — TWO INDEPENDENT
          │          gates, one per level; a session secretary is part of
          │          NEITHER, since both levels can be served by a pool:
          │            bloodhoundEnabled = SubscriberCount("ark-bloodhound-result", sessionID) > 0
          │            ambientEnabled    = SubscriberCount("ark-recall-result", sessionID) > 0
+         │          if !bloodhoundEnabled: logUnheardWatermarks — one log
+         │            line per watermark seen with no listener; no hunt id,
+         │            no dispatch (R3624)
          │          if !bloodhoundEnabled && !ambientEnabled:
          │            return   (nothing at all to produce; reactivates at
          │                      JSONL end, R2868)

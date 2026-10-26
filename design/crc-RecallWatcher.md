@@ -1,5 +1,5 @@
 # RecallWatcher
-**Requirements:** R2687-2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711-2715, R2728-2736, R2739-2741, R2746-2748, R2753, R2806, R2808, R2867-2869, R2893, R2898, R2901, R2934-2937, R2948, R3006, R3007, R3009, R3019, R3020, R3023-3025, R3030-3034, R3038, R3039, R3041-3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279-3283, R3293, R3294, R3296, R3298-3304, R3552, R3576
+**Requirements:** R2687-2690, R2692, R2693, R2695, R2696, R2698, R2705, R2706, R2708, R2711-2715, R2728-2736, R2739-2741, R2746-2748, R2753, R2806, R2808, R2867-2869, R2893, R2898, R2901, R2934-2937, R2948, R3006, R3007, R3009, R3019, R3020, R3023-3025, R3030-3034, R3038, R3039, R3041-3045, R3082, R3110, R3112, R3113, R3184, R3188, R3190, R3193, R3194, R3279-3283, R3293, R3294, R3296, R3298-3304, R3552, R3576, R3623, R3624
 
 Built-in subsystem of `ark serve` that watches Claude Code JSONL
 sources, detects turn boundaries via the `turn_duration` system
@@ -101,8 +101,11 @@ composes and writes each curation doc via the in-process
   subscribed (R3279); accumulate `pendingChunks` + arm the timer iff
   `ark-recall-result` is subscribed (R3294) — and a missing session
   secretary tears **nothing** down, because either capability can be
-  served by Luhmann's pool (R3280 directed, R3294 ambient). Return early
-  only when both subs are absent, i.e. nothing at all to produce. The
+  served by Luhmann's pool (R3280 directed, R3294 ambient). With no
+  bloodhound-result sub, `logUnheardWatermarks` first logs any watermark in
+  `newBytes` as seen with no listener — a `</BLOODHOUND>` Contains check before
+  any decode, and no hunt id or dispatch, so it is not recognition (R3624).
+  Return early only when both subs are absent, i.e. nothing at all to produce. The
   ambient bullets below run under the recall-result gate; bloodhound
   recognition under its own:
   - Append `addedChunkIDs` to `sessions[sid].pendingChunks`
@@ -162,7 +165,11 @@ composes and writes each curation doc via the in-process
   `ark-secretary-work=<S>` has a subscriber, else a free pool secretary routed
   through the Fixer's enhance-and-route path (R3023) — and if neither is
   available and the pool cannot grow, emits the **not-served finding** (R3282)
-  rather than returning silently. A pool-served hunt is raw: its return goes
+  rather than returning silently. Every outcome logs one default-verbosity
+  line through `logWatermarkRoute` — session, `B`, a short clue, and the route
+  (session secretary, Luhmann's pool, not served with its reason, or dropped
+  because the listener left before the backstop) — so a lost hunt is never the
+  same silence as a slow one (R3623). A pool-served hunt is raw: its return goes
   straight to `ark-bloodhound-result=<S>` with no Luhmann `next` push (R3281).
   Then **seeds the hunt** via `renderSeed` (R3006, R3007,
   R3043–R3045): `clueOf` extracts the **clue** from the payload — dropping every
