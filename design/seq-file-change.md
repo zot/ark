@@ -1,5 +1,5 @@
 # Sequence: File Change (fsnotify)
-**Requirements:** R348, R349, R350, R351, R352, R353, R354, R355, R356, R357, R358, R359, R387, R388, R389, R390, R391, R392, R393, R394, R395, R360, R361, R362, R363, R365, R366, R367, R368, R369, R3008
+**Requirements:** R348-363, R365-369, R387-395, R3008, R3625
 
 Covers fsnotify events on source directories, throttled on-notify,
 and append detection.
@@ -62,6 +62,12 @@ and append detection.
   │
   └── 1.5. max wait ceiling: if throttle has been active for N seconds
         without a re-index, force one regardless of events
+
+2. fsnotify error
+  │
+  ├── 2.1. log it
+  └── 2.2. if ErrEventOverflow (the OS dropped events): Server.reconcile()
+        — coalesced, so a run of overflows costs one scan (R3625)
 ```
 
 ## Append Detection (during refresh)

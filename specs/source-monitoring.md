@@ -240,6 +240,18 @@ between shutdown and startup is invisible. The startup reconciliation
 scan catches the gap. Watch first, then reconcile — so nothing falls
 between the cracks.
 
+### Dropped events reconcile
+
+The same gap opens while watching when the OS drops events. Each
+platform's change queue is bounded (Windows' `ReadDirectoryChangesW`
+buffer, Linux's inotify queue), and a burst such as a git checkout or a
+bulk edit can overflow it. fsnotify then reports an overflow error, and
+the events behind it are gone, so the files they named would stay stale
+with nothing but a log line to show it. An overflow therefore triggers
+the reconcile scan, which finds whatever changed the way the startup
+scan does (Bill, 2026-10-26). Reconciles coalesce, so a run of
+overflows costs one scan. Other watcher errors are logged as before.
+
 ## Phase C: Append Detection
 
 When a file's modtime changes, check whether the change was

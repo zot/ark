@@ -1,9 +1,13 @@
 package ark
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // TestIsWatchableDirMatchesScannerDescent is the Sleeping-Sentry guard for
@@ -136,5 +140,32 @@ func TestClassifyEventDivertsLinkPaths(t *testing.T) {
 	}
 	if _, cached := srv.ignoredPaths[plain]; !cached {
 		t.Errorf("%q was not cached — the negative cache stopped doing its job", plain)
+	}
+}
+
+// TestWatchOverflowReconciles: an overflow means the OS dropped change events,
+// so the watcher must re-scan rather than only log; any other watcher error
+// must not trigger a scan. The wrapped case pins errors.Is, so a backend that
+// wraps the sentinel still reconciles.
+// CRC: crc-Server.md | Seq: seq-file-change.md#2.2 | R3625
+func TestWatchOverflowReconciles(t *testing.T) {
+	captureCurationLog(t) // keep the watcher's log lines out of test output
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"overflow", fsnotify.ErrEventOverflow, 1},
+		{"wrapped overflow", fmt.Errorf("read changes: %w", fsnotify.ErrEventOverflow), 1},
+		{"other error", errors.New("access denied"), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			handleWatchError(tc.err, func() { calls++ })
+			if calls != tc.want {
+				t.Errorf("reconcile called %d times for %v, want %d", calls, tc.err, tc.want)
+			}
+		})
 	}
 }

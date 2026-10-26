@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Server.md | Seq: seq-file-change.md
 
 import (
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -207,7 +208,7 @@ func (srv *Server) watchLoop() {
 			if !ok {
 				return
 			}
-			log.Printf("watch: error: %v", err)
+			handleWatchError(err, srv.reconcile) // Seq: seq-file-change.md#2
 
 		case <-timerChan(configDebounce):
 			// Quiet period elapsed since the last ark.toml event —
@@ -388,4 +389,18 @@ func relevant(event fsnotify.Event) bool {
 		event.Has(fsnotify.Write) ||
 		event.Has(fsnotify.Remove) ||
 		event.Has(fsnotify.Rename)
+}
+
+// handleWatchError logs a watcher error. An overflow means the OS dropped the
+// change events behind it (Windows' ReadDirectoryChangesW buffer, Linux's
+// inotify queue), so the files they named would stay stale; reconcile re-scans
+// them the way the startup scan covers changes made while ark was down.
+// reconcile coalesces, so a run of overflows costs one scan.
+// CRC: crc-Server.md | Seq: seq-file-change.md#2.1, seq-file-change.md#2.2 | R3625
+func handleWatchError(err error, reconcile func()) {
+	log.Printf("watch: error: %v", err)
+	if errors.Is(err, fsnotify.ErrEventOverflow) {
+		log.Println("watch: events were dropped, reconciling")
+		reconcile()
+	}
 }

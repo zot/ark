@@ -658,6 +658,7 @@
 - **R356:** When a window expires with no events, the next notification triggers immediately again
 - **R357:** A maximum wait ceiling forces re-index regardless of incoming events, preventing event storms from starving the index
 - **R358:** Startup watches source directories before running reconciliation — so nothing changes unseen during the scan
+- **R3625:** A watcher overflow error (`fsnotify.ErrEventOverflow`: the OS dropped change events) triggers the coalesced reconcile, so files whose events were dropped are re-scanned rather than left stale. Other watcher errors are only logged.
 - **R359:** (inferred) fsnotify only sees changes while watching; startup scan catches changes between shutdown and boot
 
 ### Watcher Pattern Filtering

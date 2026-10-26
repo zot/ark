@@ -247,10 +247,27 @@ and unknown items carry the negative marker rather than a false green.
       cannot run a task from ssh, so it needs another way to start the server
       outside the session (Item 3 lists the candidates).
       See Item 12.
-- [ ] **Item 8 — filesystem change events under Windows.** **OPEN (not
-      queued.)** Not verified, and an independent track: the mechanism is
-      portable (fsnotify); conduct under Windows' quirks, and recovery from
-      dropped events, are unchecked.
+- **Item 8 — filesystem change events under Windows.** **SPLIT (Bill,
+      2026-10-26.)** An independent track: the mechanism is portable
+      (fsnotify); conduct under Windows' quirks, and recovery from dropped
+      events, are unchecked. See Item 8.
+  - [x] ~~**8.1 — an event overflow kicks a reconcile.**~~ **LANDED (2026-10-26 — `#170`.)**
+        `/mini-spec`, both platforms: `ErrEventOverflow` means events were
+        dropped, so the existing coalesced reconcile catches the gap instead
+        of a log line standing in for it. See Item 8.
+  - [x] ~~**8.2 — test on Windows.**~~ **LANDED (2026-10-26 — `#171`.)** On the VM: a forced
+        overflow (bulk create) is caught by 8.1's reconcile; an editor-style
+        atomic save; an event path cased differently from the indexed one; a
+        file another process holds open for write. Each is assessed or becomes
+        a part. Run 2026-10-26: three pass, the casing probe found 8.3. See
+        Item 8.
+  - [ ] **8.3 — a case-only rename leaves a phantom entry.** **OPEN (not
+        queued.)** Found by 8.2. `Casey.md` renamed to `CASEY.md` is indexed
+        under both names, both come back from search, and neither `missing`,
+        `refresh` nor `scan` drops the old one, because a stat of the old name
+        still succeeds on a case-insensitive filesystem. `/mini-spec`; touches
+        the "a file is its path" question [symlinks.md](symlinks.md) owns. See
+        Item 8.
 - **Item 7 — the audit past the grep seed.** **SPLIT (Bill, 2026-10-19.)**
       Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
@@ -1097,7 +1114,8 @@ What is unverified is conduct under Windows' particular quirks:
   are never re-indexed. Silent index staleness with one log line. The Unix
   buffer is larger and the throttle absorbs more, so this bites Windows first.
   The repair is small and helps both platforms: on overflow, kick the reconcile
-  scan that already exists rather than only logging.
+  scan that already exists rather than only logging. *Done 2026-10-26 (8.1,
+  R3625); the Windows overflow itself is 8.2's to force and watch.*
 - **Atomic-save ordering.** Windows editors save through a temp file plus
   `MoveFileEx` / `ReplaceFile`, and fsnotify reports a different
   Create/Rename/Write sequence than Linux does. `relevant()` accepts all four
@@ -1114,6 +1132,32 @@ What is unverified is conduct under Windows' particular quirks:
 
 The overflow-to-reconcile repair is the one concrete, cheap win here, and it is
 worth doing whatever the rest of the Windows verdict turns out to be.
+
+**Measured 2026-10-26 (8.2)** on `windows-gpu`, with the working-tree build
+carrying 8.1, a throwaway home (`C:\t171`, `init --no-setup`, no model), one
+source, and the server run as a task:
+
+- **Overflow: passes.** 10,000 `.md` files written in a tight loop (about 400
+  a second) overflowed the watch buffer three times within the first second's
+  events. Each overflow logged and kicked a reconcile, the reconciles
+  coalesced, and all 10,000 files were indexed; the last one written was found
+  by search. Without 8.1 the watcher would have indexed one file and logged.
+- **Atomic save: passes.** Both shapes Windows editors use, `ReplaceFile` and
+  a `MoveFileEx` replace (`move /y`), re-indexed the file to its new content
+  and dropped the old.
+- **Locked file: passes, through the close.** While another process held the
+  file open with no sharing, the event's read failed ("being used by another
+  process") and was logged. Closing the handle raised a fresh event and the
+  file re-indexed in full with its final content. The recovery leans on that
+  close-time event; a writer that never closes (a log held open for days)
+  would wait for its next event or reconcile, which is acceptable.
+- **Path casing: fails, 8.3.** A case-only rename leaves the old name indexed
+  beside the new one. The rename's old-name event re-stats `Casey.md`, which
+  the filesystem answers with `CASEY.md`'s content, so ark records it
+  unchanged and keeps it. `refresh` and `scan` keep it too.
+
+Aside, not Item 8: at startup `tags.md` hit "file already indexed — re-scanning
+once" and recovered on the retry.
 
 <a id="9"></a>
 

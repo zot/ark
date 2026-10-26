@@ -44,3 +44,17 @@ path then falls to the cache exactly as it does today, which is the state
 this requirement exists to change. Confirm red.
 **Inject:** watcher.go:classifyEvent
 **Refs:** crc-Server.md, seq-file-change.md#1.3.5, R3390
+
+## Test: an event overflow reconciles
+**Purpose:** R3625. An overflow means the OS dropped change events, so the
+files they named stay stale unless the watcher re-scans.
+**Input:** `handleWatchError` with `fsnotify.ErrEventOverflow`, the same
+sentinel wrapped by `fmt.Errorf("%w")`, and an unrelated error, each with a
+counting reconcile.
+**Expected:** one reconcile for each overflow case, none for the other error.
+**Refs:** crc-Server.md, seq-file-change.md
+**Code:** watch_coverage_test.go
+**Fire alarm:** go back to logging only (drop the reconcile call); both
+overflow cases fail "reconcile called 0 times … want 1"
+**Inject:** watcher.go:handleWatchError
+**Pulled:** 2026-10-26 — rang: with the call dropped, `overflow` fails "reconcile called 0 times for fsnotify: queue or buffer overflow, want 1" and `wrapped overflow` fails likewise
