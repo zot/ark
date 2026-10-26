@@ -261,13 +261,24 @@ and unknown items carry the negative marker rather than a false green.
         file another process holds open for write. Each is assessed or becomes
         a part. Run 2026-10-26: three pass, the casing probe found 8.3. See
         Item 8.
-  - [ ] **8.3 — a case-only rename leaves a phantom entry.** **OPEN (not
-        queued.)** Found by 8.2. `Casey.md` renamed to `CASEY.md` is indexed
+  - [x] ~~**8.3 — a case-only rename leaves a phantom entry.**~~ **LANDED (2026-10-26 — `#172`.)** Found by 8.2. `Casey.md` renamed to `CASEY.md` is indexed
         under both names, both come back from search, and neither `missing`,
         `refresh` nor `scan` drops the old one, because a stat of the old name
         still succeeds on a case-insensitive filesystem. `/mini-spec`; touches
-        the "a file is its path" question [symlinks.md](symlinks.md) owns. See
-        Item 8.
+        the "a file is its path" question [symlinks.md](symlinks.md) owns.
+        DECIDED (Bill, 2026-10-26): on Windows the index keys on the uppercased
+        path and keeps the real spelling for display; microfts2 does the
+        folding behind a create-time option, requested 2026-10-26. Then
+        DECIDED (Bill, 2026-10-26): ark's half resolves case where paths
+        enter, so ark's own path-keyed state needs no folding. See Item 8.
+  - [ ] **8.4 — the Matcher cannot match a Windows absolute path.** **OPEN
+        (not queued.)** Found by 8.3's tests, measured 2026-10-26 on the VM:
+        `Matcher.Match` of `C:\t172\src\CASEY.md` against itself is false,
+        and so is the forward-slash spelling of the pattern. So on Windows
+        `ark refresh <absolute path>` refreshes nothing, and any absolute path
+        used as a pattern probably fails the same way. Likely `\` read as a
+        glob escape; not yet traced. Path separators as data, 7.4's territory.
+        `/mini-spec`. See Item 8.
 - **Item 7 — the audit past the grep seed.** **SPLIT (Bill, 2026-10-19.)**
       Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
@@ -1155,6 +1166,51 @@ source, and the server run as a task:
   beside the new one. The rename's old-name event re-stats `Casey.md`, which
   the filesystem answers with `CASEY.md`'s content, so ark records it
   unchanged and keeps it. `refresh` and `scan` keep it too.
+
+**8.3's design (Bill, 2026-10-26).** On a database created with the new
+option, microfts2 computes every filename key from the whole path uppercased
+(`strings.ToUpper`, extension included), while `FRecord.Names` and the N value
+keep the spelling as written, so nothing displayed changes. The setting lives
+in an I record written at create, like `caseInsensitive` for content, and an
+absent record means off. A write that reaches a record through a differently
+cased path respells it, last spelling wins. microfts2 exports the fold so ark's
+own path-keyed state (`U` records, in-memory path sets, source-root prefix
+matching) folds the same way. ark sets the option when it creates a database on
+Windows; an existing Windows index keeps the old behaviour until rebuilt. This
+was preferred over resolving each path to its on-disk case (Go's Windows
+`EvalSymlinks` does that), which would cost a filesystem lookup per path.
+
+Requested of microfts2 by ark message, 2026-10-26, and landed there the same
+day (microfts2 a73b6b9).
+
+**ark's half (#172, 2026-10-26), decided by Bill: resolve case where paths
+enter.** Folding every place ark compares paths itself (source-root matching,
+the link table's prefixes, search filters, path-keyed records and caches) was
+the alternative, and was rejected: the Path identity theme already says a
+surface that skips resolution disagrees with every surface that does not, and
+ark already has the one place outside paths are resolved. So on Windows each
+outside path takes its on-disk spelling there (`DiskSpelling`: one
+`FindFirstFile` per component, never following a junction, stopping at a
+missing component or a glob character, since `FindFirstFile` expands
+wildcards), as do watcher events and source dirs, and a path is live only under
+its stored spelling. The database is created with microfts2's fold.
+
+Two things the first live run found, both fixed:
+
+- **The unchanged skip.** A case-only rename changes neither content nor
+  mtime, so the scan's skip for unchanged content kept the old spelling. The
+  skip now also requires the stored spelling to match. The same clause on the
+  refresh path was removed after its fire alarm could not ring: a same-bytes
+  rename is never stale, because microfts2 judges staleness by content.
+- **Stale paths come from the index.** A rename plus an edit is stale, and its
+  path arrives in the old spelling, so both refresh paths spell it as the disk
+  does first.
+
+Live on `windows-gpu` with the final build: after `Casey.md` → `CASEY.md` the
+index held one entry spelled `CASEY.md`, search returned that spelling, it
+survived a refresh and a scan, and `fetch c:\T172\SRC\casey.MD` found the
+file. Ten fire alarms pulled on the VM, all rang
+([test-FilenameCase.md](../design/test-FilenameCase.md)).
 
 Aside, not Item 8: at startup `tags.md` hit "file already indexed — re-scanning
 once" and recovered on the retry.

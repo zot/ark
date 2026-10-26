@@ -240,7 +240,9 @@ func NewLinkTable(cfg *Config) *LinkTable {
 func (lt *LinkTable) Observe(linkPath string) (*LinkEntry, LinkStatus) {
 	linkPath = filepath.Clean(ExpandTilde(linkPath))
 	target, resolved, hops, ok := followLinkChain(linkPath)
-	if !ok {
+	// R3629: a link renamed only in case still lstats under its old
+	// spelling; that spelling names no link any more.
+	if !ok || respelled(linkPath) {
 		lt.Remove(linkPath)
 		return nil, LinkUnresolvable
 	}
@@ -452,7 +454,9 @@ func (lt *LinkTable) Resolve(path string) string {
 // CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.2 | R3359, R3360, R3361, R3372, R3374, R3384, R3385
 func (lt *LinkTable) ResolveVia(path string) (resolved string, hops []string) {
 	snap := lt.load() // one picture for the whole walk
-	literal := filepath.Clean(ExpandTilde(path))
+	// R3627: spelled as the disk spells it before any rewrite, so every
+	// surface resolving through here agrees on one spelling per file.
+	literal := DiskSpelling(filepath.Clean(ExpandTilde(path)))
 	p := literal
 	seen := make(map[string]bool, 4)
 	for i := 0; i < maxLinkRewrites; i++ {

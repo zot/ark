@@ -5416,3 +5416,13 @@ reason.
 **Source:** specs/ark-search.md
 
 - **R3622:** `<ark-search>` renders each result chunk as a lazily loaded iframe of `/content/PATH?range=RANGE&edit=true&toggle=false&tag-overview=collapsed` with the `highlight=` params (R1459), faded in on `ark-content-ready` (R1465); the element has no chunk renderer of its own and does not use SearchChunk's `preview` HTML.
+
+## Feature: Filename case
+**Source:** specs/filename-case.md
+
+- **R3626:** `DiskSpelling(path)` rewrites a path to its on-disk spelling, component by component, on Windows; it stops at the first component that does not exist or that holds a glob character (`*`, `?`, `[`) and keeps the rest as written. On every other platform it returns the path unchanged.
+- **R3627:** Link resolution (`LinkTable.ResolveVia`, through which CLI arguments, `@ext` targets, content URLs and search-filter prefixes are resolved) applies `DiskSpelling` before any link rewrite, so every resolved outside path is in on-disk spelling.
+- **R3628:** Watcher event paths and each `[[source]].dir` (at config load) are rewritten with `DiskSpelling`, since neither passes through link resolution and every scanned or watched path descends from them.
+- **R3629:** A path is live only under its stored spelling: an unresolved-file record or a directory link whose stored spelling differs from `DiskSpelling` of it is treated as vanished and dropped the way a missing file is.
+- **R3630:** A database ark creates on Windows sets microfts2's `CaseInsensitiveFilenames`, so a case-only rename reaches the same file record and respells it. Fixed at creation; an older Windows index keeps the old behaviour until rebuilt.
+- **R3631:** The scan actor's unchanged-content skip (the path watcher events and reconciles take) applies only when the committed record's stored spelling equals the path being indexed; a file whose spelling changed is re-indexed, so a case-only rename, which changes neither content nor mtime, still stores its new spelling. A stale file's path, which comes from the index in its stored spelling, is rewritten with `DiskSpelling` where the two refresh paths take it (`RefreshStale`, before its pattern match, and `RefreshAsync`), so a pattern naming the current spelling matches and the refresh stores it.

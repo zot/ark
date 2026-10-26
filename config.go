@@ -801,7 +801,7 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.Schedule.Tag[k] = tc
 	}
 	for i := range cfg.Sources {
-		cfg.Sources[i].Dir = ExpandTilde(cfg.Sources[i].Dir)
+		cfg.Sources[i].Dir = DiskSpelling(ExpandTilde(cfg.Sources[i].Dir)) // R3628
 		cfg.Sources[i].Include.Replace = ExpandTildeSlice(cfg.Sources[i].Include.Replace)
 		cfg.Sources[i].Include.Add = ExpandTildeSlice(cfg.Sources[i].Include.Add)
 		cfg.Sources[i].Exclude.Replace = ExpandTildeSlice(cfg.Sources[i].Exclude.Replace)

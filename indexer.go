@@ -1261,7 +1261,18 @@ func (idx *Indexer) storeContentUnchanged(prep *scanPrep) bool {
 	if err != nil {
 		return false
 	}
-	return contentUnchangedForStore(prep.isAppend, info.FileLength, info.ContentHash, prep.fileSize, prep.fullHash)
+	return contentUnchangedForStore(prep.isAppend, info.FileLength, info.ContentHash, prep.fileSize, prep.fullHash) &&
+		spelledAsStored(info, prep.path) // R3631
+}
+
+// spelledAsStored reports whether the committed record already spells the file
+// as path does. A case-only rename changes neither content nor mtime, so an
+// unchanged-content skip would otherwise keep the old spelling forever; when
+// the spelling differs the file re-indexes, which stores the new one and keeps
+// unchanged chunks' ids.
+// CRC: crc-FilenameCase.md | R3631
+func spelledAsStored(info microfts2.FRecord, path string) bool {
+	return len(info.Names) == 0 || info.Names[0] == path
 }
 
 // storeScan applies a prepared scan on the write slot: the length+hash
@@ -1530,6 +1541,10 @@ func (idx *Indexer) RefreshStale(patterns []string, matcher *Matcher) ([]microft
 		if s.Status != "stale" {
 			continue
 		}
+		// R3631: a stale path comes from the index in its stored spelling; spell
+		// it as the disk does, so a pattern naming the current spelling matches
+		// and the refresh stores that spelling.
+		s.Path = DiskSpelling(s.Path)
 		if len(patterns) > 0 {
 			matched := false
 			for _, p := range patterns {

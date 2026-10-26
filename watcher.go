@@ -128,6 +128,9 @@ func (srv *Server) watchLoop() {
 			if !relevant(event) {
 				continue
 			}
+			// R3628: one spelling per file from here on, so an event for a
+			// case-renamed file's old name indexes the name it has now.
+			event.Name = DiskSpelling(event.Name)
 
 			// New directory created — add a watch for it.
 			//

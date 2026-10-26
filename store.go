@@ -483,7 +483,7 @@ func unresolvedIsLive(rec UnresolvedRecord) bool {
 			// Written before the field was persisted; fall back to the
 			// path test rather than dropping a record we cannot judge.
 			_, err := os.Stat(rec.Path)
-			return !os.IsNotExist(err)
+			return !os.IsNotExist(err) && !respelled(rec.Path) // R3629
 		}
 		resolved, err := filepath.EvalSymlinks(rec.Symlink)
 		if err != nil {
@@ -491,8 +491,10 @@ func unresolvedIsLive(rec UnresolvedRecord) bool {
 		}
 		return filepath.Clean(resolved) == filepath.Clean(rec.Path)
 	}
+	// R3629: on a case-insensitive filesystem a renamed file's old spelling
+	// still stats, so existence alone would keep its record forever.
 	_, err := os.Stat(rec.Path)
-	return !os.IsNotExist(err)
+	return !os.IsNotExist(err) && !respelled(rec.Path)
 }
 
 // DismissByPattern removes missing records where the path matches any pattern.

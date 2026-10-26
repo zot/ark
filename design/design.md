@@ -232,6 +232,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-LinkTable.md → `links.go`
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
 - [x] crc-FileScanActor.md → `db.go`, `indexer.go`
+- [x] crc-FilenameCase.md → `pathcase.go`, `pathcase_windows.go`, `pathcase_other.go`, `links.go`, `watcher.go`, `config.go`, `store.go`, `db.go`, `indexer.go`
 - [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
@@ -478,6 +479,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
+- [x] test-FilenameCase.md → `pathcase_test.go`, `pathcase_windows_test.go`
 - [x] test-StatusDBLabels.md → `status_db_labels_test.go`
 - [ ] test-RecallWatcher.md → `recall_watcher_test.go`
 - [x] test-AmbientRouting.md → `ambient_routing_test.go`

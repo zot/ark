@@ -194,9 +194,12 @@ func Init(dbPath string, opts InitOpts) error {
 	// MaxDBs/MapSize ceiling, so those Options fields are gone (R2978).
 	// R31/R33: microfts2 is created with character set, case-insensitivity, and
 	// aliases; these are fixed at Create and immutable thereafter.
+	// R3630: on Windows two spellings of a path are one file, so the index
+	// keys on a folded path and keeps the spelling given.
 	ftsOpts := microfts2.Options{
-		CaseInsensitive: opts.CaseInsensitive,
-		Aliases:         aliases,
+		CaseInsensitive:          opts.CaseInsensitive,
+		Aliases:                  aliases,
+		CaseInsensitiveFilenames: foldFilenames,
 	}
 	fts, err := microfts2.Create(IndexPath(dbPath), ftsOpts)
 	if err != nil {
@@ -1794,7 +1797,7 @@ func (db *DB) RefreshAsync() error {
 
 	// R3419: each stale file is its own scan — compute off-slot, store on-slot.
 	for _, s := range stale {
-		db.startFileScan(db.indexer, s.Path)
+		db.startFileScan(db.indexer, DiskSpelling(s.Path)) // R3631: stored spelling in, disk spelling out
 	}
 	return nil
 }

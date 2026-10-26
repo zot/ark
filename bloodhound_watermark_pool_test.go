@@ -619,7 +619,7 @@ func TestDispatchLogsEveryWatermarkRoute(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir()) // the builder writes under ~/.ark/monitoring
-			lib, db := setupRecall(t) // the secretary route seeds through the librarian
+			lib, db := setupRecall(t)     // the secretary route seeds through the librarian
 			if err := db.fts.AddChunker("markdown", microfts2.MarkdownChunker{}); err != nil {
 				t.Fatalf("AddChunker(markdown): %v", err)
 			}
