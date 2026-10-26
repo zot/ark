@@ -142,3 +142,47 @@ conversation without shelling out: the session list and the rendered markdown
 are both available in-process. The Lua surface is recorded in
 [lua-api.md](lua-api.md); the rendering behavior is this spec's, and both
 clients (CLI and UI) render through the same code so their output cannot drift.
+
+## Voices in rendered chat chunks
+
+A chat chunk carries three voices (see the voice tags in
+[indexing.md](indexing.md)): thinking, narration, and the plain text that was
+actually said. Every place ark turns a chat chunk into HTML shows which voice
+each part is in: the content view and its ranged form (which the chats view,
+the forge, and `<ark-search>` rows all show), and the rendered preview that
+grouped search and tag results carry. All of them render through one function,
+so no surface can disagree with another.
+
+**Segments.** The chunk text is split into voice segments before any markdown
+is rendered. A tag counts only where the chunker writes one: `<thinking>` or
+`<narration>` at the start of a line opens a segment, and the matching close tag
+at the end of a line ends it. Text between voiced segments is a plain segment. A
+tag anywhere else, such as a conversation quoting one mid-sentence, is ordinary
+text. An open tag with no close runs to the end of the chunk. The tags never
+reach the page.
+
+**Each segment is rendered on its own**, as markdown, and wrapped in an element
+ark emits: `<div class="ark-voice ark-voice-thinking">`, `ark-voice-narration`,
+or `ark-voice-text`. Rendering per segment is what keeps the voices apart: a
+segment that opens with a list or heading renders as one, and markdown cannot
+carry one voice's text into the next (a thinking block ending in a list would
+otherwise swallow the plain line after it). Stored text still never reaches the
+page as markup; the only HTML added is ark's own.
+
+**Icons mark a change of voice**: 🧠 for thinking, 🗣️ for plain text, 👓 for
+narration (Bill, 2026-10-25/26). The first segment of a chunk carries its icon,
+and so does every segment whose voice differs from the one before it; a run of
+segments in the same voice shows the icon only on the first (Bill, 2026-10-26).
+Ark marks where an icon belongs with an empty
+`<span class="ark-voice-icon" aria-hidden="true">` at the start of the segment;
+the glyph itself comes from CSS, as the span's `::before` `content`, keyed by the
+segment's voice class, so a skin can change the icons without touching Go (Bill,
+2026-10-26). The rules live in `install/html/ark-content.css`,
+which ark's theme patch imports at the head of the bundled `base.css` (see
+[bundle-assets.md](bundle-assets.md)), so every page that links the themes
+loads them, the content view's iframes and the shell alike; a theme can
+override them in its own sheet (Bill, 2026-10-26). A page without the rules shows no icon, and nothing else
+changes.
+
+Grouped search and tag previews render a chat chunk this way, as markdown,
+rather than as escaped pre-formatted text.

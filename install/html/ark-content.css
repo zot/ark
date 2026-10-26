@@ -1,0 +1,12 @@
+/* ark's own rules for content it renders, loaded by every page through the
+   @import that theme-patches/base-patch.css puts at the head of base.css
+   (specs/bundle-assets.md). A theme overrides these in its own sheet. */
+
+/* CRC: crc-ChatVoice.md | R3618 */
+.ark-voice-icon {
+  float: left;
+  margin-right: 0.4em;
+}
+.ark-voice-thinking > .ark-voice-icon::before { content: "🧠"; }
+.ark-voice-text > .ark-voice-icon::before { content: "🗣️"; }
+.ark-voice-narration > .ark-voice-icon::before { content: "👓"; }

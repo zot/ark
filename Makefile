@@ -124,6 +124,7 @@ CACHE_AGENT_SRC := $(foreach a,$(CACHE_AGENTS),.claude/agents/$(a).md)
 CACHE_SRC := \
 	$(shell find apps/ark -type f 2>/dev/null) \
 	$(shell find install -type f 2>/dev/null) \
+	$(wildcard theme-patches/*-patch.css) \
 	$(CACHE_SKILL_SRC) \
 	$(CACHE_AGENT_SRC) \
 	$(wildcard markdown-editor/dist/*) \
@@ -158,6 +159,14 @@ $(CACHE_DIR)/.cached: $(FRICTIONLESS_BIN) $(CACHE_SRC)
 	@if [ -d tag-overview/dist ]; then cp tag-overview/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d luhmann-terminal/dist ]; then cp luhmann-terminal/dist/* $(CACHE_DIR)/html/; fi
 	@if [ -d install/html ]; then cp install/html/* $(CACHE_DIR)/html/; fi
+	@# R3621: prepend each theme-patches/THEME-patch.css to the bundled theme
+	@# (an @import must lead its sheet); a patch for a theme the bundle lacks
+	@# fails the build (specs/bundle-assets.md).
+	@for p in $(wildcard theme-patches/*-patch.css); do \
+		t=$(CACHE_DIR)/html/themes/$$(basename $$p -patch.css).css; \
+		[ -f $$t ] || { echo "theme patch $$p: no $$t" >&2; exit 1; }; \
+		cat $$p $$t > $$t.patched && mv $$t.patched $$t; \
+	done
 	@# R3520: the bundle ships no symlinks; setup activates apps itself
 	@# (crc-CLI.md, specs/bundle-assets.md). ark bundle refuses any left.
 	@find $(CACHE_DIR) -type l -delete

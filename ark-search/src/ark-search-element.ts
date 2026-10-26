@@ -1,5 +1,5 @@
 // CRC: crc-ArkSearchElement.md | Seq: seq-tag-click.md
-// R1356-R1367, R1372, R1373, R1377, R1386-R1394, R1406-R1422, R1433-R1436, R1438-R1453
+// R1356-R1367, R1372, R1377, R1386-R1394, R1406-R1422, R1433-R1436, R1438-R1453
 
 import type {
   SearchAPI,
@@ -1328,7 +1328,7 @@ export class ArkSearchElement extends HTMLElement {
       const chunkEl = document.createElement("div");
       chunkEl.className = "ark-tag-search-chunk";
 
-      // Iframe preview: /content/ with range, edit, toggle, highlight params
+      // R3622: iframe preview, /content/ with range, edit, toggle, highlight params
       const params = new URLSearchParams();
       if (chunk.range) params.set("range", chunk.range);
       params.set("edit", "true");

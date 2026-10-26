@@ -1,0 +1,5 @@
+/* ark theme patch, prepended to the bundled base.css by ark's Makefile
+   (specs/bundle-assets.md). An @import must lead its sheet, so this file holds
+   imports only. */
+/* CRC: crc-ChatVoice.md | R3621 */
+@import url("/ark-content.css");

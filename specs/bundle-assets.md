@@ -86,8 +86,19 @@ The build pipeline layers assets from three sources:
 3. Layer ark's own assets (apps/ark/) on top, then delete every symlink
    from the cache (the frictionless image ships activation links; ark makes
    its own at install time)
-4. Build the ark Go binary
-5. Use `ark bundle` to graft the cache onto the binary
+4. Patch the bundled themes: each `theme-patches/THEME-patch.css` is
+   prepended to the cache's `html/themes/THEME.css`, so ark can reach every
+   page through the theme links it already loads (every page links all the
+   theme files, `base.css` included) without forking Frictionless's themes. A
+   patch is prepended because it carries `@import`s, which CSS honors only at
+   the head of a sheet; so a patch holds imports only, never rules, which would
+   void a theme's own leading `@import` of its fonts. `base-patch.css` imports
+   `/ark-content.css` (from `install/html/`, served at the html root rather than
+   under `themes/`, where Frictionless would list it as a theme), which holds
+   ark's rules. A patch naming a theme the cache does not have fails the build
+   rather than being skipped (Bill, 2026-10-26).
+5. Build the ark Go binary
+6. Use `ark bundle` to graft the cache onto the binary
 
 This produces one binary that contains the full UI stack.
 

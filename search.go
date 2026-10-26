@@ -2531,12 +2531,12 @@ func (s *Searcher) groupResults(results []SearchResultEntry, tokenPatterns []*re
 }
 
 // RenderPreview renders chunk text as HTML for app display.
-// Strategy determines the renderer: goldmark for markdown,
-// JSON pretty-print for JSON (under a length threshold),
+// Strategy determines the renderer: goldmark for markdown, goldmark per voice
+// segment for chat-jsonl (R3620), JSON pretty-print for JSON (under a length threshold),
 // <pdf-chunk> element for PDF chunks with a rect attribute,
 // plain text with HTML escaping otherwise.
 // Query tokens are highlighted with <mark> tags in text formats.
-// CRC: crc-Searcher.md | R1703-R1708
+// CRC: crc-Searcher.md | R1703-R1708, R3620
 func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []microfts2.Pair, path string, pdfZoom float64) string {
 	if strategy == "pdf" {
 		if html, ok := renderPdfPreview(attrs, path, pdfZoom); ok {
@@ -2547,12 +2547,9 @@ func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []mic
 	var rendered string
 	switch strategy {
 	case "markdown":
-		var buf bytes.Buffer
-		if err := goldmark.Convert([]byte(text), &buf); err == nil {
-			rendered = buf.String()
-		} else {
-			rendered = preEscaped(text)
-		}
+		rendered = previewMarkdown([]byte(text))
+	case "chat-jsonl":
+		rendered = renderChatVoices(text, previewMarkdown) // R3620
 	default:
 		if len(text) < 4096 && looksLikeJSON(text) {
 			var out bytes.Buffer
@@ -2566,6 +2563,16 @@ func RenderPreview(text, strategy string, patterns []*regexp.Regexp, attrs []mic
 		}
 	}
 	return highlightTokens(rendered, patterns)
+}
+
+// previewMarkdown renders markdown for a preview, escaped as plain text if
+// goldmark fails.
+func previewMarkdown(src []byte) string {
+	var buf bytes.Buffer
+	if err := goldmark.Convert(src, &buf); err != nil {
+		return preEscaped(string(src))
+	}
+	return buf.String()
 }
 
 // renderPdfPreview emits a <pdf-chunk> element with <ark-tag> children

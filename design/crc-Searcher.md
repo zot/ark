@@ -1,5 +1,5 @@
 # Searcher
-**Requirements:** R46-60, R108-116, R183-186, R188-190, R192, R193, R215-228, R372-375, R403-409, R512-516, R572, R574-578, R585-589, R593-604, R652, R653, R672, R673, R683, R684, R697-700, R738, R744-747, R750, R939, R940, R950, R1094-1097, R1139-1141, R1230, R1395-1401, R1470, R1471, R1703-1708, R1783-1785, R1787, R1867-1872, R1915-1918, R1921, R1922, R1932-1935, R1939, R2128, R2433, R2434, R2453-2456, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3359, R3362, R3377, R3400-3402, R3571, R3573, R3584, R3587, R3590
+**Requirements:** R46-60, R108-116, R183-186, R188-190, R192, R193, R215-228, R372-375, R403-409, R512-516, R572, R574-578, R585-589, R593-604, R652, R653, R672, R673, R683, R684, R697-700, R738, R744-747, R750, R939, R940, R950, R1094-1097, R1139-1141, R1230, R1395-1401, R1470, R1471, R1703-1708, R1783-1785, R1787, R1867-1872, R1915-1918, R1921, R1922, R1932-1935, R1939, R2128, R2433, R2434, R2453-2456, R2951, R2959, R3163, R3192, R3193, R3195, R3197, R3359, R3362, R3377, R3400-3402, R3571, R3573, R3584, R3587, R3590, R3620
 
 Queries one or both engines and merges or intersects results.
 Optionally retrieves chunk text or full file content.
@@ -111,7 +111,8 @@ Optionally retrieves chunk text or full file content.
   opts.Regex[0] when mode extraction clears the query string.
 - RenderPreview(chunk, strategy, queryTokens): render chunk text as
   HTML for app display. Strategy determines renderer: goldmark for
-  markdown, JSON pretty-print for JSON (under length threshold),
+  markdown, ChatVoice's voice segments (goldmark per segment) for
+  chat-jsonl (R3620), JSON pretty-print for JSON (under length threshold),
   plain text with HTML escaping otherwise. Query tokens highlighted
   with <mark> tags in all formats.
   The `pdf` strategy emits a `<pdf-chunk>` element wrapping one
@@ -300,6 +301,7 @@ Optionally retrieves chunk text or full file content.
 - Store: the tag index (TagFiles queries for tag-based filtering, MatchTagNames/MatchTagValues for contains-tokens), file centroid (EF) reads (R1921)
 - Indexer: re-index stale files during consistent search
 - goldmark: markdown → HTML rendering for previews
+- ChatVoice: RenderPreview renders chat-jsonl by voice segment (R3620)
 
 ## Sequences
 - seq-search.md

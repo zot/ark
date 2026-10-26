@@ -236,6 +236,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`, `embed_debounce.go`
+- [x] crc-ChatVoice.md → `chatvoice.go`, `install/html/ark-content.css`, `theme-patches/base-patch.css`
 - [x] crc-HTTPOperation.md → `httpop.go`
 - [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/bundlecheck.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
@@ -425,6 +426,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-BibleRender.md → `bibleview_test.go`
 - [x] test-Matcher.md → `match_test.go`
 - [x] test-Searcher.md → `search_test.go`, `search_tag_funnel_test.go`, `search_nildb_test.go`
+- [x] test-ChatVoice.md → `chatvoice_test.go`
 - [x] test-Store.md → `store_test.go`
 - [x] test-Unresolved.md → `store_test.go`, `cmd/ark/main_test.go`
 - [x] test-Tags.md → `indexer_test.go`, `store_test.go`, `ext_test.go`, `ext_insert_test.go`
@@ -1288,3 +1290,6 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T292: R3596 retired by R3609 (2026-10-25 voice tags: chat chunker version 2)
 - [ ] O238: The scan slot's hand-off (R3612) has no automated alarm on its wiring: prepareFileScan's handedOff release and finishFileScan's deferred release in the store closure need the DB-actor harness O236 names. runScanBounded's hold and once-guard are tested (test-FileScanActor.md). Verified live through the scans: status line (memory-release.md).
 - [ ] O239: ark files --status holds the DB actor for seconds: a CPU profile on 2026-10-25 showed handleFilesStatus → ChunkSizes → microfts2 ChunkContentLens at 4.0 s of a 10 s sample, run as one Sync closure, so every other actor client waits behind it. A second profile that evening, with no `files --status` run by hand, showed the same path at 5.2 s of a 30 s sample, so a client (likely the UI) calls it on its own. It should read off the actor through an operation object (specs/architecture.md).
+- A80: R3621 (Makefile theme-patch prepend step) — Makefile build infrastructure, not Go code (mirrors A11); verified 2026-10-26 by a bogus nosuch-patch.css failing the build and a rebuild leaving exactly one base-patch import at the head of base.css
+- T293: R1365 retired by R3622 (2026-10-26 ark-search rows are /content iframes (#168 doc check))
+- T294: R1373 retired by R3622 (2026-10-26 no renderTagSearchResults; rows are /content iframes (#168 doc check))

@@ -5006,7 +5006,8 @@ func (cr *contentRender) servePlain(w http.ResponseWriter) {
 // CRC: crc-Server.md | R1505-R1506, R1509-R1512, R2065, R2073, R2079
 func (cr *contentRender) chunkedBody(chunks []microfts2.ChunkResult) string {
 	// R1505-R1506: JSONL chunks are markdown (human/AI conversation);
-	// render through goldmark. Other strategies stay pre-wrapped.
+	// render through goldmark by voice segment (R3619). Other strategies stay
+	// pre-wrapped.
 	useMarkdown := cr.strategy == "chat-jsonl"
 	// R2065, R2073, R2079: chunkIDs for per-chunk ext-routing lookup.
 	chunkIDs := cr.rdb.ChunkIDsForPath(cr.path)
@@ -5024,7 +5025,7 @@ func (cr *contentRender) chunkedBody(chunks []microfts2.ChunkResult) string {
 		}
 		var rendered string
 		if useMarkdown {
-			rendered = wrapTagElements(renderMarkdownForContent([]byte(ch.Content), cr.path), cr.rdb)
+			rendered = wrapTagElements(renderChatContent([]byte(ch.Content), cr.path), cr.rdb) // R3619
 		} else {
 			rendered = wrapTagElements(template.HTMLEscapeString(ch.Content), cr.rdb)
 		}
@@ -5062,7 +5063,7 @@ func (cr *contentRender) unchunkedBody() string {
 	case cr.stale:
 		body = staleChunkHTML(cr.path) // R3574
 	case cr.strategy == "chat-jsonl":
-		body = wrapTagElements(renderMarkdownForContent(cr.data, cr.path), cr.rdb)
+		body = wrapTagElements(renderChatContent(cr.data, cr.path), cr.rdb) // R3619
 	case cr.strategy == "pdf" && cr.isChunk:
 		attrs, _ := Sync(cr.srv.db, func(db *DB) ([]microfts2.Pair, error) {
 			return db.ChunkAttrs(cr.path, cr.rangeParam), nil

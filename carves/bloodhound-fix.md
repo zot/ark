@@ -17,7 +17,7 @@ Opened by Bill, 2026-10-22.
   - [x] ~~**2.1 — thinking and narration marked in chat chunks.**~~ **LANDED (2026-10-25 — `#167`.)** `/mini-spec`.
         The version 2 re-chunk ran once microfts2 made chunk replacement cheap
         (its ca1218c). See Item 2.
-  - [ ] **2.2 — the chat UI shows which voice a line is in.** **OPEN (#168.)** `/ui-thorough`, a Frictionless session of its own, after 2.1.
+  - [x] ~~**2.2 — the chat UI shows which voice a line is in.**~~ **LANDED (2026-10-26 — `#168`.)** `/mini-spec` (rescoped from `/ui-thorough` 2026-10-26: the rendering is all Go).
         See Item 2.
 - [x] ~~**Item 3 — a multi-paragraph watermark came back as one hunt.**~~ **LANDED (2026-10-22 — `#157`.)** See Item 3.
 - [x] ~~**Item 4 — a finding labels itself ambient recall.**~~ **LANDED (2026-10-22 — `#156`.)** See Item 4.
@@ -174,13 +174,42 @@ each record once. Measured on this corpus afterwards, the re-chunk ran at about
 minutes at a 30 to 50 MB live heap; `removeFromInvertedRecord` is gone from the
 profile.
 
-**2.2** is the UI's rendering of them, Frictionless work in a session of its own
-(never mixed with 2.1's `/mini-spec`). Bill, 2026-10-25: each voice gets an icon,
-a brain for thinking, a speaking icon for the agent's ordinary text, and
-glasses for narration (his "?", so the icon is the UI session's to settle). A tag
-on a line of its own starts a CommonMark HTML block, which turns markdown off
-inside it until a blank line; whether the chunk renderer passes the tags through
-as elements CSS can style is the first thing 2.2 has to find out.
+**2.2** is the UI's rendering of them. Bill, 2026-10-25: each voice gets an
+icon, a brain for thinking, a speaking icon for the agent's ordinary text, and
+glasses for narration (glasses confirmed 2026-10-26).
+
+It was filed as a Frictionless `/ui-thorough` pass and is a `/mini-spec` one
+(rescoped 2026-10-26, Bill). Every surface that shows chat chunk text gets its
+HTML from Go: the chats view and ranged views through `renderMarkdownOpts`
+(`server.go`, from `chunkedBody` and `unchunkedBody`), the forge's pinned and hot
+chunks as iframes of `/content`, and `<ark-search>` rows, which are `/content`
+iframes too. `RenderPreview` (`search.go`) is the other renderer: grouped search
+and tag results carry its HTML to the editor and to Lua (corrected 2026-10-26,
+measured: it escaped a chat chunk into a `<pre>` with the tags as literal text).
+The Lua app only hosts them; no Lua work is known.
+
+What the renderer does today, probed through goldmark 2026-10-26: raw HTML is off
+(R3183), so each tag becomes `<!-- raw HTML omitted -->`. The tags never show raw,
+but the voice is invisible. And because #167 puts the tags flush against the text,
+a voice that opens with block markdown loses that first block:
+`<thinking>- a list` renders as paragraph text, and a heading or fence would break
+the same way.
+
+Measured the same day, the flush close tag also bleeds: plain text after a
+thinking block that ends in a list is pulled into the list's last item.
+
+LANDED 2026-10-26 (#168); the rules now live in `specs/chat-transcript.md`
+("Voices in rendered chat chunks"), `specs/bundle-assets.md` (theme patches),
+`design/crc-ChatVoice.md`, and R3615-R3621. The shape as first sketched, kept
+for the record: split chunk text into voice segments before
+goldmark, strip the tags, render each segment's markdown on its own, and wrap it
+in an element Go emits (say `<div class="ark-voice ark-voice-thinking">`), with
+CSS supplying the icons in `/content` and in `<ark-search>` (DECIDED (Bill,
+2026-10-26): an empty span from Go, the glyph from a `content` rule in
+`install/html/ark-content.css`, imported at the head of the bundled `base.css`
+by ark's theme patch, which every page's theme links load). R3183 holds, since
+stored text still never reaches the page as markup. The CLI's placeholder `≈`
+for narration can change to match.
 
 ## Item 3
 

@@ -2282,7 +2282,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Result Rendering
 - **R1364:** Results are rendered as plain HTML — file path link, optional show-in-folder button, chunk previews
-- **R1365:** Chunk previews use the pre-rendered HTML from SearchChunk.preview (no CM6 dependency)
+- **~~R1365:~~** (Retired T293 — see R3622) Chunk previews use the pre-rendered HTML from SearchChunk.preview (no CM6 dependency)
 - **R1366:** Click on a result path calls api.navigate(path)
 - **R1367:** Show-in-folder button appears when api.showInFolder is defined
 
@@ -2294,7 +2294,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### Extraction Scope
 - **R1372:** TagSearchPanelWidget rendering logic moves from tag-widget.ts to the custom element
-- **R1373:** renderTagSearchResults moves from tag-widget.ts to the custom element
+- **~~R1373:~~** (Retired T294 — see R3622) renderTagSearchResults moves from tag-widget.ts to the custom element
 - **R1374:** Tag decoration code (TagSearchWidget, StatusWidget, createOpenSearchPanels, buildTagDecorations, needsRedecoration, toggleSearchPanel) stays in markdown-editor/tag-widget.ts
 - **R1375:** search-result-view.ts stays in markdown-editor (CM6-specific rendering)
 - **R1376:** ark-search-block.ts stays in markdown-editor (CM6 ViewPlugin)
@@ -5393,3 +5393,23 @@ reason.
 **Source:** specs/memory-release.md
 
 - **R3614:** `ark status --cpu FILE [--seconds N]` (default 10) resolves FILE to an absolute path and POSTs it with the duration to the server's `/status/cpu`, which profiles its CPU for that long and writes the profile there, answering with the path; the CLI prints `cpu profile: PATH`. Without a server it refuses like `--heap`.
+
+## Feature: Voices in rendered chat chunks
+**Source:** specs/chat-transcript.md
+
+- **R3615:** Chat chunk text is split into voice segments before rendering: `<thinking>` or `<narration>` at the start of a line opens a segment, the matching close tag at the end of a line ends it, text between voiced segments is a plain segment, an open tag with no close runs to the end of the chunk, and a tag in any other position is ordinary text. The tags that delimit segments are removed.
+- **R3616:** Each voice segment is rendered as markdown on its own and wrapped in `<div class="ark-voice ark-voice-thinking">`, `ark-voice-narration`, or `ark-voice-text`, so block markdown opening a segment renders as a block and no segment's markdown absorbs the next segment's text.
+- **R3617:** A segment begins with an empty `<span class="ark-voice-icon" aria-hidden="true"></span>` when it is the chunk's first segment or its voice differs from the previous segment's; a run of same-voice segments carries the span only on its first.
+- **R3618:** `install/html/ark-content.css` (served at `/ark-content.css`) supplies the icon glyphs as `.ark-voice-V > .ark-voice-icon::before` `content`: 🧠 thinking, 🗣️ plain text, 👓 narration.
+- **R3619:** The content view renders chat-jsonl chunk text (chunked and ranged/unchunked) through the voice renderer, each segment through the content view's markdown renderer.
+- **R3620:** `RenderPreview` renders chat-jsonl chunk text through the voice renderer as markdown, rather than as escaped pre-formatted text; token highlighting still applies to the result.
+
+## Feature: Theme patches
+**Source:** specs/bundle-assets.md
+
+- **R3621:** The Makefile's cache step prepends each `theme-patches/THEME-patch.css` to the extracted `html/themes/THEME.css` (a patch holds `@import`s only, which CSS honors only at a sheet's head), and fails when THEME.css does not exist; the patch files are cache inputs, so editing one rebuilds the cache. `base-patch.css` imports `/ark-content.css`.
+
+## Feature: ark-search chunk rows
+**Source:** specs/ark-search.md
+
+- **R3622:** `<ark-search>` renders each result chunk as a lazily loaded iframe of `/content/PATH?range=RANGE&edit=true&toggle=false&tag-overview=collapsed` with the `highlight=` params (R1459), faded in on `ark-content-ready` (R1465); the element has no chunk renderer of its own and does not use SearchChunk's `preview` HTML.

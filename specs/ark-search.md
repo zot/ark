@@ -231,17 +231,23 @@ and Frictionless contexts.
 
 ## Result Rendering
 
-The element renders results as plain HTML:
+The element renders each file group as plain HTML:
 - File path as clickable link (calls `api.navigate`)
 - Show-in-folder button when `api.showInFolder` exists
-- Chunk previews: pre-rendered HTML from the server (the `preview`
-  field in SearchChunk). No CM6 instances — the standalone
-  component works without CodeMirror.
+- One iframe per chunk, of the content view for that chunk alone:
+  `/content/PATH?range=RANGE&edit=true&toggle=false&tag-overview=collapsed`
+  plus the `highlight=` params below
+  ([content-iframe.md](content-iframe.md)). The iframe loads lazily
+  when scrolled into view and fades in when the page reports ready.
+  So a row shows a chunk exactly as the content view does (a
+  markdown chunk in a read-only CM6 editor, a chat chunk by voice),
+  and the element itself carries no renderer and no CodeMirror; it
+  does not use the `preview` HTML in SearchChunk.
 
-This is the same rendering used by `renderTagSearchResults` in
-the current tag-widget.ts. The CM6-based rendering in
-search-result-view.ts remains a markdown-editor concern for
-ark-search code blocks.
+The `preview` field is for the other clients of grouped search: the
+markdown editor's search-result view (search-result-view.ts, for
+ark-search code blocks) shows it for non-markdown chunks, and Lua
+callers receive it.
 
 ## Match Highlighting
 
