@@ -21,7 +21,9 @@ func withArkDir(t *testing.T, dir string) {
 func TestPatternsCollectionUsesConfiguredDir(t *testing.T) {
 	dir := t.TempDir()
 	elsewhere := filepath.Join(t.TempDir(), "my-collection")
-	cfg := "patterns_dir = " + `"` + elsewhere + `"` + "\n"
+	// A TOML literal string: a basic string would read a Windows path's
+	// backslashes as escapes.
+	cfg := "patterns_dir = '" + elsewhere + "'\n"
 	if err := os.WriteFile(filepath.Join(dir, "ark.toml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}

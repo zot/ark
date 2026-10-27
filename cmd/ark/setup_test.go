@@ -74,6 +74,12 @@ func TestGlobalSetupNoOpWhenMarkerPresent(t *testing.T) {
 	}
 }
 
+// isLinkMode is the product's link test (dirlink.go isLink): a Windows
+// junction reads as ModeIrregular under Lstat, not ModeSymlink.
+func isLinkMode(fi os.FileInfo) bool {
+	return fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0
+}
+
 // TestInstallLinksAreLinksNotCopies: every skill/agent under .claude is a
 // directory link, never a copied file. R3465, R3461, R3462
 func TestInstallLinksAreLinksNotCopies(t *testing.T) {
@@ -92,7 +98,7 @@ func TestInstallLinksAreLinksNotCopies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("skill link %s missing: %v", skill, err)
 		}
-		if fi.Mode()&os.ModeSymlink == 0 {
+		if !isLinkMode(fi) {
 			t.Fatalf("skill %s is not a link (a copy was written)", skill)
 		}
 		if !ark.IsOurLink(link, filepath.Join(arkRoot, "skills", skill)) {
@@ -105,7 +111,7 @@ func TestInstallLinksAreLinksNotCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agents link missing: %v", err)
 	}
-	if fi.Mode()&os.ModeSymlink == 0 {
+	if !isLinkMode(fi) {
 		t.Fatal("agents/ark is not a link")
 	}
 	if !ark.IsOurLink(agentsLink, filepath.Join(arkRoot, "agents")) {

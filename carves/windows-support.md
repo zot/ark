@@ -373,7 +373,7 @@ and unknown items carry the negative marker rather than a false green.
         functions verbatim (R3644). A second encoder in the CLI's
         `projectSessionIDs`, which mapped only `/`, now uses the same one. The
         Windows root suite fails 0.
-  - [ ] **7.4.6 — the `cmd/ark` suite on Windows.** **OPEN (not queued.)**
+  - [x] ~~**7.4.6 — the `cmd/ark` suite on Windows.**~~ **LANDED (2026-10-27 — `#178`.)**
         Measured for the first time 2026-10-27 (every earlier count was the
         root package only): 3 failures. `TestAnchorFilterToCwd` expects Unix
         paths, the shape 7.4.3 fixed. `TestPatternsCollectionUsesConfiguredDir`
@@ -383,6 +383,16 @@ and unknown items carry the negative marker rather than a false green.
         as well as over ssh, so the ssh junction quirk does not explain it.
         Diagnose each; test-only causes are fixed here. `/mini-spec`. See
         Item 7.
+        Outcome (2026-10-27): all three were the tests. The anchor test now
+        compares the slash form. The patterns fixture wrote a Windows path as a
+        TOML basic string, where `\U` is an escape, so `LoadConfig` failed and
+        the default was used; it is a literal string now. The link test checked
+        `ModeSymlink` only, while a junction reads as `ModeIrregular` under
+        `Lstat` (the product's `isLink` checks both, and setup did link). The
+        `cmd/ark` suite on Windows: 0 failures. Noticed, not changed: the
+        patterns command falls back to the default directory without a word
+        when `ark.toml` does not parse; that is
+        [config-errors](config-errors.md)'s to fix.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

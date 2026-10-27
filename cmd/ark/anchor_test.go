@@ -1,9 +1,13 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // Sleeping Sentry for R2958: relative -files/-exclude-files globs resolve
-// cwd-relative; absolute / ~ / tmp:// pass through untouched.
+// cwd-relative; absolute / ~ / tmp:// pass through untouched. Compared in
+// slash form: on Windows the join writes the native separator.
 func TestAnchorFilterToCwd(t *testing.T) {
 	const cwd = "/home/deck/work/ark"
 	cases := []struct{ glob, want string }{
@@ -19,7 +23,7 @@ func TestAnchorFilterToCwd(t *testing.T) {
 		{"", ""}, // empty untouched
 	}
 	for _, c := range cases {
-		if got := anchorFilterToCwd(c.glob, cwd); got != c.want {
+		if got := filepath.ToSlash(anchorFilterToCwd(c.glob, cwd)); got != c.want {
 			t.Errorf("anchorFilterToCwd(%q) = %q, want %q", c.glob, got, c.want)
 		}
 	}
