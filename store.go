@@ -232,6 +232,7 @@ const (
 	prefixPageContent    = "PC" // R1720: per-page zlib-compressed chunk text blob
 	prefixExtRouting     = 'X'  // R1989: @ext provenance (X[tvid_ext][target_chunkid] → routed_tvid varints)
 	prefixSerial         = 'S'  // R2174: vector freshness side-index (S + original-key → varint serial)
+	prefixEncoding       = 'N'  // R3660: a non-UTF-8 file's encoding (N + fileid:8 → JSON FileEncodingRecord); absent for UTF-8
 	prefixLink           = 'L'  // R3383: this path is a directory symlink (L + path → empty). The FACT only — everything derived from the target is rebuilt from the filesystem
 	prefixHotCorrelation = "HC" // R2226: tag → top-K chunks cosine cache (HC + tag + chunkid:8 → score:float64)
 	// prefixDiscussed is the first occupant of the `R` recall-feature
@@ -1040,6 +1041,74 @@ func missingKey(fileid uint64) []byte {
 	key[0] = byte(prefixMissing)
 	binary.BigEndian.PutUint64(key[1:], fileid)
 	return key
+}
+
+// FileEncodingRecord is the N record's value: the encoding of an indexed file
+// that is not UTF-8, and whether ark may write it back (R3661).
+type FileEncodingRecord struct {
+	Encoding FileEncoding `json:"encoding"`
+	Writable bool         `json:"writable"`
+}
+
+// CRC: crc-Store.md | R3660 — N record key: 'N' + fileid (8 bytes, big-endian)
+func encodingKey(fileid uint64) []byte {
+	key := make([]byte, 9)
+	key[0] = byte(prefixEncoding)
+	binary.BigEndian.PutUint64(key[1:], fileid)
+	return key
+}
+
+// WriteFileEncoding records a non-UTF-8 file's encoding.
+// CRC: crc-Store.md | R3660
+func (s *Store) WriteFileEncoding(fileid uint64, rec FileEncodingRecord) error {
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return bPut(txn, encodingKey(fileid), data)
+	})
+}
+
+// ReadFileEncoding returns a file's N record; ok is false for a UTF-8 file,
+// which has none.
+// CRC: crc-Store.md | R3660
+func (s *Store) ReadFileEncoding(fileid uint64) (rec FileEncodingRecord, ok bool, err error) {
+	err = s.bolt.View(func(txn *bbolt.Tx) error {
+		v, getErr := bGet(txn, encodingKey(fileid))
+		if isNotFound(getErr) {
+			return nil
+		}
+		if getErr != nil {
+			return getErr
+		}
+		ok = true
+		return json.Unmarshal(v, &rec)
+	})
+	return rec, ok, err
+}
+
+// DeleteFileEncoding removes a file's N record, if any. It looks first, so a
+// UTF-8 file, which never has one, costs a read rather than a write.
+// CRC: crc-Store.md | R3660
+func (s *Store) DeleteFileEncoding(fileid uint64) error {
+	if _, ok, err := s.ReadFileEncoding(fileid); err != nil || !ok {
+		return err
+	}
+	return s.bolt.Update(func(txn *bbolt.Tx) error {
+		return s.DeleteFileEncodingInTxn(txn, fileid)
+	})
+}
+
+// DeleteFileEncodingInTxn removes a file's N record inside an existing
+// transaction, as the remove callback does with the EF centroid.
+// CRC: crc-Store.md | R3660
+func (s *Store) DeleteFileEncodingInTxn(txn *bbolt.Tx, fileid uint64) error {
+	err := bDel(txn, encodingKey(fileid))
+	if isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // CRC: crc-Store.md | R105 — U record key: 'U' + path bytes

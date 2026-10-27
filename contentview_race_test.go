@@ -80,7 +80,7 @@ func TestContentView_OffActorReadsDontRaceInvalidate(t *testing.T) {
 		go func(q string) {
 			defer wg.Done()
 			for i := 0; i < rounds; i++ {
-				req := httptest.NewRequest("GET", "/content"+path+q, nil)
+				req := httptest.NewRequest("GET", "/content"+ContentURLPath(path)+q, nil)
 				srv.handleContentView(httptest.NewRecorder(), req)
 			}
 		}(query)

@@ -11,6 +11,13 @@
 // I-record width persistence, auto-track on scroll, abbreviated-mode
 // peek, hover tooltip on the ↗ icon, ARIA polish.
 
+// R3654, R3655: a file path's form in a content-route URL is its slash
+// spelling behind one `/`, so a Windows drive survives (`/content/C:/…`).
+// Appending the path to the prefix gives `/contentC:/…`, which no route matches.
+function contentURLPath(p: string): string {
+  return p.startsWith("/") ? p : "/" + p;
+}
+
 // ---- Shared types ---------------------------------------------------
 
 type EntryKind = "heading" | "inline" | "ext";
@@ -605,7 +612,7 @@ class TagOverviewSidebar {
       const ext = document.createElement("a");
       ext.className = "ark-tag-overview-icon-ext";
       ext.textContent = "↗";
-      ext.href = "/content" + entry.externalFile;
+      ext.href = "/content" + contentURLPath(entry.externalFile);
       ext.setAttribute("aria-label", "Go to source document");
       ext.addEventListener("click", (e) => e.stopPropagation());
       this.attachExtTooltip(ext, entry);

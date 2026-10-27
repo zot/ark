@@ -1,5 +1,5 @@
 # TagOverviewSidebar
-**Requirements:** R2032, R2033, R2034, R2035, R2036, R2037, R2038, R2039, R2040, R2041, R2042, R2043, R2044, R2045, R2046, R2047, R2048, R2049, R2050, R2051, R2052, R2053, R2054, R2055, R2056, R2057, R2058, R2059, R2060, R2061, R2062, R2063, R2064, R2083, R2084, R2130, R2131
+**Requirements:** R2032-2064, R2083, R2084, R2130, R2131, R3655
 
 Right-side sidebar in `/content/` that surfaces a document's
 headings and tags as a unified, navigable outline. Mounts in any
@@ -32,6 +32,7 @@ directly. No shadow DOM — inherits host theme CSS.
   cutoff for "tags ahead" (R2032)
 
 ## Does
+- contentURLPath(p): the ↗ source link builds `/content` + the path's URL form (R3655).
 - mount(host): scan host DOM for `<h1>`–`<h6>`, `<ark-tag>`,
   `<ark-ext-tags>` to build entries; observe chunk/heading
   intersections for auto-track (R2045); render the badge

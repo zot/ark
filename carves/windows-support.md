@@ -247,10 +247,22 @@ and unknown items carry the negative marker rather than a false green.
       cannot run a task from ssh, so it needs another way to start the server
       outside the session (Item 3 lists the candidates).
       See Item 12.
+- **Item 13 — what the end-to-end run found beyond Windows.** **SPLIT
+      (2026-10-27.)** Defects the 2026-10-27 run surfaced that are not
+      Windows-specific, kept here because the run is where they were measured.
+      See Item 13.
+  - [ ] **13.1 — save on a file outside the index fails silently.** **OPEN (#184.)** The content view opens any file under a source, save
+        refuses one not in the index (`403 path not within indexed source`,
+        unlogged), and the page's `save` treats every response as success.
+        `/mini-spec`. See Item 13.
+  - [ ] **13.2 — the ark app's source list does not follow a config
+        reload.** **OPEN (#185.)** Not yet measured in the app.
+        `/ui-fast`. See Item 13.
 - **Item 8 — filesystem change events under Windows.** **SPLIT (Bill,
       2026-10-26.)** An independent track: the mechanism is portable
       (fsnotify); conduct under Windows' quirks, and recovery from dropped
-      events, are unchecked. See Item 8.
+      events, are unchecked. See Item 8. Closed 2026-10-27 with four parts
+      landed, reopened the same day by 8.5.
   - [x] ~~**8.1 — an event overflow kicks a reconcile.**~~ **LANDED (2026-10-26 — `#170`.)**
         `/mini-spec`, both platforms: `ErrEventOverflow` means events were
         dropped, so the existing coalesced reconcile catches the gap instead
@@ -282,6 +294,10 @@ and unknown items carry the negative marker rather than a false green.
         separator failed, so a nested `node_modules/` or `.git/` from the
         default excludes was indexed. Both matchers now work on the slash
         form, and a drive-prefixed pattern is absolute.
+  - [ ] **8.5 — a source added while the server runs is not watched.** **OPEN (#181.)**
+        Found by the 2026-10-27 end-to-end run on the VM: after `config
+        add-source`, an edit produced no watch event until a restart.
+        Not Windows-specific by reading. `/mini-spec`. See Item 8.
 - **Item 7 — the audit past the grep seed.** **SPLIT (Bill, 2026-10-19.)**
       Runs alongside, not last. Items 1–6 came from one afternoon's greps, not a
       sweep. The apps' shell-outs were split out as 7.1–7.3; 7.4 is the rest of
@@ -290,7 +306,10 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**7.2 — ark's update bridge for the UI.**~~ **LANDED (2026-10-19 — `#142`.)**
   - [x] ~~**7.5 — `sys.updateStatus` names the staged version.**~~ **LANDED (2026-10-19 — `#143`.)**
   - [x] ~~**7.3 — the apps drop their shell-outs.**~~ **LANDED (2026-10-19 — `#144`.)**
-  - [ ] **7.4 — the rest of the sweep.** **OPEN (not queued.)** The Go-side
+  - [ ] **7.4 — the rest of the sweep.** **OPEN (reopened 2026-10-27 by 7.4.7.)** Was closed
+        with no change of its own: every sub-part landed, and both the root and
+        `cmd/ark` suites pass on Windows (7.4.6). Not done as a separate pass:
+        a grep for Unix-only `os/exec`, file modes, and CRLF. The Go-side
         audit: Unix-only `os/exec`, file modes, path separators as data,
         case-insensitivity, CRLF. See Item 7. Its worklist exists now:
         measured 2026-10-26 (8.4), the root package's own test suite fails
@@ -393,6 +412,27 @@ and unknown items carry the negative marker rather than a false green.
         patterns command falls back to the default directory without a word
         when `ark.toml` does not parse; that is
         [config-errors](config-errors.md)'s to fix.
+  - [x] ~~**7.4.7 — content URLs glue the prefix onto the drive.**~~ **LANDED (2026-10-27 — `#182`.)**
+        Found by Bill in the 2026-10-27 desktop run: search result links and
+        content iframes on Windows are `/contentC:/Users/…`, which no route
+        matches. Fifteen builders across Go, the TypeScript elements,
+        `install/html` and the ark app write `"/content" + path`; the
+        content-view tests build their URLs the same way and call the handler
+        directly, so R3638's alarm rang on an address no browser can reach.
+        `/mini-spec`, then `/ui-fast` for the app. See Item 7.
+  - [x] ~~**7.4.8 — UTF-16 text files are refused.**~~ **LANDED (2026-10-27 — `#183`.)**
+        Found by Bill in the 2026-10-27 desktop run: a `bubba.md` made by
+        Windows PowerShell 5's `echo hello > bubba.md` is UTF-16LE with a BOM,
+        and the indexer skipped it as `contains invalid UTF-8`. DECIDED
+        (Bill, 2026-10-27): support UTF-16, since `echo hello > bubba.md` in
+        the default shell makes one. The shape is open; see Item 7.
+        `/mini-spec`. See Item 7.
+  - [x] ~~**7.4.9 — every text chunker reads UTF-16.**~~ **LANDED (2026-10-27 — `#186`.)**
+        DECIDED (Bill, 2026-10-27): ark handles UTF-16 all the time, so every
+        chunker decodes, not only the three behind the wrapper. Found when
+        Vim's `bubba.md~` fell to the `lines` chunker. The external-command
+        strategies (`lines-overlap`, `words-overlap`) read the file
+        themselves and are left open. `/mini-spec`. See Item 7.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause
@@ -1174,6 +1214,87 @@ import is what detects phantoms, so this order also covers damage like
 July's. Filed for ark's Go flow as design gap O225 (back-linked from R3240),
 and reported to Frictionless for its script.
 
+**7.4.8, UTF-16 (found 2026-10-27).** Bill made `C:\Users\arkfresh\ark-test\bubba.md`
+in PowerShell; its bytes are `ff fe 68 00 65 00 …`, UTF-16LE with a BOM, which
+is what Windows PowerShell 5's `>` and `Out-File` write and what Notepad saves
+as "Unicode". The indexer skipped it: `split file …: chunk "1-2" contains
+invalid UTF-8`. DECIDED (Bill, 2026-10-27): support it; `echo hello > bubba.md`
+made the file, so it is intrinsic to Windows. What it touches, measured
+2026-10-27: microfts2 reads the file itself (`splitFile`'s `os.ReadFile`, a
+FileChunker's own read, the append resume) and checks UTF-8 per chunk in
+`splitYield`; a chunk's `Range` counts lines, which decoding preserves, but its
+`Locator` is a byte range, which it does not, and ark consumes locators on the
+write path too (`ext_insert.go` places an inserted tag by one). Before that: microfts2 indexes byte ranges of the file as it sits on disk, and
+chunk ranges, `path:range` locators, the content view and save all assume
+those offsets, so decoding to UTF-8 at read either carries two sets of offsets
+or breaks ranges; save must write the file back in its own encoding or it
+changes the user's file without saying so; and UTF-16BE, and a UTF-8 BOM, want
+the same answer. Short of support, the skip message should name the encoding
+rather than call the file invalid UTF-8.
+
+DECIDED (Bill, 2026-10-27): chunk `Content` is always UTF-8, and the file's
+encoding is stored per fileid, not per chunker, so one chunker serves any
+encoding. Bill asked whether microfts2 can stay untouched by handing it
+decoded content. Measured the same day: yes, through ark's existing
+registration seam (`wrapInternalTagChunker` is the precedent). Every path by
+which microfts2 reads a text file passes the bytes to a chunker method
+first: `splitFile` and `GetChunks` call `Chunks(path, data, yield)`, and the
+fast path and `ChunkCache` call `RandomAccessChunker.GetChunk(path, data,
+customData, chunk)`, whose `customData` slot can cache the decoded text;
+`classifyFile` only hashes the raw bytes, as `splitFile` does. So a decoding
+wrapper makes Content and locators both UTF-8 space. Locators are not
+encoding-independent as such (every text chunker emits a byte-range Locator
+beside its line Range) but under the wrapper they are UTF-8 offsets the
+wrapper defines. Still to measure: whether a wrapper can decline an append
+(microfts2's append resume reads the raw tail by byte offset); forwarding
+exactly the inner chunker's optional interfaces; and ark's own text readers
+and writers (`ext_insert`, `ReadSourceFile`, save, the curation editor), which
+decode on read and re-detect and encode on write.
+
+Measured 2026-10-27, the rest. **Append** is ark's choice: both append paths
+pass `idx.DetectAppend(path, fileID)`, so a fileid whose encoding is not UTF-8
+re-chunks in full. **Forwarding**: `internalTagChunker` embeds a `fatChunker`
+(all five interfaces) and wraps only chunkers that have all five (markdown,
+bracket, indent); a decoder in the same style overrides `Chunks`, `GetChunk`,
+`FileChunks` and `AppendChunks` and promotes `ChunkerMetadata`. JSONL, bible
+and FuncChunker are not fat; chat logs are UTF-8. **ark's text sites**, the
+seven that read or write a user's indexed file: `ReadSourceFile`, `handleSave`,
+`handleSetTags`, `writeInternalTag`, `RemoveInternalTag`, `ReplaceRegion`,
+`rescheduleTag` (and a write in `registerLuaFunctions` to check). Every one
+rewrites the whole file, so `writeText` encodes all the text and never needs
+an offset into the raw file.
+
+DECIDED (Bill, 2026-10-27): no raw-file offsets on chunks for now. Bill asked
+whether UTF-16 byte offsets could ride along as wrapper-added attributes (they
+can: `splitYield` copies Attrs and retrieval returns the stored ones, R655).
+Their one benefit is keeping bytes outside an edit identical when the file
+does not survive a decode/encode round trip (an unpaired surrogate decodes to
+U+FFFD). Instead, a read checks that encoding the decoded text reproduces the
+file; a file that does not is indexed but not writable. That covers every
+writer, including a whole-file save, which offsets could not protect anyway.
+Raw offsets stay available for a consumer that addresses the file on disk
+(an editor jumping to a byte position, a ranged `/raw`).
+
+<a id="13"></a>
+
+## Item 13
+
+**13.1.** On `arkfresh`, editing the bundled `resources\intro.md` in the content
+view and saving changed nothing. A request from inside the VM got `403 path not
+within indexed source`: no source pattern covers `~\.ark\resources` (Linux is
+the same, `show-why` reports `no matching pattern`), so the file opens through
+the content view's source-membership check but fails save's index check. The
+page's HostAPI `save` is `fetch('/file/save', …).then(() => { savedContent = c; })`,
+which takes the 403 as success and marks the text saved, and `handleSave`
+logs nothing. Bill saved an indexed file (`PLAN.md`) locally without trouble.
+Two halves: offer the editor only where save will accept the file, and make the
+page report a refused save.
+
+**13.2.** Bill added a `[[source]]` to `arkfresh`'s ark.toml by hand. The
+reload at 10:07:07 loaded it and the server tried to index the directory at
+once, but the ark app listed the source only after a restart, so the app keeps
+a copy of the source list that a config reload does not refresh.
+
 <a id="12"></a>
 
 ## Item 12
@@ -1317,6 +1438,16 @@ file. Ten fire alarms pulled on the VM, all rang
 
 Aside, not Item 8: at startup `tags.md` hit "file already indexed — re-scanning
 once" and recovered on the retry.
+
+**8.5 (found 2026-10-27).** The end-to-end run added `C:\e2e\proj` with
+`config add-source` while the server ran. All three files were indexed, but an
+append to one produced no `watch: file changed`; after a restart the next
+append was picked up within seconds. From the code: `watchDirRecursive` runs
+for every source at startup, and afterwards only in `doReconcile` for
+`SourcesCheck`'s Added list, which glob expansion alone fills. `configMutate`
+(every proxied `config` mutation) and the ark.toml reload both end in that
+reconcile, so a concrete directory added either way is indexed and never
+watched. Nothing here is platform-specific; not measured on Linux.
 
 <a id="9"></a>
 

@@ -4779,7 +4779,7 @@ func cmdTagSet(args []string) {
 		pairs[i] = normalizeTagName(pairs[i])
 	}
 
-	data, err := os.ReadFile(filePath)
+	data, enc, err := ark.ReadEditableText(filePath) // R3662
 	if err != nil {
 		fatal(err)
 	}
@@ -4793,7 +4793,7 @@ func cmdTagSet(args []string) {
 		}
 	}
 
-	if err := os.WriteFile(filePath, tb.Render(), 0644); err != nil {
+	if err := os.WriteFile(filePath, ark.EncodeText(tb.Render(), enc), 0644); err != nil {
 		fatal(err)
 	}
 
@@ -4828,7 +4828,7 @@ func cmdTagGet(args []string, compact bool) {
 	filePath := args[0]
 	requestedTags := normalizeTagNames(args[1:])
 
-	data, err := os.ReadFile(filePath)
+	data, err := ark.ReadText(filePath) // R3663
 	if err != nil {
 		fatal(err)
 	}
@@ -4873,7 +4873,7 @@ func cmdTagCheck(args []string) {
 	filePath := args[0]
 	allowedHeadings := args[1:]
 
-	data, err := os.ReadFile(filePath)
+	data, err := ark.ReadText(filePath) // R3663
 	if err != nil {
 		fatal(err)
 	}

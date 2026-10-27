@@ -165,16 +165,21 @@ anchor is skipped whole.
 **Inject:** cmd/ark/main.go:splitPathLocator
 **Pulled:** 2026-10-26 (windows-gpu) — rang: `splitPathLocator(no range) = ("C", "\\x.md", true)`
 
-## Test: the content view accepts a drive path
-**Purpose:** R3638. Guarded by the existing content-view tests, which failed
-on Windows before this ("absolute path required").
-**Input:** the `TestContentView_*` suite on Windows.
-**Expected:** passes.
+## Test: a content URL keeps the drive behind a slash
+**Purpose:** R3654, R3655. `ContentURLPath` writes `C:\Users\me\x.md` as `/C:/Users/me/x.md` and leaves a Unix path alone; `filePathFromURL` reads the drive path back on Windows and is the identity elsewhere. The content-view tests build their URLs with the same helper and go through a mux registered as production registers `GET /content/`, so a URL no route delivers fails them. Replaces R3638's test, whose requests appended the path to the prefix and called the handler directly, so they passed on an address no browser can reach.
+**Input:** `TestContentURLPath`; the `TestContentView_*` suite and `TestWrapTagElementsLinkResolved` on Windows.
+**Expected:** pass.
 **Refs:** crc-FilenameCase.md, crc-Server.md
-**Code:** contentview_test.go
-**Fire alarm:** require a leading `/` again
+**Code:** contenturl_test.go, contentview_test.go, server_link_test.go
+**Fire alarm:** the route keeps the `/` before the drive
 **Inject:** server.go:Server.contentPath
-**Pulled:** 2026-10-26 (windows-gpu) — rang: `TestContentView_MarkdownFullFile` and the rest fail
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `TestContentView_MarkdownFullFile` and the rest, `→ 403: forbidden`
+**Fire alarm:** ContentURLPath returns the native path unchanged
+**Inject:** server.go:ContentURLPath
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `ContentURLPath(C:\Users\me\x.md) = "C:\\Users\\me\\x.md"`, and the content-view tests got the mux's `404 page not found`, the production symptom
+**Fire alarm:** `@link` rendering appends the path to the prefix
+**Inject:** server.go:renderLinkElement
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `resolved link missing /content href: "…href=\"/contentC:\\Users…"`
 
 ## Test: PATH keeps its Windows list
 **Purpose:** R3639

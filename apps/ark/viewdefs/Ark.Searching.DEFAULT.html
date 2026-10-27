@@ -232,7 +232,8 @@
           }).then(function(r) { return r.json(); });
         },
         navigate: function(path) {
-          window.open('/content' + path, '_blank');
+          // R3655: the drive stays behind a slash (`/content/C:/…`).
+          window.open('/content' + (path.startsWith('/') ? path : '/' + path), '_blank');
         },
       };
 

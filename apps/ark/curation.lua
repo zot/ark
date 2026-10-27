@@ -36,6 +36,14 @@ local function trim(s)
     return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+-- R3654, R3655: a file path's form in a content-route URL is its spelling
+-- behind one `/`, so a Windows drive survives (`/content/C:/…`). Appending the
+-- path to the prefix gives `/contentC:/…`, which no route matches.
+local function contentURLPath(p)
+    if p:sub(1, 1) == "/" then return p end
+    return "/" .. p
+end
+
 -- JSON decoder bound at module load. Frictionless ships rxi/json
 -- under apps/mcp/json.lua; we reuse it across apps via
 -- require("mcp.json").
@@ -590,7 +598,7 @@ end
 function PinnedChunk:contentURL()
     local p = self:path()
     if p == "" then return "" end
-    return "/content" .. p
+    return "/content" .. contentURLPath(p)
 end
 
 function PinnedChunk:isNew()
@@ -1203,10 +1211,10 @@ function PinnedChunk:iframeURL()
     if not info or not info.path or info.path == "" then return "" end
     local range = info.range or ""
     if range == "" then
-        return "/content" .. info.path .. "?toggle=false&tag-overview=collapsed"
+        return "/content" .. contentURLPath(info.path) .. "?toggle=false&tag-overview=collapsed"
     end
     return string.format("/content%s?range=%s&toggle=false&tag-overview=collapsed",
-        info.path, range)
+        contentURLPath(info.path), range)
 end
 
 -- Edit / Revert ---------------------------------------------------
@@ -1439,7 +1447,7 @@ end
 
 function HotChunk:contentURL()
     if self.path == "" then return "" end
-    return "/content" .. self.path
+    return "/content" .. contentURLPath(self.path)
 end
 
 function HotChunk:shortPath()

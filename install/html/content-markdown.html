@@ -761,7 +761,15 @@ await import('/pdf-chunk-element.js{{.BundleHash}}');
 // R2032-R2050, R2065-R2072: tag-overview sidebar + <ark-ext-tags> element.
 await import('/tag-overview.js{{.BundleHash}}');
 
-const path = location.pathname.replace(/^\/content/, '');
+// R3654, R3655: a file path's form in a content-route URL is its slash
+// spelling behind one `/`, so a Windows drive survives (`/content/C:/…`).
+// Appending the path to the prefix gives `/contentC:/…`, which no route matches.
+const contentURLPath = (p) => p.startsWith('/') ? p : '/' + p;
+// R3654: the URL form (for /fetch) and the file path (for save, tags, pins)
+// differ on Windows, so the server hands the page its file path rather than
+// the page reversing its URL. The file path is decoded, as save and the pins need.
+const urlPath = location.pathname.replace(/^\/content/, '');
+const path = {{.Path}};
 const btn = document.getElementById('toggle-btn');
 const contentDiv = document.getElementById('content');
 const editorDiv = document.getElementById('editor');
@@ -806,7 +814,7 @@ const api = {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({path: p, content: c}),
   }).then(() => { savedContent = c; }),
-  navigate: (p) => { window.location.href = '/content' + p; },
+  navigate: (p) => { window.location.href = '/content' + contentURLPath(p); },
   setTags: (p, tags) => fetch('/tags/set', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -903,7 +911,7 @@ function normalizeTagLines(text) {
 if (btn) btn.addEventListener('click', async () => {
   if (!editor) {
     // Switch to edit mode
-    const resp = await fetch('/fetch' + path);
+    const resp = await fetch('/fetch' + urlPath);
     const data = await resp.json();
     const raw = data.content;
     const normalized = normalizeTagLines(raw);
@@ -945,7 +953,7 @@ document.addEventListener('keydown', (e) => {
 // R1427, R1430: auto-load CM6 editor on page load
 if (autoEdit) {
   (async () => {
-    const resp = await fetch('/fetch' + path + location.search);
+    const resp = await fetch('/fetch' + urlPath + location.search);
     const data = await resp.json();
     const raw = data.content;
     const normalized = normalizeTagLines(raw);
@@ -1067,10 +1075,9 @@ function scrollToVerse() {
 // prepend a pin button to every chunk container (div + ark-curate-region,
 // R2424, R2425), toggle between pin/dismiss on click; hover reveals the
 // chunk-bound outline (R2423, styled below).
-// The outer `path` variable used by the editor is URL-encoded; the
-// pin POST body needs the decoded form so the server stores the
-// canonical absolute path that microfts2 uses internally.
-installCuratePins(decodeURIComponent(path));
+// The pin POST body carries the file path the server rendered into `path`,
+// the canonical absolute path that microfts2 uses internally.
+installCuratePins(path);
 async function installCuratePins(filePath) {
   const chunks = document.querySelectorAll(
     'div.ark-chunk[data-chunkid], ark-curate-region[chunkid]'

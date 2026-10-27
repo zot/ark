@@ -15,6 +15,20 @@ richness. Together they let the browser show any indexed file —
 markdown files get the full CodeMirror 6 editor experience,
 everything else gets a reasonable presentation.
 
+### PATH in a URL
+
+PATH is the file's absolute path in slash form behind a single `/`, so a Unix
+path reads as itself (`/content/home/me/x.md`) and a Windows path keeps its
+drive (`/content/C:/Users/me/x.md`), the convention `file:///C:/` URLs use. The
+routes drop the `/` in front of a drive. Every place that builds one of these
+URLs builds it this way: the server's link and image rewrites, `@link`
+rendering and `/raw` URLs, the search element's result links and previews, the
+tag overview's source links, the content pages themselves, and the ark app.
+Gluing the prefix straight onto a Windows path gives `/contentC:/…`, which no
+route matches. A content page reads its own file path back from its URL with
+the inverse rule, since saving and tagging need the file's path, not its URL
+form.
+
 ## `/fetch/PATH` — JSON content retrieval
 
 Returns file content as JSON, same as the existing `POST /fetch`

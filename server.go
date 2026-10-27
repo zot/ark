@@ -3725,8 +3725,9 @@ type rescheduleResult struct {
 func (srv *Server) rescheduleTag(path, tag, newStart, newEnd string, dryRun bool) (rescheduleResult, error) {
 	isTmp := strings.HasPrefix(path, "tmp://")
 
-	// Read source content.
+	// Read source content. A tmp:// document is UTF-8; a file keeps its own encoding (R3662).
 	var content []byte
+	enc := EncodingUTF8
 	if isTmp {
 		c, err := Sync(srv.db, func(db *DB) ([]byte, error) {
 			return db.TmpContent(path)
@@ -3736,11 +3737,11 @@ func (srv *Server) rescheduleTag(path, tag, newStart, newEnd string, dryRun bool
 		}
 		content = c
 	} else {
-		c, err := os.ReadFile(path)
+		c, e, err := ReadEditableText(path) // R3662
 		if err != nil {
 			return rescheduleResult{}, fmt.Errorf("read file: %w", err)
 		}
-		content = c
+		content, enc = c, e
 	}
 
 	// Find the tag line and rewrite the date portion. R922
@@ -3795,7 +3796,7 @@ func (srv *Server) rescheduleTag(path, tag, newStart, newEnd string, dryRun bool
 			return rescheduleResult{}, fmt.Errorf("write tmp:// content: %w", err)
 		}
 	} else {
-		if err := os.WriteFile(path, newContent, 0644); err != nil {
+		if err := os.WriteFile(path, EncodeText(newContent, enc), 0644); err != nil {
 			return rescheduleResult{}, fmt.Errorf("write file: %w", err)
 		}
 		// Disk path: trigger re-index via reconcile. tmp:// path already
@@ -4452,6 +4453,17 @@ func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := NormalizeTagLines([]byte(req.Content)) // R1193
+	// R3662: written in the encoding the file has now; one that would not
+	// survive re-encoding is refused rather than altered.
+	content, err := EncodeForFile(req.Path, content)
+	if errors.Is(err, errNotWritable) {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := os.WriteFile(req.Path, content, 0644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -4489,7 +4501,12 @@ func (srv *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Path = filepath.Clean(req.Path)
 
-	data, err := os.ReadFile(req.Path)
+	// R3662: the tag block is edited as text and written back in the file's encoding.
+	data, enc, err := ReadEditableText(req.Path)
+	if errors.Is(err, errNotWritable) {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -4498,7 +4515,7 @@ func (srv *Server) handleSetTags(w http.ResponseWriter, r *http.Request) {
 	tb := ParseTagBlock(data)
 	applyTagUpdates(tb, req.Tags, time.Now())
 
-	if err := os.WriteFile(req.Path, tb.Render(), 0644); err != nil {
+	if err := os.WriteFile(req.Path, EncodeText(tb.Render(), enc), 0644); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -4587,12 +4604,35 @@ func (srv *Server) registerContentRoutes() {
 	// the built bundle there (see O48 in design.md gaps).
 }
 
+// ContentURLPath is a file path's form in a content-route URL: its slash
+// spelling behind a single `/`, so a Windows path keeps its drive
+// (`/C:/Users/me/x.md`) as `file:///C:/` URLs do. Appending a Windows path
+// straight to a route prefix gives `/contentC:/…`, which no route matches.
+// CRC: crc-Server.md, crc-FilenameCase.md | R3654, R3655
+func ContentURLPath(path string) string {
+	path = filepath.ToSlash(path)
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+	return "/" + path
+}
+
+// filePathFromURL inverts ContentURLPath for a route: the `/` in front of a
+// drive is dropped. Off Windows DriveLen is 0, so a path passes unchanged.
+// CRC: crc-Server.md, crc-FilenameCase.md | R3654
+func filePathFromURL(p string) string {
+	if len(p) > 1 && p[0] == '/' && DriveLen(p[1:]) > 0 {
+		return p[1:]
+	}
+	return p
+}
+
 // contentPath extracts and validates the file path from a content route URL.
 // Returns the cleaned absolute path, or writes an error response and returns "".
-// CRC: crc-Server.md, crc-FilenameCase.md | Seq: seq-content-fetching.md | R1154-R1156, R3638
+// CRC: crc-Server.md, crc-FilenameCase.md | Seq: seq-content-fetching.md | R1154-R1156, R3654
 func (srv *Server) contentPath(w http.ResponseWriter, r *http.Request, prefix string) (path string, data []byte, ok bool) {
-	path = strings.TrimPrefix(r.URL.Path, prefix)
-	if path == "" || (path[0] != '/' && DriveLen(path) == 0) { // R3638: or a Windows drive
+	path = filePathFromURL(strings.TrimPrefix(r.URL.Path, prefix))
+	if path == "" || (path[0] != '/' && DriveLen(path) == 0) {
 		http.Error(w, "absolute path required", http.StatusBadRequest)
 		return "", nil, false
 	}
@@ -4619,6 +4659,7 @@ func (srv *Server) handleContentFetch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	data, _, _ = DecodeText(data) // R3663: the page edits text, never a UTF-16 file's raw bytes
 	// R1423: resolve chunk range if specified
 	if rangeParam := r.URL.Query().Get("range"); rangeParam != "" {
 		chunkData, _ := Sync(srv.db, func(db *DB) ([]byte, error) {
@@ -4690,8 +4731,8 @@ type contentRender struct {
 	// the markdown template like any other content; only the per-chunk render
 	// differs.
 	isBible bool
-	// raw is the file's bytes as they are on disk, kept even when data is
-	// replaced by a `?range=` chunk. The bible render needs them: a bible
+	// raw is the file's whole text (decoded, R3663; the bytes on disk for a
+	// UTF-8 file), kept even when data is replaced by a `?range=` chunk. The bible render needs them: a bible
 	// chunk's stored content is stripped prose (R3211), so the verse marks
 	// exist only in the publisher's XHTML. R3181
 	raw []byte
@@ -4708,6 +4749,9 @@ type contentRender struct {
 // range does not resolve), the strategy, the fileID, and the template shell.
 // CRC: crc-Server.md | R1423-R1428, R2415, R3165
 func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *contentRender {
+	// R3663: the view renders the decoded text; R3661: a file that would not
+	// survive re-encoding gets no editor.
+	data, _, roundTrips := DecodeText(data)
 	// R3387: step 1.1, verify this file's link premises on the actor, ONCE for
 	// the whole render, and do it BEFORE the read view is bound below. Order is
 	// load-bearing rather than tidy: a premise that moved rewrites X records
@@ -4803,8 +4847,9 @@ func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *
 	})
 	cr.shell = contentShellData{
 		Title:      path,
+		Path:       path,
 		BundleHash: bundleHash,
-		HideToggle: !writable || isReadOnlyPath(path) || r.URL.Query().Get("toggle") == "false",
+		HideToggle: !writable || !roundTrips || isReadOnlyPath(path) || r.URL.Query().Get("toggle") == "false",
 		AutoEdit:   r.URL.Query().Get("edit") == "true",
 		IsChunk:    cr.isChunk,
 		IsSearch:   r.URL.Query().Get("highlight") != "",
@@ -5195,11 +5240,11 @@ func (lr *contentLinkRewriter) Transform(node *ast.Document, reader text.Reader,
 		switch v := n.(type) {
 		case *ast.Image:
 			if dest := string(v.Destination); isRelativeURL(dest) {
-				v.Destination = []byte("/raw" + lr.baseDir + "/" + dest)
+				v.Destination = []byte("/raw" + ContentURLPath(lr.baseDir) + "/" + dest) // R3655
 			}
 		case *ast.Link:
 			if dest := string(v.Destination); isRelativeURL(dest) && strings.HasSuffix(dest, ".md") {
-				v.Destination = []byte("/content" + lr.baseDir + "/" + dest)
+				v.Destination = []byte("/content" + ContentURLPath(lr.baseDir) + "/" + dest) // R3655
 			}
 		}
 		return ast.WalkContinue, nil
@@ -5298,7 +5343,7 @@ func wrapTagElements(html string, db *DB) string {
 func renderLinkElement(buf *strings.Builder, value string, db *DB) {
 	if db != nil {
 		if path, loc, ok := db.ResolveLink(value); ok {
-			href := "/content" + path
+			href := "/content" + ContentURLPath(path) // R3655
 			if loc != "" {
 				href += "?range=" + url.QueryEscape(loc)
 			}
@@ -5386,6 +5431,7 @@ func assignSidebarIDs(html string) string {
 // contentShellData holds the template data for content HTML shells.
 type contentShellData struct {
 	Title      string
+	Path       string        // R3654: the file's path, which the page cannot read off its URL
 	Content    template.HTML // raw HTML, not escaped
 	BundleHash string        // cache-busting query param for JS bundle
 	HideToggle bool          // R1426, R1429: hide pencil/eye toggle button
@@ -6540,7 +6586,7 @@ func (srv *Server) registerLuaFunctions() {
 			path := L.CheckString(1)
 			tagsTable := L.CheckTable(2)
 
-			data, err := os.ReadFile(path)
+			data, enc, err := ReadEditableText(path) // R3662
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
@@ -6557,7 +6603,7 @@ func (srv *Server) registerLuaFunctions() {
 				}
 			})
 
-			if err := os.WriteFile(path, tb.Render(), 0644); err != nil {
+			if err := os.WriteFile(path, EncodeText(tb.Render(), enc), 0644); err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
 				return 2
@@ -6571,7 +6617,7 @@ func (srv *Server) registerLuaFunctions() {
 		L.SetField(tbl, "readMessage", L.NewFunction(func(L *lua.LState) int {
 			path := L.CheckString(1)
 
-			data, err := os.ReadFile(path)
+			data, err := ReadText(path) // R3663
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))

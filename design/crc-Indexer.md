@@ -1,5 +1,5 @@
 # Indexer
-**Requirements:** R36-44, R117, R118, R121, R126, R360-368, R386, R502, R503, R505, R511, R517-522, R751, R752, R757, R795-797, R866, R868-870, R872, R873, R933-935, R953, R954, R956, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113-1116, R1119-1126, R1128, R1317-1325, R1849-1854, R1869, R1890-1901, R1904-1908, R1923, R1926, R1983, R1984, R1996, R2000-2008, R2012, R2016, R2018, R2022, R2024, R2026, R2110-2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090-3093, R3095-3100, R3104, R3106, R3107, R3244, R3264-3266, R3274, R3275, R3388, R3568, R3594, R3597, R3598, R3603
+**Requirements:** R36-44, R117, R118, R121, R126, R360-368, R386, R502, R503, R505, R511, R517-522, R751, R752, R757, R795-797, R866, R868-870, R872, R873, R933-935, R953, R954, R956, R1009, R1018, R1019, R1021, R1022, R1037, R1038, R1103, R1106, R1113-1116, R1119-1126, R1128, R1317-1325, R1849-1854, R1869, R1890-1901, R1904-1908, R1923, R1926, R1983, R1984, R1996, R2000-2008, R2012, R2016, R2018, R2022, R2024, R2026, R2110-2112, R2365, R2374, R2427, R2696, R2729, R2864, R2913, R2915, R2977, R3008, R3050, R3061, R3074, R3090-3093, R3095-3100, R3104, R3106, R3107, R3244, R3264-3266, R3274, R3275, R3388, R3568, R3594, R3597, R3598, R3603, R3657-3660
 
 Coordinates adding, removing, and refreshing files. Drives microfts2
 indexing, manages orphan-EC cleanup via callback, extracts tags from
@@ -86,6 +86,7 @@ access. (R2915)
   (R2696, R2729).
 
 ## Does
+- textForStore(fileid, path, data): the post-store hooks (afterAddStore, afterReindexStore) decode a UTF-16 file before fileLevelTags, since its chunk offsets index the decoded text (R3657), and keep the fileid's N record in step: written for a non-UTF-8 file, deleted for UTF-8; afterReindexStore drops the old id's record and the remove callback drops it in-txn beside the EF centroid (R3660). Both append preparers (prepareRefresh, prepareScan) and AppendFile decline a file that is not UTF-8, because append resumes from a UTF-8 locator in the raw bytes (R3658). A split failure on a UTF-16 file names the encoding (explainEncoding, R3659).
 - RefreshStale sums the bytes its refreshes chunked and calls releaseMemory at
   the end when the sum reaches `releaseAfterScanBytes` (R3603).
 - reresolvePlansFor(candidates) / reresolveMovedPremises(changed) (R3388):

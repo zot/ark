@@ -618,7 +618,7 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | confirmDismiss() | Final dismiss after confirmation |
 | cancelDismiss() | Clear `_confirmDismiss` |
 | isNew() / notNew() | NEW pill helpers (compare pinnedAt to Curation's `_newCutoff`) |
-| contentURL() / shortPath() | Path display helpers |
+| contentURL() / shortPath() | Path display helpers; contentURL builds `/content` + `contentURLPath(path)` (R3655) |
 | loadChunkInfo() | Lazy `mcp.chunkInfo(chunkID())` — populates `_chunkInfo` / `_chunkInfoError` |
 | chunkInfo() | Lazy accessor; returns `_chunkInfo` |
 | commentSyntax() | `_chunkInfo.commentSyntax` (`""` for markdown) |
@@ -646,7 +646,7 @@ Removed types: Ark.SearchFileGroup, Ark.SearchResult.
 | clearAcceptError() | Manual dismiss for the error alert |
 | loadSuggestions() | Lazy `mcp.suggestTagNames(chunkID, K)`; populates `_suggestions` / `_suggestionsError` |
 | suggestions() / suggestionsError() / noSuggestionsError() / hasSuggestions() | tag-scores accessors (renamed view; data path unchanged) |
-| iframeURL() | `/content<path>?range=…&toggle=false` for the read-only chunk-text iframe |
+| iframeURL() | `/content<path>?range=…&toggle=false` for the read-only chunk-text iframe; `<path>` is the URL form from `contentURLPath`, one leading `/`, so a Windows drive reads `/content/C:/…` (R3654) |
 | editorMountCode() | Returns inline JS string for `ui-code` binding: imports `/ark-markdown-editor.js`, calls `createInkArkEditor` on mount div, registers docChanged callback wiring to `onEditorDocChanged`. |
 
 ### Ark.ProposalWidget

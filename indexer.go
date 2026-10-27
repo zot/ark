@@ -232,7 +232,29 @@ func (idx *Indexer) AddFile(path, strategy string) (uint64, error) {
 // prepared-store path (storeScan → StorePrepared), so the bookkeeping has one
 // home and cannot drift between them. (R3426)
 // CRC: crc-Indexer.md | Seq: seq-tag-value-index.md, seq-ext-routing.md | R1883, R1891, R1996, R2000-R2007, R2913, R3426
+// textForStore keeps fileid's N record in step with the bytes just stored and
+// returns the text the post-store work reads. A UTF-16 file's chunk offsets
+// index its decoded text, so the tag scan must read that, not the raw bytes.
+// CRC: crc-FileEncoding.md, crc-Indexer.md | R3657, R3660, R3661
+func (idx *Indexer) textForStore(fileid uint64, path string, data []byte) []byte {
+	text, enc, writable := DecodeText(data)
+	if idx.store == nil {
+		return text
+	}
+	var err error
+	if enc == EncodingUTF8 {
+		err = idx.store.DeleteFileEncoding(fileid)
+	} else {
+		err = idx.store.WriteFileEncoding(fileid, FileEncodingRecord{Encoding: enc, Writable: writable})
+	}
+	if err != nil {
+		log.Printf("index: record encoding %s: %v", path, err)
+	}
+	return text
+}
+
 func (idx *Indexer) afterAddStore(fileid uint64, path, strategy string, content []byte, acc *chunkAccumulator) error {
+	content = idx.textForStore(fileid, path, content)
 	if idx.pdfChunker != nil {
 		if err := idx.pdfChunker.FlushBlobs(path, fileid); err != nil {
 			log.Printf("pdf: flush blobs %s: %v", path, err)
@@ -411,6 +433,9 @@ func (idx *Indexer) removeCallback(fileID uint64, tt *TvidTxn) microfts2.RemoveC
 	}
 	return func(txn *bbolt.Tx, orphanedChunkIDs []uint64) error {
 		if err := idx.cleanupOrphans(txn, tt, orphanedChunkIDs); err != nil {
+			return err
+		}
+		if err := idx.store.DeleteFileEncodingInTxn(txn, fileID); err != nil { // R3660
 			return err
 		}
 		return idx.store.DeleteFileCentroidInTxn(txn, fileID)
@@ -867,6 +892,8 @@ func (idx *Indexer) prepareRefresh(path, strategy string, fileID uint64) (*refre
 
 	// Try append detection (LMDB reads are concurrent-safe)
 	ok, _ := idx.DetectAppend(path, fileID)
+	// R3658: appending works on raw bytes; a file that is not UTF-8 re-indexes whole.
+	ok = ok && DetectEncoding(data) == EncodingUTF8
 	// R732: level-2 (fine) verbosity tier — per-file refresh/append detail
 	Logv(2, "prepare-refresh: %s detect=%v", path, ok)
 	info, infoErr := idx.fts.FileInfoByID(fileID)
@@ -1045,8 +1072,10 @@ func (idx *Indexer) afterReindexStore(fileid, oldID uint64, path, strategy strin
 			// belong to oldID and need explicit removal.
 			idx.store.RemoveTagDefs(oldID)
 			idx.store.RemovePageContents(oldID)
+			idx.store.DeleteFileEncoding(oldID) // R3660: the record moves to the new id
 		}
 		// File-level tags + defs re-extracted from the full file content.
+		data = idx.textForStore(fileid, path, data)
 		fileVals, fileDefs := idx.fileLevelTags(path, data, strategy)
 		if err := idx.store.UpdateTagValues(acc.chunkTags); err != nil {
 			return fmt.Errorf("update tag values %s: %w", path, err)
@@ -1195,7 +1224,7 @@ func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, stal
 	// it re-chunks the whole file under the current rules (R3568).
 	if known && !force {
 		info, infoErr := idx.fts.FileInfoByID(oldID)
-		if infoErr == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength &&
+		if infoErr == nil && info.FileLength > 0 && int64(len(data)) > info.FileLength && DetectEncoding(data) == EncodingUTF8 && // R3658
 			sha256.Sum256(data[:info.FileLength]) == info.ContentHash {
 			newBytes := data[info.FileLength:]
 			baseLine := 0
@@ -1224,7 +1253,7 @@ func (idx *Indexer) prepareScan(path, strategy string, oldID uint64, known, stal
 	// per-chunk preemption.
 	splits, meta, splitErr := idx.fts.SplitFile(path, strategy)
 	if splitErr != nil {
-		return nil, fmt.Errorf("split file %s: %w", path, splitErr)
+		return nil, fmt.Errorf("split file %s: %w", path, explainEncoding(splitErr, data, strategy))
 	}
 	entries, buildErr := buildEntries(splits, gate, idx.fts.PrepareChunk)
 	if buildErr != nil {
@@ -1444,6 +1473,9 @@ func (idx *Indexer) AppendFile(path string, fileid uint64, strategy string) erro
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if enc := DetectEncoding(data); enc != EncodingUTF8 { // R3658
+		return fmt.Errorf("append %s: the file is %s; appending works on UTF-8 only, so re-index it", path, enc)
 	}
 	newBytes := data[info.FileLength:]
 

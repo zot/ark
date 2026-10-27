@@ -1,5 +1,5 @@
 # ArkTagElement
-**Requirements:** R1476, R1477, R1478, R1479, R1480, R1481, R1482, R1483, R1484, R1490, R1491, R1492, R1493, R1494, R1497, R1498, R1512, R1668, R2073, R2074
+**Requirements:** R1476-1484, R1490-1494, R1497, R1498, R1512, R1668, R2073, R2074, R3654, R3655
 
 Custom element (`<ark-tag>`) that renders an interactive tag widget
 in read-only content (goldmark HTML and plain-text `<pre>` blocks).
@@ -32,6 +32,7 @@ No shadow DOM — inherits host theme CSS.
   in the DOM (R2074)
 
 ## Does
+- The content pages' HostAPI navigate builds `/content` + contentURLPath(p) (R3655); the markdown page fetches `/fetch` + its own URL path, and takes its file path for save, tags and pins from the server-rendered `{{.Path}}` rather than its URL (R3654).
 - renders styled tag: CSS `content` generates `@` on `name::before` and `:` on `name::after`; name colored `--term-accent-bright`, value colored `--term-success`, punctuation colored `--term-text`
 - degrades to readable plain text without JS: `TAG VALUE`
 - on click: closes any existing inline `<ark-search>` panel, creates a new `<ark-search>` element, sets its `tag` and `value` properties, inserts it after the tag's parent block element, sets `api` from `document.arkSearchAPI`

@@ -37,7 +37,9 @@ change them, we need to update the CLI code so it's up-to-date.
 | `F`    | Chunk-tag                       | `F` + chunkid varint + tagname                                     | uint32 count + optional tvids                                                      |
 | `HC`   | Hot correlations                | `HC` + tagname + chunkid:8                                         | float64 score (8 bytes)                                                            |
 | `I`    | Info / settings                 | `I` + name                                                         | string or JSON or counter (8 bytes)                                                |
+| `L`    | Directory symlink               | `L` + path                                                         | empty                                                                              |
 | `M`    | Missing file                    | `M` + fileid:8                                                     | JSON                                                                               |
+| `N`    | File encoding                   | `N` + fileid:8                                                     | JSON (encoding, writable)                                                          |
 | `PC`   | Page content                    | `PC` + fileID varint + page varint                                 | zlib-compressed blob                                                               |
 | `RC`   | Recall Candidate                | `RC` + source_tvid varint + target_chunkid varint (0 = unattached) | varint tally (materialized from `@ext-candidate` `@count`)                         |
 | `RD`   | Recall discussed-tag            | `RD` + session-bytes + `\x00` + tagname + `\x00` + value           | 8-byte big-endian unix nanos                                                       |
@@ -490,6 +492,24 @@ during `ark init` and by config-mutating commands.
   table while a server that happened to scan resolved them correctly.
   The two would disagree about whether the same file exists, silently,
   as a plausible "not indexed".
+
+### N — File encodings
+
+- **Key:** `N` + fileid:8.
+- **Value:** JSON `{"encoding": "utf-16le" | "utf-16be", "writable": bool}`.
+- **Semantic:** the encoding of an indexed file that is not UTF-8, read
+  from its byte-order mark ([file-encoding.md](file-encoding.md)). A UTF-8
+  file has no record, so every file indexed before encodings were
+  recorded is already correct. `writable` is false when encoding the
+  file's decoded text would not reproduce its bytes (an unpaired
+  surrogate, say); such a file is indexed and never edited.
+- **Lifecycle:** written after each store from the bytes just stored;
+  deleted with the file (inside the remove callback, beside the EF
+  centroid) and from the old id when a re-index allocates a new one.
+- **Not used for writing:** a writer reads the encoding from the file
+  at the moment it writes, so a file re-saved as UTF-8 since it was
+  indexed is not converted back. The record serves what cannot read the
+  file cheaply: the curation workshop's editability, and `status -db`.
 
 ## Page Content Records (PC)
 

@@ -14,7 +14,7 @@ func TestArkLabelsCoverRecordClasses(t *testing.T) {
 	// (vector-freshness.md: "No status display").
 	want := []string{
 		"B", "D", "E:", "EC", "ED", "EF", "EV", "F", "HC", "I", "L", "M",
-		"PC", "RC", "RD", "RF", "RJ", "RM", "T", "U", "V", "X",
+		"N", "PC", "RC", "RD", "RF", "RJ", "RM", "T", "U", "V", "X",
 	}
 	for _, prefix := range want {
 		if _, ok := arkLabels[prefix]; !ok {

@@ -96,6 +96,12 @@ Notes:
   assertion fails for them and internal disposition degrades to external. See
   `internal-disposition.md`.
 
+Every text chunker reads a UTF-16 file as well as UTF-8: the chunk content it
+yields is always UTF-8, decoded before the chunker sees the file. The PDF
+chunker is binary, and the external-command strategies (`lines-overlap`,
+`words-overlap`) open the file themselves and read UTF-8 only. How each is
+covered: [file-encoding.md](file-encoding.md).
+
 ## Registration paths
 
 - **`Init` → `fts.AddChunker`** (db.go) — used by CLI create and test code;

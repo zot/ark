@@ -233,7 +233,7 @@ func Init(dbPath string, opts InitOpts) error {
 	if err := fts.AddChunker(bibleStrategy, &bibleChunker{}); err != nil {
 		return fmt.Errorf("register strategy %s: %w", bibleStrategy, err)
 	}
-	if err := fts.AddStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+	if err := fts.AddStrategyFunc("lines", decodingFunc(microfts2.LineChunkFunc)); err != nil { // R3664
 		return fmt.Errorf("register strategy lines: %w", err)
 	}
 	externalStrategies := map[string]string{
@@ -403,7 +403,8 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	// growing files index incrementally via microfts2's drop-and-replace
 	// append protocol. addChunker mirrors each registration into
 	// db.chunkerByName so ChunkInfo can look up ChunkerMetadata by strategy.
-	if err := db.addChunker("markdown", wrapInternalTagChunker(microfts2.MarkdownChunker{}, stencilMarkdown)); err != nil {
+	// R3657: the decoding wrapper hands the chunker UTF-8 whatever the file's encoding.
+	if err := db.addChunker("markdown", wrapInternalTagChunker(wrapDecoding(microfts2.MarkdownChunker{}), stencilMarkdown)); err != nil {
 		fts.Close()
 		return nil, fmt.Errorf("register markdown strategy: %w", err)
 	}
@@ -420,7 +421,7 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 		fts.Close()
 		return nil, fmt.Errorf("register %s strategy: %w", bibleStrategy, err)
 	}
-	if err := db.addStrategyFunc("lines", microfts2.LineChunkFunc); err != nil {
+	if err := db.addStrategyFunc("lines", decodingFunc(microfts2.LineChunkFunc)); err != nil { // R3664
 		fts.Close()
 		return nil, fmt.Errorf("register lines strategy: %w", err)
 	}
@@ -821,7 +822,8 @@ func (db *DB) registerConfigChunkers(cfg *Config) {
 		isBracket := cc.Type == "bracket" || cc.Type == "bracket-full"
 		switch {
 		case isBracket:
-			if err := db.addChunker(cc.Name, wrapInternalTagChunker(microfts2.BracketChunker(lang), stencilBracket)); err != nil {
+			// R3657: the decoding wrapper hands the chunker UTF-8 whatever the file's encoding.
+			if err := db.addChunker(cc.Name, wrapInternalTagChunker(wrapDecoding(microfts2.BracketChunker(lang)), stencilBracket)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		case isIndent:
@@ -829,7 +831,8 @@ func (db *DB) registerConfigChunkers(cfg *Config) {
 			if tabWidth <= 0 {
 				tabWidth = 4
 			}
-			if err := db.addChunker(cc.Name, wrapInternalTagChunker(microfts2.IndentChunker(lang, tabWidth), stencilIndent)); err != nil {
+			// R3657: the decoding wrapper hands the chunker UTF-8 whatever the file's encoding.
+			if err := db.addChunker(cc.Name, wrapInternalTagChunker(wrapDecoding(microfts2.IndentChunker(lang, tabWidth)), stencilIndent)); err != nil {
 				log.Printf("warning: register chunker %s: %v", cc.Name, err)
 			}
 		default:
@@ -3193,6 +3196,10 @@ func (db *DB) ChunkInfo(chunkID uint64) (ChunkInfo, error) {
 	if writable && isReadOnlyPath(path) {
 		writable = false
 	}
+	// R3661: a file that would not survive re-encoding is never edited.
+	if rec, ok, _ := db.store.ReadFileEncoding(fileID); ok && !rec.Writable {
+		writable = false
+	}
 	return ChunkInfo{
 		ChunkID:       chunkID,
 		FileID:        fileID,
@@ -3250,7 +3257,9 @@ func (db *DB) ReplaceRegion(path string, byteStart, byteEnd uint64, newText []by
 	if _, err := db.fts.CheckFile(path); err != nil {
 		return fmt.Errorf("file not indexed: %s", path)
 	}
-	data, err := os.ReadFile(path)
+	// R3662: the range counts bytes of the decoded text, as the chunk
+	// locators it came from do, so the splice is made there.
+	data, enc, err := ReadEditableText(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
@@ -3261,7 +3270,7 @@ func (db *DB) ReplaceRegion(path string, byteStart, byteEnd uint64, newText []by
 	out = append(out, data[:byteStart]...)
 	out = append(out, newText...)
 	out = append(out, data[byteEnd:]...)
-	return atomicWriteFile(path, out, 0644)
+	return atomicWriteFile(path, EncodeText(out, enc), 0644)
 }
 
 // atomicWriteFile writes data to path via a sibling .tmp file +
@@ -3662,7 +3671,9 @@ func (db *DB) writeInternalTag(targetSpec, tag, value string, replace bool) (boo
 	if err != nil || st.Mode().Perm()&0o200 == 0 {
 		return false, nil // unwritable on disk (layer b) → external
 	}
-	fileBytes, err := os.ReadFile(info.Path)
+	// R3662: the tag goes into the text, and the text back in the file's encoding;
+	// a file that would not survive re-encoding falls back to external.
+	fileBytes, enc, err := ReadEditableText(info.Path)
 	if err != nil {
 		return false, nil
 	}
@@ -3677,7 +3688,7 @@ func (db *DB) writeInternalTag(targetSpec, tag, value string, replace bool) (boo
 	if !ok {
 		return false, nil // comment-less code chunk → external
 	}
-	if err := atomicWriteFile(info.Path, newBytes, st.Mode().Perm()); err != nil {
+	if err := atomicWriteFile(info.Path, EncodeText(newBytes, enc), st.Mode().Perm()); err != nil {
 		return false, nil // write failed → external
 	}
 	return true, nil
@@ -3731,7 +3742,7 @@ func (db *DB) RemoveInternalTag(targetSpec, tag string) error {
 	if st.Mode().Perm()&0o200 == 0 {
 		return fmt.Errorf("%s is not writable", info.Path)
 	}
-	fileBytes, err := os.ReadFile(info.Path)
+	fileBytes, enc, err := ReadEditableText(info.Path) // R3662
 	if err != nil {
 		return err
 	}
@@ -3746,7 +3757,7 @@ func (db *DB) RemoveInternalTag(targetSpec, tag string) error {
 	if !ok {
 		return fmt.Errorf("no inline @%s: line in %s", tag, targetSpec)
 	}
-	return atomicWriteFile(info.Path, newBytes, st.Mode().Perm())
+	return atomicWriteFile(info.Path, EncodeText(newBytes, enc), st.Mode().Perm())
 }
 
 // ExtAmendOpts is the carry-forward half of AmendExtCandidate's signature.
@@ -4443,7 +4454,8 @@ var arkLabels = map[string]string{
 	"I":  "settings",
 	"M":  "missing",
 	"T":  "tag-totals",
-	"L":  "links", // R3383
+	"L":  "links",          // R3383
+	"N":  "file-encodings", // R3660
 	"U":  "unresolved",
 	"V":  "tag-values",
 	"X":  "ext-routings",
@@ -5341,7 +5353,7 @@ func (db *DB) readInboxFields(fileID uint64, path string) (inboxFields, bool) {
 		f.statusDate = got["status-date"]
 		return f, true
 	}
-	data, err := os.ReadFile(path)
+	data, err := ReadText(path) // R3663
 	if err != nil {
 		return f, false
 	}
@@ -5825,6 +5837,7 @@ func (JSONLChunker) ChunkerVersion() uint32 { return chatChunkerVersion }
 
 // Chunks delegates to JSONLChunkFunc.
 func (JSONLChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
+	content, _, _ = DecodeText(content) // R3664: a UTF-16 log is chunked as text
 	return JSONLChunkFunc(path, content, yield)
 }
 

@@ -1986,6 +1986,8 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1165:** `GET /raw/PATH` returns file content verbatim with an appropriate Content-Type header
 - **R1166:** Content-Type is mapped from file extension (text/markdown, text/plain, application/json, etc.)
 - **R1167:** (inferred) No wrapping, no JSON encoding — raw bytes suitable for download, curl, or iframe embedding
+- **R3654:** A file path in a content-route URL (`/fetch/`, `/content/`, `/raw/`) is its slash form behind a single `/`, so a Windows path keeps its drive (`/content/C:/Users/me/x.md`); the routes drop the `/` in front of a drive, and a content page reads its file path back from its URL by the same rule.
+- **R3655:** Every builder of a content-route URL writes R3654's form rather than appending the path to the prefix: the server's markdown link and image rewrites, `@link` rendering, `/raw` URLs, the search element's result links and previews, the tag overview's source links, the content pages, and the ark app.
 
 ## Feature: content-view-edit
 **Source:** specs/content-view-edit.md
@@ -5448,6 +5450,19 @@ reason.
 - **R3635:** On Windows a path starting with a letter, `:`, and `\` or `/` has a 3-byte drive prefix (`driveLen`); elsewhere, and for any other shape, the prefix is 0. The one definition every colon-splitting site uses.
 - **R3636:** The `@ext` target/anchor split (the narrower colon, and the anchor skip that shares its grammar) searches for its colon after the drive prefix, so a drive-absolute target keeps its drive and the narrower is the next colon.
 - **R3637:** A `path:range` locator split at its last colon counts only a colon after the drive prefix, so a drive-absolute path with no range is a path, not a path `C` with range `\x.md` (recall's splitLoc, the CLI's splitPathLocator and its path:range argument parse).
-- **R3638:** The content view's route accepts a drive-absolute path after its prefix as well as one starting with `/`.
+- **~~R3638:~~** (Retired T296 — see R3654) The content view's route accepts a drive-absolute path after its prefix as well as one starting with `/`.
 - **R3639:** ark's home directory is inserted into `PATH` by splitting and joining the list with the platform's list separator (`filepath.SplitList`, `os.PathListSeparator`), never a literal `:`.
 - **R3640:** The `@ext` mirror slug of a drive-absolute source root drops the drive's colon (`C:\Users\me\notes` → `C-Users-me-notes`), since a Windows filename cannot contain `:`; slugs of other roots are unchanged (R2392).
+
+## Feature: file-encoding
+**Source:** specs/file-encoding.md
+
+- **R3656:** A file's encoding is read from its byte-order mark: `FF FE` is UTF-16LE, `FE FF` is UTF-16BE, and anything else, including the UTF-8 mark `EF BB BF`, is UTF-8 read exactly as before. ark does not guess an encoding with no mark.
+- **R3657:** Chunk content is UTF-8 whatever the file's encoding: the markdown, bracket and indent chunkers are registered behind a decoding wrapper that decodes a UTF-16 file before the wrapped chunker sees it, on every path microfts2 reads a text file (`Chunks`, `GetChunk`, `FileChunks`), so line ranges and byte locators are those of the decoded text. microfts2 is unchanged.
+- **R3658:** A file that is not UTF-8 is never indexed by appending its tail; a change re-indexes the whole file.
+- **R3659:** When an unwrapped chunker fails on a UTF-16 file, the skip message names the encoding and says the chunker reads UTF-8 only, rather than calling the file invalid UTF-8.
+- **R3660:** ark records, per file id, the encoding of an indexed file that is not UTF-8 and whether it can be written back (an `N` record); a UTF-8 file has none. The record is deleted with the file and moves to the new id when a re-index allocates one.
+- **R3661:** A file is writable only if encoding its decoded text reproduces its bytes exactly; one that does not is indexed but never written, and the editor is not offered for it.
+- **R3662:** Everything that rewrites a user's file as text (editor save, setting a file's tags from the editor, `ark tag set` or the apps' `mcp.setTags`, inserting or removing an inline tag, the curation region edit, rescheduling a tag) reads the file as text and writes it back in the encoding the file has at the moment of writing, byte-order mark included, refusing a file that is not writable.
+- **R3663:** The content view and `/fetch` serve a file's decoded text, as does every reader of a file's tag block outside the index (`ark tag get`, `ark tag check`, the inbox fields, the apps' `mcp.readMessage`); `/raw` serves its bytes unchanged.
+- **R3664:** Every text chunker decodes a UTF-16 file before chunking it: besides the wrapped markdown, bracket and indent chunkers (R3657), the `lines` strategy function is registered wrapped, and ark's own `chat-jsonl` and `bible` chunkers decode at the top of their `Chunks`, keeping every method ark calls on them directly. The PDF chunker is binary and exempt; the external-command strategies, which open the file themselves, are not covered.

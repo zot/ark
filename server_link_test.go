@@ -107,7 +107,7 @@ func TestWrapTagElementsLinkResolved(t *testing.T) {
 	db, fp := linkTestDB(t, "wrap.md", body)
 
 	out := wrapTagElements("@link: "+id+"\n", db)
-	if !strings.Contains(out, `<a class="ark-link" href="/content`+fp) {
+	if !strings.Contains(out, `<a class="ark-link" href="/content`+ContentURLPath(fp)) {
 		t.Errorf("resolved link missing /content href: %q", out)
 	}
 	if !strings.Contains(out, "range=") {

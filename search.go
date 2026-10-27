@@ -2758,7 +2758,7 @@ func rawURLFor(path string) string {
 	}
 	// Preserve the leading `/` so we produce "/raw/home/..." rather than
 	// "/raw%2Fhome/...".
-	u := &url.URL{Path: "/raw" + path}
+	u := &url.URL{Path: "/raw" + ContentURLPath(path)} // R3655
 	return u.String()
 }
 

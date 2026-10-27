@@ -699,6 +699,11 @@ await import('/pdf-chunk-element.js{{.BundleHash}}');
 // R2032-R2050, R2065-R2072: tag-overview sidebar + <ark-ext-tags> element.
 await import('/tag-overview.js{{.BundleHash}}');
 
+// R3654, R3655: a file path's form in a content-route URL is its slash
+// spelling behind one `/`, so a Windows drive survives (`/content/C:/…`).
+// Appending the path to the prefix gives `/contentC:/…`, which no route matches.
+const contentURLPath = (p) => p.startsWith('/') ? p : '/' + p;
+
 // R1483, R1491: SearchAPI for <ark-tag> inline panels.
 const api = {
   search: (query, mode) => fetch('/search/grouped', {
@@ -729,7 +734,7 @@ const api = {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({tag, prefix}),
   }).then(r => r.json()),
-  navigate: (p) => { window.location.href = '/content' + p; },
+  navigate: (p) => { window.location.href = '/content' + contentURLPath(p); },
 };
 document.arkSearchAPI = api;
 
@@ -819,7 +824,7 @@ if (window !== window.parent) {
 
 // R2415-R2420, R2423-R2425: curate pin button. Same shape as
 // content-markdown.html; see that file for the duplication note (O98).
-installCuratePins(decodeURIComponent(location.pathname.replace(/^\/content/, '')));
+installCuratePins({{.Path}}); // R3654: the server's file path, not the URL's
 async function installCuratePins(filePath) {
   const chunks = document.querySelectorAll(
     'div.ark-chunk[data-chunkid], ark-curate-region[chunkid]'

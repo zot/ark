@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Server.md | Seq: seq-content-fetching.md | Test: test-ContentView.md
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,16 +27,22 @@ func addIndexed(t *testing.T, db *DB, name, content, strategy string) string {
 	return fp
 }
 
-// getContentView drives the real handler through httptest and returns the
-// body. The stand-in templates are `{{.Content}}`, so the body is exactly
-// what the render assembled.
+// getContentView drives the real handler through the route it is registered
+// on, with the URL built the way every builder builds it (R3654, R3655), and
+// returns the body. The stand-in templates are `{{.Content}}`, so the body is
+// exactly what the render assembled. Calling the handler directly with
+// "/content"+path once hid a Windows defect: the handler accepted
+// `/contentC:/…`, which no route delivers.
 func getContentView(t *testing.T, srv *Server, path, query string) string {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/content"+path+query, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /content/", srv.handleContentView)
+	target := "/content" + ContentURLPath(path) + query
+	req := httptest.NewRequest("GET", target, nil)
 	rec := httptest.NewRecorder()
-	srv.handleContentView(rec, req)
+	mux.ServeHTTP(rec, req)
 	if rec.Code != 200 {
-		t.Fatalf("GET /content%s%s → %d: %s", path, query, rec.Code, rec.Body.String())
+		t.Fatalf("GET %s → %d: %s", target, rec.Code, rec.Body.String())
 	}
 	return rec.Body.String()
 }

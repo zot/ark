@@ -55,6 +55,7 @@ The capabilities below serve that space in different ways:
 | Ark tags & hypergraph structure             | shipping                                   | `ark-tags.md`                                                                 |
 | Tag drill-down (`<ark-tag>` element)        | shipping                                   | `ark-tag-element.md`                                                          |
 | Source monitoring & chunking                | shipping                                   | `chunkers.md`, `source-monitoring.md`                                         |
+| Text in any encoding (UTF-16)               | shipping 2026-10-27                        | `file-encoding.md`                                                            |
 | Path identity (symlink aliases)             | planned; spec landed 2026-08-01, design not yet | `symlinks.md`                                                            |
 | Verse-addressed scripture (`bible` strategy) | shipping                                   | `bible-chunker.md`                                                            |
 | Hybrid full-text + vector search            | shipping                                   | `search.md`, `fuzzy-search.md`, `tag-search-filters.md`                       |
@@ -634,6 +635,23 @@ WSL-specific skills to maintain.
 
 **Surface.** `ark wsl-init`, the `~/.ark/ark` shim it writes,
 `ARK_WSL` / `ARK_WSL_MOUNTS`, and `specs/wsl.md`.
+
+## Text in any encoding (UTF-16)
+
+**Motivation.** On Windows the ordinary way to make a text file can make a
+UTF-16 one: `echo hello > notes.md` in Windows PowerShell 5, the shell
+Windows ships, writes UTF-16LE, and so does Notepad's "Unicode". ark skipped
+such files as invalid UTF-8, so a user's notes were missing from the index
+with nothing to say why.
+
+**Objective.** A file that names its encoding with a byte-order mark is
+indexed whatever the encoding. Chunks are always UTF-8, so one chunker serves
+every encoding; the encoding is recorded per file; and anything that edits the
+file (save, tags, the curation editor) writes it back in its own encoding, or
+refuses a file that would not survive the round trip rather than altering it.
+
+**Surface.** No new command or flag. The `N` record (`record-formats.md`), and
+`specs/file-encoding.md`.
 
 ## Path identity (symlink aliases)
 

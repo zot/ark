@@ -165,6 +165,9 @@ func bibleClassKind(class string, hasP bool) bibleBlockKind {
 // re-derived rather than stored.
 // CRC: crc-BibleChunker.md | R3173, R3175, R3176, R3210, R3211, R3212, R3213, R3224
 func (c *bibleChunker) Chunks(path string, content []byte, yield func(microfts2.Chunk) bool) error {
+	// R3664: decoded here rather than by a wrapper, so the methods ark calls on
+	// the registered chunker directly (FlushBookIndex, ActivateForSource) stay reachable.
+	content, _, _ = DecodeText(content)
 	open := false
 	var startLine, startByte, endLine, endByte int
 	var chapters []int

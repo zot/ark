@@ -233,6 +233,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Indexer.md → `indexer.go`, `ext.go`, `ext_insert.go`
 - [x] crc-FileScanActor.md → `db.go`, `indexer.go`
 - [x] crc-FilenameCase.md → `pathcase.go`, `pathcase_windows.go`, `pathcase_other.go`, `links.go`, `watcher.go`, `config.go`, `store.go`, `db.go`, `indexer.go`, `ext.go`, `recall_agent_builder.go`, `server.go`, `cmd/ark/main.go`
+- [x] crc-FileEncoding.md → `encoding.go`
 - [x] crc-Patterns.md → `patterns.go`
 - [ ] crc-ExtMap.md → `extmap.go`
 - [x] crc-Searcher.md → `search.go`
@@ -480,7 +481,8 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
-- [x] test-FilenameCase.md → `pathcase_test.go`, `pathcase_windows_test.go`, `drive_windows_test.go`, `cmd/ark/locator_windows_test.go`, `contentview_test.go`
+- [x] test-FilenameCase.md → `pathcase_test.go`, `pathcase_windows_test.go`, `drive_windows_test.go`, `cmd/ark/locator_windows_test.go`, `contentview_test.go`, `contenturl_test.go`
+- [x] test-FileEncoding.md → `encoding_test.go`
 - [x] test-StatusDBLabels.md → `status_db_labels_test.go`
 - [ ] test-RecallWatcher.md → `recall_watcher_test.go`
 - [x] test-AmbientRouting.md → `ambient_routing_test.go`
@@ -1297,3 +1299,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T293: R1365 retired by R3622 (2026-10-26 ark-search rows are /content iframes (#168 doc check))
 - T294: R1373 retired by R3622 (2026-10-26 no renderTagSearchResults; rows are /content iframes (#168 doc check))
 - T295: R20 retired by R3632 (Windows: a backslash is a separator, so the escape is off-Windows only; bracket form escapes everywhere)
+- T296: R3638 retired by R3654 (the route accepted a drive glued onto the prefix, a URL no route delivers; replaced by the slash-before-drive form)

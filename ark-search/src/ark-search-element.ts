@@ -8,6 +8,13 @@ import type {
   ChunkFilterParam,
 } from "./search-api";
 
+// R3654, R3655: a file path's form in a content-route URL is its slash
+// spelling behind one `/`, so a Windows drive survives (`/content/C:/…`).
+// Appending the path to the prefix gives `/contentC:/…`, which no route matches.
+function contentURLPath(p: string): string {
+  return p.startsWith("/") ? p : "/" + p;
+}
+
 /** Source phase for visual treatment. */
 type Phase = "trigram" | "candidate" | "curated" | "rejected";
 
@@ -1299,7 +1306,7 @@ export class ArkSearchElement extends HTMLElement {
     const pathLink = document.createElement("a");
     pathLink.className = "ark-tag-search-path";
     pathLink.textContent = group.path;
-    pathLink.href = "/content" + group.path;
+    pathLink.href = "/content" + contentURLPath(group.path);
     pathLink.addEventListener("click", (e) => {
       e.preventDefault();
       api.navigate(group.path);
@@ -1338,7 +1345,7 @@ export class ArkSearchElement extends HTMLElement {
       // sensible default. Users can expand by clicking it.
       params.set("tag-overview", "collapsed");
       for (const h of highlights) params.append("highlight", h);
-      const iframeSrc = `/content${group.path}?${params}`;
+      const iframeSrc = `/content${contentURLPath(group.path)}?${params}`;
 
       const iframe = document.createElement("iframe");
       iframe.className = "ark-search-chunk-iframe";

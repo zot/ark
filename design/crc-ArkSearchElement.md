@@ -1,5 +1,5 @@
 # ArkSearchElement
-**Requirements:** R1356-1364, R1366-1367, R1372, R1377, R1386-1394, R1406-1422, R1433-1459, R1464-1466, R1472-1475, R1682-1690, R1746, R1748, R1750-1754, R1937, R2442-2455, R2472, R3622
+**Requirements:** R1356-1364, R1366, R1367, R1372, R1377, R1386-1394, R1406-1422, R1433-1459, R1464-1466, R1472-1475, R1682-1690, R1746, R1748, R1750-1754, R1937, R2442-2455, R2472, R3622, R3655
 
 Custom element (`<ark-search>`) that renders a tag search panel
 with query bar, results area, and resize handle. Pure DOM — no
@@ -22,6 +22,7 @@ CM6 dependency.
 - `themeColors` — cached `{name, value, punctuation, fontFamily, bg}` descriptor sampled from a hidden representative `<ark-tag>` element (R1750)
 
 ## Does
+- contentURLPath(p): result links and preview iframes build `/content` + the path's URL form, never the prefix glued to the path (R3655).
 - renders query bar: mode dropdown, swappable inputs (structured tag fields or free text input), clear, close
 - in tag mode, renders `@ [~/=] name : [Aa/.*/~] value` — name match toggle between `@` and the name input
 - renders scrollable results area with grouped results; each chunk is a lazily loaded iframe of `/content/PATH?range=…&edit=true&toggle=false&tag-overview=collapsed` plus `highlight=` params, so a row shows the chunk as the content view does and the element has no chunk renderer (it ignores SearchChunk `preview`) (R3622)

@@ -84,8 +84,15 @@ definition serves every site: at offset 0, a letter, `:`, then `\` or `/`.
 - A split at the **last** colon (a `path:range` locator) counts only a colon
   after the drive. Without this, a path with no range, `C:\x.md`, has exactly
   one colon, the drive's, and splits into the path `C` and the range `\x.md`.
-- The content view's URL (`/content/PATH`) accepts a drive-absolute path as
-  well as `/`.
+- A content URL keeps the drive behind a slash, `/content/C:/Users/me/x.md`,
+  and the route drops that slash (the URL form is
+  [content-fetching.md](content-fetching.md)'s). Found by Bill 2026-10-27 in
+  the desktop run: every builder glued the prefix onto the path, giving
+  `/contentC:/…`, which no route matches, so search result links and content
+  previews failed. The content-view tests had built their URLs the same way
+  and called the handler directly, which is why they passed. A URL with the
+  drive left out (`/content/Users/…`) does resolve, against the current
+  drive, and would miss a source on another one.
 - An `@ext` mirror's directory name, the source path turned into a slug,
   drops the drive's colon, which a Windows filename cannot hold:
   `C:\Users\me\notes` becomes `C-Users-me-notes`. Found 2026-10-26, one step
@@ -95,6 +102,10 @@ The rule is active on Windows only. Elsewhere `C:/x` is an ordinary relative
 path and is read exactly as before. Measured 2026-10-26: before this, every
 absolute `@ext` target on Windows resolved the path `C` and routed nothing,
 and the content view rejected every file.
+
+A file's text encoding is a separate question, not a path one: a UTF-16
+file, which Windows PowerShell 5 writes by default, is covered by
+[file-encoding.md](file-encoding.md).
 
 ## The PATH list
 
