@@ -16,7 +16,7 @@ import (
 )
 
 // configParseWarning names the condition in `ark status` warnings.
-const configParseWarning = "config_parse"
+const configParseWarning = ark.ECondConfigParse
 
 // configExempt lists the command paths that still run on an ark.toml that
 // does not load, so a user who broke the file can repair it and get ark back.
@@ -81,4 +81,23 @@ func asksForHelp(cmd *ucli.Command) bool {
 		}
 	}
 	return false
+}
+
+// withConfigParseWarning adds the CLI's own ark.toml check to a server's
+// warnings (R3647). The server's `config_parse` record wins when it has one,
+// because it says what is true of the running config; the CLI's fills in only
+// in its absence, as in the moment before the watcher rereads the file.
+// CRC: crc-CLI.md | R3647, R3653
+func withConfigParseWarning(warnings map[string]string, cfgErr error) map[string]string {
+	if cfgErr == nil {
+		return warnings
+	}
+	if _, recorded := warnings[configParseWarning]; recorded {
+		return warnings
+	}
+	if warnings == nil {
+		warnings = map[string]string{}
+	}
+	warnings[configParseWarning] = cfgErr.Error()
+	return warnings
 }

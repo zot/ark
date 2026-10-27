@@ -3031,13 +3031,7 @@ func cmdStatus(args []string) {
 			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
 				resp.Version, ark.Version)
 		}
-		if cfgErr != nil { // R3647
-			if resp.Warnings == nil {
-				resp.Warnings = map[string]string{}
-			}
-			resp.Warnings[configParseWarning] = cfgErr.Error()
-		}
-		printWarnings(resp.Warnings)
+		printWarnings(withConfigParseWarning(resp.Warnings, cfgErr))
 		if *heapFile != "" {
 			writeServerHeapProfile(client, *heapFile)
 		}

@@ -12,8 +12,8 @@ directory.
 ## Status
 
 - [x] ~~**Item 1 — every CLI execution checks `ark.toml` at startup.**~~ **LANDED (2026-10-27 — `#179`.)** Exemptions decided. `/mini-spec`. See Item 1.
-- [ ] **Item 2 — a failed reload records an error; a good read clears it.**
-      **OPEN (not queued.)** `/mini-spec`. See Item 2.
+- [x] ~~**Item 2 — a failed reload records an error; a good read clears it.**~~ **LANDED (2026-10-27 — `#180`.)**
+      `/mini-spec`. See Item 2.
 - [ ] **Item 3 — the UI shows the error.** **OPEN (not queued.)** Whether the
       UI already shows `E:` records is unmeasured. `/ui-fast`. See Item 3.
 
@@ -107,6 +107,18 @@ The server keeps running on its last good config while the record is set, and
 the warning should say so. A reader of `ark status` needs to know that the
 running config is not the file on disk. Updates `specs/record-formats.md`'s
 known-conditions table and `specs/config-tracking.md`.
+
+Outcome (2026-10-27): R3651-R3653. Both reload sites go through
+`DB.ReloadConfig`, so the record is kept there rather than at each caller:
+`recordConfigParse` writes `{error, time, server}` when the load fails and
+deletes the record when it succeeds, and `OpenWithTimeout` deletes it once the
+store is open, which covers server startup and every local CLI open. The file
+is the witness, so the condition conforms to the re-derive rule from the
+start. The CLI's warning constant is now the store's condition name, so a
+proxied `status` merges them under one key, and the server's record wins:
+the CLI's text says to run `ark config recover`, which refuses while a server
+runs, while the server's says it is still on its last good config and that
+fixing the file reloads it.
 
 ## Item 3
 

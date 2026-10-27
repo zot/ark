@@ -57,3 +57,27 @@
 **Fire alarm:** fall back to the default on any load error
 **Inject:** cmd/ark/patterns_cli.go:patternsCollectionFor
 **Pulled:** 2026-10-27 (local) — rang: `broken ark.toml: got "…/personal-patterns", want an error`. A first injection that left imports unused failed to compile instead; it was re-pulled
+
+## Test: a failed reread records config_parse; a good load deletes it
+**Purpose:** R3651, R3652 — `ReloadConfig` on an unparseable ark.toml writes `config_parse` with error, time and server fields and keeps the running config; a good reread deletes it; so does an open that loads the file
+**Input:** `Init` a temp dir with `dotfiles = true`, `Open`; break ark.toml and reload; fix and reload; break and reload, close, fix, `Open`
+**Expected:** record present with all three fields and the config pointer unchanged; gone after the good reread; gone after the reopen
+**Refs:** crc-DB.md, R3651, R3652
+**Fire alarm:** write the record under another key
+**Inject:** db.go:recordConfigParse
+**Pulled:** 2026-10-27 (local) — rang: `no config_parse record; the failure would live only in the log`. A first injection that left `cond` unused failed to compile instead; it was re-pulled
+**Fire alarm:** record only on failure, so a good reread never clears
+**Inject:** db.go:ReloadConfig
+**Pulled:** 2026-10-27 (local) — rang: `config_parse survived a good reread`
+**Fire alarm:** drop the clear from the open path
+**Inject:** db.go:OpenWithTimeout
+**Pulled:** 2026-10-27 (local) — rang: `config_parse survived an open that loaded ark.toml`
+
+## Test: status prefers the server's config_parse record
+**Purpose:** R3653 — `withConfigParseWarning` keeps a server's `config_parse` entry, adds the CLI's error when the server has none, and adds nothing when the CLI check passed
+**Input:** a warnings map holding a server record; nil; an empty map with a nil error
+**Expected:** the server text; the CLI text; no entry
+**Refs:** crc-CLI.md, R3647, R3653
+**Fire alarm:** ignore the server's record
+**Inject:** cmd/ark/configcheck.go:withConfigParseWarning
+**Pulled:** 2026-10-27 (local) — rang: `server record replaced by the CLI's`

@@ -178,6 +178,10 @@ const (
 	// written when any source fails, deleted when none do — so fixing the
 	// source and reloading clears it with no dismissal step.
 	ECondSourceActivation = "source_activation"
+	// ECondConfigParse reports a running server's reread of ark.toml that
+	// failed while it kept its last good config (R3651). The file is the
+	// witness: every successful load deletes it (R3652).
+	ECondConfigParse = "config_parse"
 )
 
 // TagFileRecord is a per-(chunk, file) tag count returned by TagFiles.

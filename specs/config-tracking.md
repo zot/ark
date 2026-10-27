@@ -40,7 +40,8 @@ condition resolves — either by config changing back, by
 Record key/value layout and the disambiguating colon prefix: see
 [record-formats.md](record-formats.md) (E: section). Known
 condition names (`model_mismatch`, `index_stale`,
-`config_catastrophe`, `source_activation`) are also listed there.
+`config_catastrophe`, `source_activation`, `config_parse`) are also
+listed there.
 
 ### Every condition is re-derived, never dismissed
 
@@ -50,7 +51,8 @@ owns and reconciles the records to the answer: present conditions are
 written, absent ones deleted. A record therefore cannot outlive the problem
 it describes, and no condition ever needs dismissing. `source_activation`
 works this way (see `bible-chunker.md`): fix the source, reload, and the
-record is gone.
+record is gone. So does `config_parse`, witnessed by ark.toml itself:
+fix the file and the next load deletes it.
 
 The witness has to be chosen with care, because the obvious one is usually
 wrong. Comparing the loaded config against the stored I records compares
@@ -198,6 +200,21 @@ get ark back:
 
 `ark patterns` uses its default collection only when ark.toml is
 missing. Any other failure to load the file is an error.
+
+A running server rereads ark.toml when its file watcher sees an edit, and
+when a command rewrites the file for it. If that reread fails, the server
+keeps running on its last good config and records a `config_parse`
+condition: the error, when it happened, and that the server is still on
+the last config that loaded. Fixing the file is the repair, since the
+watcher rereads it. The witness is the file itself, so every successful
+load of ark.toml deletes the record: server startup, a reread, or a CLI
+command that opens the index without a server.
+
+While a server is running, `ark status` shows the server's `config_parse`
+record in preference to its own check, because the server's says what is
+true of the running config. The CLI's check fills in only when the server
+has not recorded one, for instance in the moment before its watcher
+rereads the file.
 
 ## Recovery
 

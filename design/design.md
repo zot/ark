@@ -277,7 +277,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DirLink.md → `dirlink_test.go`
 - [x] test-LlamaLibs.md → `llamalibs_test.go`, `dllpath_windows_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
-- [x] test-ConfigErrors.md → `cmd/ark/configcheck_test.go`
+- [x] test-ConfigErrors.md → `cmd/ark/configcheck_test.go`, `configparse_test.go`
 - [x] crc-WSLBridge.md → `cmd/ark/wsl.go`, `cmd/ark/wsl_windows.go`, `cmd/ark/wsl_other.go`
 - [x] test-WSLBridge.md → `cmd/ark/wsl_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`

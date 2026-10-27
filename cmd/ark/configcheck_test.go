@@ -171,3 +171,19 @@ func TestStatusWarnsOnBrokenToml(t *testing.T) {
 		}
 	}
 }
+
+// R3653: the server's config_parse record wins; the CLI's check fills in only
+// when the server has none.
+func TestWithConfigParseWarning(t *testing.T) {
+	cliErr := errors.New("cli: ark.toml does not load")
+	server := map[string]string{configParseWarning: `{"server":"still running"}`}
+	if got := withConfigParseWarning(server, cliErr)[configParseWarning]; got != `{"server":"still running"}` {
+		t.Errorf("server record replaced by the CLI's: %q", got)
+	}
+	if got := withConfigParseWarning(nil, cliErr)[configParseWarning]; got != cliErr.Error() {
+		t.Errorf("no server record: got %q, want the CLI's", got)
+	}
+	if got := withConfigParseWarning(map[string]string{}, nil); len(got) != 0 {
+		t.Errorf("no CLI error added a warning: %v", got)
+	}
+}

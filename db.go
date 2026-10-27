@@ -438,6 +438,8 @@ func OpenWithTimeout(dbPath string, timeout time.Duration) (*DB, error) {
 	}
 	db.indexer = &Indexer{fts: fts, store: store, config: config, pdfChunker: db.pdfChunker, bibleChunker: db.bibleChunker}
 
+	db.recordConfigParse(nil) // R3652: this open loaded ark.toml
+
 	// R3217: every chunker is registered, so the per-source hook can run.
 	// A failure here is a source misconfiguration (the bible chunker's
 	// reserved-path collision, R3219) — report it and leave the source's
@@ -932,6 +934,37 @@ func (db *DB) recordActivationFailures(failed map[string]string) {
 	}
 }
 
+// configParseCondition is the `config_parse` E record's payload (R3651).
+type configParseCondition struct {
+	Error  string `json:"error"`
+	Time   string `json:"time"`
+	Server string `json:"server"`
+}
+
+// recordConfigParse keeps the `config_parse` E record in step with the load of
+// ark.toml just attempted: written when it failed, deleted when it succeeded.
+// The file is the witness, so the record re-derives on every load (R3223) and
+// fixing the file is the whole repair. Only a reread by a running DB can fail
+// here; an open that cannot load the config never gets a store to write to.
+// CRC: crc-DB.md | R3651, R3652
+func (db *DB) recordConfigParse(loadErr error) {
+	if db.store == nil {
+		return
+	}
+	if loadErr == nil {
+		db.store.DeleteERecord(ECondConfigParse)
+		return
+	}
+	cond := configParseCondition{
+		Error:  loadErr.Error(),
+		Time:   time.Now().Format(time.RFC3339),
+		Server: "still running on the last ark.toml that loaded; fixing the file reloads it",
+	}
+	if err := db.store.WriteERecord(ECondConfigParse, cond); err != nil {
+		log.Printf("warning: record %s: %v", ECondConfigParse, err)
+	}
+}
+
 // buildBracketLang converts a ChunkerConfig to a microfts2.BracketLang.
 // Handles both easy form (flat pairs) and full form (struct defs).
 // Strings and brackets unify into BracketGroup: strings get a non-nil
@@ -1026,6 +1059,7 @@ func (db *DB) SaveConfig() error { return db.config.SaveConfig(db.ConfigPath()) 
 // CRC: crc-DB.md | R1561, R1562, R1563, R1564, R1021
 func (db *DB) ReloadConfig() error {
 	cfg, err := LoadConfig(db.ConfigPath())
+	db.recordConfigParse(err)
 	if err != nil {
 		return err
 	}

@@ -428,6 +428,7 @@ during `ark init` and by config-mutating commands.
 | `index_stale` | `case_insensitive`, alias config, or chunker config changed; FTS index is wrong-shape | `ark rebuild` |
 | `config_catastrophe` | All sources removed, or config appears zeroed out | Restore via `ark config recover` from stored I records |
 | `source_activation` | A source's per-source chunker hook failed at config-resolve — today, a bible source with a real `<source>/BIBLE` path colliding with the reserved address namespace (R3219). Payload lists every failing source. | Fix the source (move or rename the colliding path) and reload; the condition is re-derived per config load, so it clears itself |
+| `config_parse` | A running server reread ark.toml (watcher reload, or a command that rewrote the file) and it did not load; the server keeps its last good config. Payload: `error`, `time`, `server`. | Fix the file; the next successful load (reread, server start, or a local CLI open) deletes it |
 
 ## File State Records
 

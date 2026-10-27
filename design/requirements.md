@@ -2655,6 +2655,9 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R3648:** `ark config recover` reads the stored I records without loading ark.toml, so it works when the file is missing or does not parse. It refuses while a server is running.
 - **R3649:** Before writing the recovered config, `ark config recover` renames an existing ark.toml that does not load to `ark.toml.broken` and says where it went.
 - **R3650:** `ark patterns` uses its default collection only when ark.toml is missing; any other failure to load it is an error.
+- **R3651:** When a running server's reread of ark.toml fails (the watcher's debounced reload, or a command that rewrote the file and reloads it), the server keeps its last good config and writes the `config_parse` E condition: the load error, the time, and that the server is still running on the last config that loaded.
+- **R3652:** Every successful load of ark.toml deletes the `config_parse` condition: opening the index (server startup, or a CLI command run without a server) and a successful reread. The file itself is the witness, so the condition re-derives on every load (R3223).
+- **R3653:** A proxied `ark status` shows the server's `config_parse` record when it has one; the CLI's own check (R3647) supplies the warning only when the server has none.
 
 ## Feature: files-status
 **Source:** specs/files-status.md
