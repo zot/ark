@@ -4589,10 +4589,10 @@ func (srv *Server) registerContentRoutes() {
 
 // contentPath extracts and validates the file path from a content route URL.
 // Returns the cleaned absolute path, or writes an error response and returns "".
-// CRC: crc-Server.md | Seq: seq-content-fetching.md | R1154-R1156
+// CRC: crc-Server.md, crc-FilenameCase.md | Seq: seq-content-fetching.md | R1154-R1156, R3638
 func (srv *Server) contentPath(w http.ResponseWriter, r *http.Request, prefix string) (path string, data []byte, ok bool) {
 	path = strings.TrimPrefix(r.URL.Path, prefix)
-	if path == "" || path[0] != '/' {
+	if path == "" || (path[0] != '/' && DriveLen(path) == 0) { // R3638: or a Windows drive
 		http.Error(w, "absolute path required", http.StatusBadRequest)
 		return "", nil, false
 	}

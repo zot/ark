@@ -90,8 +90,8 @@ func ParseExtTargetParts(target, sourceDir string) (ExtTargetParts, bool) {
 
 	// Locate the narrower colon. The MODIFIER `[N]` / `^` sits between
 	// the bare base and the colon, so the first ":" in the target is
-	// the narrower start (relative paths shouldn't contain ":" on
-	// Linux; Windows paths are out of scope per principles.md).
+	// the narrower start — after a Windows drive prefix, whose colon is
+	// the path's own (R3636).
 	var basePart, anchorPart string
 	if colonIdx := indexNarrowerColon(target); colonIdx >= 0 {
 		basePart = target[:colonIdx]
@@ -165,7 +165,11 @@ func ParseExtTargetParts(target, sourceDir string) (ExtTargetParts, bool) {
 //
 // CRC: crc-DB.md | R2370
 func indexNarrowerColon(target string) int {
-	return strings.IndexByte(target, ':')
+	d := DriveLen(target) // R3636: a Windows drive's colon is the path's own
+	if i := strings.IndexByte(target[d:], ':'); i >= 0 {
+		return d + i
+	}
+	return -1
 }
 
 // extTargetAnchorPart returns the raw anchor part of an @ext TARGET —
@@ -261,9 +265,9 @@ func absolutizeExtPath(p, sourceDir string) string {
 // regex anchor and must skip it; otherwise the anchor is a
 // RANGE_STRING or absent and no skip is needed (range strings
 // can't contain `@tag:` shape so the regex scanner is safe).
-// CRC: crc-Indexer.md | R2365
+// CRC: crc-Indexer.md, crc-FilenameCase.md | R2365, R3636
 func anchorSkip(value string) int {
-	colon := strings.IndexByte(value, ':')
+	colon := indexNarrowerColon(value) // R3636: past a drive prefix, as the parser does
 	if colon < 0 {
 		return 0
 	}

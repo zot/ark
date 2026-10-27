@@ -175,17 +175,29 @@ remember** — the design-document readers do not report an unclosed run yet (ga
 ### Backquote markdown specials — or the reader skips the line
 
 **Any glob, path, pattern or code expression holding `*`, `_` or `\` goes in backticks — not
-double quotes, not bare.** A quoted `"src/**"` begins with what the design-document reader
-takes for a `**Label:**` marker, a lone `*` pairs with a later one into italics, and a
-backslash path outside backticks does the same harm; the reader skips such a line without a
-word. Measured 2026-10-26 on ark's `design/test-Matcher.md`: 13 lines not read, every one of
-them a line like these, and none after backquoting. Leave bare what the tool parses as a
-value (`**Code:**`, `**Inject:**`, `**Refs:**`) and bold you meant. Inside backticks no
-escape processing happens, so a markdown-escaped `"file\\*name"` becomes `` `file\*name` ``.
+double quotes, not bare — in every markdown file the tool reads: `specs/`, `design/`, both
+queue files, the current file, and every carve.** A quoted `"src/**"` begins with what the
+reader takes for a `**Label:**` marker, a lone `*` pairs with a later one into italics, and
+in the design-document readers a backslash path outside backticks does the same harm; the
+reader skips such a line without a word. Measured 2026-10-26 on ark's
+`design/test-Matcher.md`: 13 lines not read, every one of them a line like these, and none
+after backquoting. Leave bare what the tool parses as a value (`**Code:**`, `**Inject:**`,
+`**Refs:**`) and bold you meant. Inside backticks no escape processing happens, so a
+markdown-escaped `"file\\*name"` becomes `` `file\*name` ``.
 
-The only symptom today is a per-file count in `validate`'s "lines were not read" note, which
-names no line. When a count moves, find the line by bisecting variants of the file, not by
-guessing: the first guess on that file was wrong twice.
+The trajectory and carve readers skip the same lines. Measured 2026-10-26 by injecting each
+shape into a copy of this repository's pending, current and done files and `carves/sdom.md`:
+the glob and the lone `*` each cost a line in all four, the backslash path cost nothing
+there — backquote it anyway, one rule for every file. The lone `*` left `validate trajectory`
+passing. The glob, in the carve's status block, took the real part line after it too, and
+the run failed only as an **orphan**: the done entry claiming that part was reported as the
+defect, while the line that ate the part went unnamed.
+
+The only direct symptom today is a per-file count in the "lines were not read" note of
+`validate` and of `validate trajectory`, which names no line. When a count moves, find the
+line by bisecting variants of the file, not by guessing: the first guess on ark's file was
+wrong twice. An orphan or a missing part that makes no sense is the same symptom one step
+removed — look for an unread line in the carve before believing it.
 
 ### Prose reaches the tool through a file — and the tool enforces it where it can
 

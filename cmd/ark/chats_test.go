@@ -64,7 +64,7 @@ func captureStdout(t *testing.T, fn func()) string {
 // file resolves to exactly that file — no index lookup, no projects walk — so
 // any on-disk JSONL renders, wherever it lives.
 func TestResolveChatFilesDirectPath(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // hermetic: empty ~/.claude/projects/ walk
+	setTestHome(t, t.TempDir()) // hermetic: empty ~/.claude/projects/ walk
 	path := filepath.Join(t.TempDir(), "anywhere.jsonl")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestResolveChatFilesDirectPath(t *testing.T) {
 // file in argument order.
 func TestResolveChatFilesGlobFallback(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home) // hermetic walk root
+	setTestHome(t, home) // hermetic walk root
 	projects := filepath.Join(home, ".claude", "projects", "p")
 	if err := os.MkdirAll(projects, 0o755); err != nil {
 		t.Fatal(err)

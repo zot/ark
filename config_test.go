@@ -15,7 +15,7 @@ import (
 // session by adding its Claude Code project directory as a chat-jsonl source,
 // idempotently, with no user config (R3135).
 func TestEnsureLuhmannSource(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t, t.TempDir())
 	want := claudeProjectDir(luhmannCwd())
 	if want == "" {
 		t.Fatal("claudeProjectDir(luhmannCwd()) returned empty")

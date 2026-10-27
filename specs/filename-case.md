@@ -1,7 +1,8 @@
 # Filename case
 
 Language: Go. Environment: the ark server and CLI, on every platform; the
-behaviour below is active on Windows and a no-op elsewhere.
+behaviour below is active on Windows and a no-op elsewhere. It covers how ark
+reads Windows paths: their case, their drive letters, and the `PATH` list.
 
 Windows filesystems are case-insensitive: `Casey.md`, `CASEY.md` and
 `casey.MD` name one file. Ark keeps one name per file (see the Path identity
@@ -67,3 +68,38 @@ file that was also re-saved would refresh, and stay, under its old name.
 
 The option is fixed when the database is created. A Windows index created
 before it keeps the old behaviour until it is rebuilt.
+
+## Drive letters
+
+On Windows an absolute path may start with a drive: a single letter, a colon,
+and a separator (`C:\`, `C:/`). That colon is part of the path, and ark has
+several grammars that split at a colon: an `@ext` target and its anchor
+([at-ext-parsing.md](at-ext-parsing.md)), a `path:range` locator, and others.
+So each of them skips a drive at the start of the path before looking for its
+own colon (Bill, 2026-10-26). The shape is fixed and positional, so one
+definition serves every site: at offset 0, a letter, `:`, then `\` or `/`.
+
+- A split at the **first** colon (the `@ext` target/anchor split) searches
+  after the drive.
+- A split at the **last** colon (a `path:range` locator) counts only a colon
+  after the drive. Without this, a path with no range, `C:\x.md`, has exactly
+  one colon, the drive's, and splits into the path `C` and the range `\x.md`.
+- The content view's URL (`/content/PATH`) accepts a drive-absolute path as
+  well as `/`.
+- An `@ext` mirror's directory name, the source path turned into a slug,
+  drops the drive's colon, which a Windows filename cannot hold:
+  `C:\Users\me\notes` becomes `C-Users-me-notes`. Found 2026-10-26, one step
+  past the target split: every Windows mirror write failed on the name.
+
+The rule is active on Windows only. Elsewhere `C:/x` is an ordinary relative
+path and is read exactly as before. Measured 2026-10-26: before this, every
+absolute `@ext` target on Windows resolved the path `C` and routed nothing,
+and the content view rejected every file.
+
+## The PATH list
+
+ark puts its home directory into `PATH` so its companion programs are found
+ahead of the system's. The list is split and joined with the platform's own
+separator: `:` on Unix, `;` on Windows. Splitting a Windows `PATH` at `:` would
+break it at every drive letter.
+

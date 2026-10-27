@@ -123,3 +123,77 @@ Skips without the symlink privilege.
 resolves
 **Inject:** links.go:LinkTable.Observe
 **Pulled:** 2026-10-26 (windows-gpu) — rang: "Observe(old spelling) = 0, want LinkUnresolvable"
+
+## Test: a drive prefix is defined once
+**Purpose:** R3635
+**Input:** `C:\x.md`, `c:/x.md`, `Z:\`, and the near misses `C:x.md`, `1:\x`,
+`/x/y.md`, `C:`, empty, `~/x.md`, `%uuid:"a"`.
+**Expected:** 3 for the first three, 0 for the rest (Windows); 0 for
+`C:/x.md` off Windows.
+**Refs:** crc-FilenameCase.md
+**Code:** drive_windows_test.go, pathcase_test.go
+
+## Test: an `@ext` target keeps its drive
+**Purpose:** R3636
+**Input:** `C:\notes\a.md`, the same with `:"hello"`, and `C:/notes/a.md:3-5`;
+anchorSkip of a drive target with a quoted anchor holding an `@tag:` shape.
+**Expected:** the base keeps its drive; the narrower is the next colon; the
+anchor is skipped whole.
+**Refs:** crc-FilenameCase.md
+**Code:** drive_windows_test.go
+**Fire alarm:** search for the narrower colon from offset 0
+**Inject:** ext.go:indexNarrowerColon
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `ParseExtTargetParts("C:\\notes\\a.md")` gave base `C` and range anchor `\notes\a.md`
+
+## Test: a locator with no range keeps its drive
+**Purpose:** R3637, recall's splitLoc.
+**Input:** `C:\x.md` and `C:\x.md:3-5`.
+**Expected:** the whole path with no range; path and `3-5`.
+**Refs:** crc-FilenameCase.md
+**Code:** drive_windows_test.go
+**Fire alarm:** accept any colon as the range separator
+**Inject:** recall_agent_builder.go:splitLoc
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `splitLoc(no range) = ("C", "\\x.md")`
+
+## Test: the CLI's locator split keeps its drive
+**Purpose:** R3637, the CLI half.
+**Input:** `C:\x.md:3-5` and `C:\x.md`.
+**Expected:** a locator for the first; not a locator for the second.
+**Refs:** crc-FilenameCase.md
+**Code:** cmd/ark/locator_windows_test.go
+**Fire alarm:** drop the drive guard from splitPathLocator
+**Inject:** cmd/ark/main.go:splitPathLocator
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `splitPathLocator(no range) = ("C", "\\x.md", true)`
+
+## Test: the content view accepts a drive path
+**Purpose:** R3638. Guarded by the existing content-view tests, which failed
+on Windows before this ("absolute path required").
+**Input:** the `TestContentView_*` suite on Windows.
+**Expected:** passes.
+**Refs:** crc-FilenameCase.md, crc-Server.md
+**Code:** contentview_test.go
+**Fire alarm:** require a leading `/` again
+**Inject:** server.go:Server.contentPath
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `TestContentView_MarkdownFullFile` and the rest fail
+
+## Test: PATH keeps its Windows list
+**Purpose:** R3639
+**Input:** PATH `C:\Windows\system32;C:\Program Files\Git\cmd`; injectPath of
+`C:\Users\me\.ark`. Off Windows: `/opt/bin:/usr/bin` and `/home/me/.ark`.
+**Expected:** three `;`-separated entries, intact; off Windows ark's dir just
+before `/usr/bin`.
+**Refs:** crc-FilenameCase.md
+**Code:** drive_windows_test.go, pathcase_test.go
+**Fire alarm:** split the list at `:`
+**Inject:** db.go:injectPath
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `PATH = "C;\\Windows\\system32;C;\\Program Files\\Git\\cmd;C:\\Users\\me\\.ark"`
+
+## Test: a mirror slug drops the drive colon
+**Purpose:** R3640
+**Input:** extMirrorPath of `C:\Users\me\notes\a.md` under `C:\Users\me\notes`.
+**Expected:** `external\C-Users-me-notes\a.md.md`, no colon past the drive.
+**Refs:** crc-FilenameCase.md, crc-DB.md
+**Code:** drive_windows_test.go
+**Fire alarm:** keep the colon in the slug
+**Inject:** db.go:extMirrorPath
+**Pulled:** 2026-10-26 (windows-gpu) — rang: `external\C:-Users-me-notes\a.md.md`

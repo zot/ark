@@ -68,3 +68,15 @@ func storedName(path string) (string, bool) {
 	syscall.FindClose(h)
 	return syscall.UTF16ToString(data.FileName[:]), true
 }
+
+// DriveLen is the length of a drive prefix at the start of s: 3 for a letter,
+// a colon and a separator (`C:\`, `C:/`), otherwise 0. That colon belongs to
+// the path, so every grammar that splits at a colon skips it first.
+// CRC: crc-FilenameCase.md | R3635
+func DriveLen(s string) int {
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') &&
+		(s[0] >= 'A' && s[0] <= 'Z' || s[0] >= 'a' && s[0] <= 'z') {
+		return 3
+	}
+	return 0
+}

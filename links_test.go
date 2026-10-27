@@ -227,7 +227,7 @@ func TestLinkTildeExpansionIsNotResolution(t *testing.T) {
 	mkFile(t, filepath.Join(s1, "a.md"))
 	link := filepath.Join(home, "proj")
 	mkSymlink(t, s1, link)
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	lt := NewLinkTable(linkCfg(s1, home))
 	lt.Observe(link)

@@ -106,7 +106,7 @@ func TestLuhmannSendGateNoOrchestrator(t *testing.T) {
 // index-independent (R3132) — the regression the live end-to-end caught.
 func TestLocateSessionJSONL(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	uuid := "d64a137b-5933-46cf-b8d4-5efcb2c53344"
 	projDir := filepath.Join(home, ".claude", "projects", "-home-deck--ark-luhmann")
 	if err := os.MkdirAll(projDir, 0o755); err != nil {

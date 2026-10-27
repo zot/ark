@@ -11,3 +11,7 @@ const foldFilenames = false
 // spelling given is the only one there is.
 // CRC: crc-FilenameCase.md | R3626
 func DiskSpelling(path string) string { return path }
+
+// DriveLen is 0 off Windows: `C:/x` is an ordinary relative path there.
+// CRC: crc-FilenameCase.md | R3635
+func DriveLen(s string) int { return 0 }

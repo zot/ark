@@ -290,10 +290,13 @@ func Init(dbPath string, opts InitOpts) error {
 
 // Open opens an existing ark database.
 // injectPath inserts dbPath into PATH just before /usr/bin (if present),
-// so user entries win but db companions beat system defaults.
+// so user entries win but db companions beat system defaults. The list is
+// split and joined with the platform's separator: Windows uses `;`, and a
+// split at `:` would break its PATH at every drive letter.
+// CRC: crc-FilenameCase.md | R3639
 func injectPath(dbPath string) {
 	path := os.Getenv("PATH")
-	parts := strings.Split(path, ":")
+	parts := filepath.SplitList(path)
 	var result []string
 	inserted := false
 	for _, p := range parts {
@@ -306,7 +309,7 @@ func injectPath(dbPath string) {
 	if !inserted {
 		result = append(result, dbPath)
 	}
-	os.Setenv("PATH", strings.Join(result, ":"))
+	os.Setenv("PATH", strings.Join(result, string(os.PathListSeparator)))
 }
 
 // Open opens the database at dbPath, blocking on the bbolt file lock
@@ -3268,7 +3271,7 @@ func (db *DB) resolveExtTargetFile(targetSpec string) (string, error) {
 // moves in-tree to `<sourceRoot>/<extMirror>/<target-path>.md` so routings
 // travel with the source; a target already inside that dir has no mirror of
 // its own (it would nest mirrors/mirrors/…) and is rejected.
-// CRC: crc-DB.md | R2392, R3171
+// CRC: crc-DB.md, crc-FilenameCase.md | R2392, R3171, R3640
 func extMirrorPath(sourceRoot, targetFile, extMirror string) (string, error) {
 	rel, err := filepath.Rel(sourceRoot, targetFile)
 	if err != nil {
@@ -3284,7 +3287,11 @@ func extMirrorPath(sourceRoot, targetFile, extMirror string) (string, error) {
 		}
 		return filepath.Join(sourceRoot, extMirror, rel+".md"), nil
 	}
-	slug := strings.ReplaceAll(strings.TrimPrefix(sourceRoot, string(filepath.Separator)), string(filepath.Separator), "-")
+	slugRoot := sourceRoot
+	if d := DriveLen(slugRoot); d > 0 {
+		slugRoot = slugRoot[:1] + slugRoot[2:] // R3640: a Windows filename cannot hold the drive's colon
+	}
+	slug := strings.ReplaceAll(strings.TrimPrefix(slugRoot, string(filepath.Separator)), string(filepath.Separator), "-")
 	if slug == "" {
 		return "", fmt.Errorf("empty slug from source root %q", sourceRoot)
 	}

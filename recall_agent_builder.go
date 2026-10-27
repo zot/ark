@@ -845,11 +845,13 @@ func parseFireToken(token string) (session string, fire uint64, ok bool) {
 }
 
 // splitLoc splits a `<path>:<range>` locator into path and range on the
-// last colon — file paths carry no colon and the range is `N` or `N-M`.
-// R2900
+// last colon — file paths carry no colon and the range is `N` or `N-M`. A
+// Windows drive's colon is not a range separator, so a drive-absolute path
+// with no range stays whole (R3637).
+// CRC: crc-FilenameCase.md | R2900, R3637
 func splitLoc(loc string) (path, rangeLabel string) {
 	i := strings.LastIndex(loc, ":")
-	if i < 0 {
+	if i < DriveLen(loc) {
 		return loc, ""
 	}
 	return loc[:i], loc[i+1:]

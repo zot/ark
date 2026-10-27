@@ -2426,9 +2426,10 @@ func parseConnectionsInputs(tokens []string, typeHint string) ([]ark.Connections
 	return out, nil
 }
 
+// CRC: crc-FilenameCase.md | R3637 — a Windows drive's colon is not the locator's.
 func splitPathLocator(tok string) (path, rng string, ok bool) {
 	colon := strings.LastIndexByte(tok, ':')
-	if colon <= 0 || colon >= len(tok)-1 {
+	if colon <= 0 || colon < ark.DriveLen(tok) || colon >= len(tok)-1 {
 		return "", "", false
 	}
 	return tok[:colon], tok[colon+1:], true
@@ -4074,14 +4075,14 @@ func resolveChunksTarget(posArgs []string) (path, rangeLabel, anchor string, err
 		// path boundary even when the path itself contains a colon. R3078
 		if i := strings.Index(arg, `:"`); i > 0 && strings.HasSuffix(arg, `"`) && len(arg) > i+2 {
 			base, snip := arg[:i], arg[i+2:len(arg)-1]
-			if j := strings.LastIndexByte(base, ':'); j > 0 && j < len(base)-1 {
+			if j := strings.LastIndexByte(base, ':'); j > 0 && j >= ark.DriveLen(base) && j < len(base)-1 { // R3637
 				return base[:j], base[j+1:], snip, nil
 			}
 		}
 		// path:range — last colon splits path from range. No range-shape
 		// validation: the range is any non-empty colon-free Location (line
 		// N-M, PDF PAGE/KIND/N, …); FetchChunkContent resolves or errors. R3078
-		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx < len(arg)-1 {
+		if idx := strings.LastIndexByte(arg, ':'); idx > 0 && idx >= ark.DriveLen(arg) && idx < len(arg)-1 { // R3637
 			return arg[:idx], arg[idx+1:], "", nil
 		}
 		return "", "", "", fmt.Errorf(`single argument must be a decimal chunkID, path:range, or path:range:"snippet"`)

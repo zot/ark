@@ -33,7 +33,7 @@ import (
 func setupFileBackedRecall(t *testing.T) (*Librarian, *DB) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home) // arkHomeDir() reads $HOME → mirror tree in the sandbox
+	setTestHome(t, home) // arkHomeDir() reads the user home (HOME, or USERPROFILE on Windows) → mirror tree in the sandbox
 	l, db := setupRecall(t)
 	// Register "lines" (the default strategy .md mirrors resolve to) as the
 	// line chunker, and configure two sources so both the target files (test

@@ -57,7 +57,7 @@ func plantSubagent(t *testing.T, home, project, parent string, nonce int, ctx in
 // developer's shell, which production does not.
 func newDiscoveryBuilder(t *testing.T, home string, projectDirs ...string) *RecallAgentBuilder {
 	t.Helper()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	srcs := make([]Source, 0, len(projectDirs))
 	for _, d := range projectDirs {

@@ -296,6 +296,19 @@ and unknown items carry the negative marker rather than a false green.
         measured 2026-10-26 (8.4), the root package's own test suite fails
         80 tests on Windows at 26e3f0b and 64 with 8.4, none of them new;
         not yet sorted into tests that assume Unix and real defects.
+        Sorted 2026-10-26: two product defects (an `@ext` target's drive
+        colon, content URLs), the rest mostly tests that assume Unix.
+  - [x] ~~**7.4.1 — Windows drive letters.**~~ **LANDED (2026-10-26 — `#174`.)** DECIDED
+        (Bill, 2026-10-26): on Windows a path may start with a letter, `:`,
+        and `\` or `/`, and every place that splits a path at a colon skips
+        it: the `@ext` target/anchor split, the `path:range` locators (which
+        read the drive's colon as a range when no range is given), and the
+        content view's URL. Also the `PATH` list, which Windows separates
+        with `;`. `/mini-spec`. On the way it found a third drive defect, the
+        `@ext` mirror slug kept the drive's colon (illegal in a Windows
+        filename), and that tests setting only `HOME` wrote into the VM
+        user's real home on Windows, where the home is `USERPROFILE`; both
+        fixed. Windows suite after it: 26 failures, down from 64, none new.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

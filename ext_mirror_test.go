@@ -12,7 +12,7 @@ import (
 // ext_mirror unset". R2392, R3171.
 func TestExtMirrorPathDefaultTree(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
+	setTestHome(t, tmp)
 
 	got, err := extMirrorPath("/src/root", "/src/root/notes/a.md", "")
 	if err != nil {

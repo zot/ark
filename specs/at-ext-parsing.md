@@ -174,7 +174,10 @@ UUID_ANCHOR   := QUOTED_STRING               (starts with ")
 ```
 
 - **PATH** — absolute (`/...`), home-relative (`~/...`), or
-  source-relative (anything else). See "Relative paths."
+  source-relative (anything else). See "Relative paths." On Windows a
+  drive-absolute path (`C:\...`, `C:/...`) is absolute too, and its colon is
+  part of the path: the narrower's colon is the first one after the drive
+  ([filename-case.md](filename-case.md)).
 - **UUID** — `@id` value, prefixed with `%`. The sigil is required
   because `@id` values are free-form strings (see `specs/at-id.md`)
   and can collide with relative path names. Without the prefix
