@@ -82,3 +82,18 @@ func TestMirrorSlugDropsTheDriveColon(t *testing.T) {
 		t.Errorf("mirror path %q, want the slug C-Users-me-notes and no colon past the drive", got)
 	}
 }
+
+// TestAnchorGlobToDirKeepsADriveGlob: a drive-absolute or `\`-rooted glob is
+// absolute and passes through; joining it to the working directory would give
+// `C:\proj\C:\notes\**`, which no file has.
+// CRC: crc-Searcher.md | R3641
+func TestAnchorGlobToDirKeepsADriveGlob(t *testing.T) {
+	for _, g := range []string{`C:\notes\**`, `c:/notes/**`, `\notes\**`} {
+		if got := AnchorGlobToDir(g, `C:\proj`); got != g {
+			t.Errorf("AnchorGlobToDir(%q) = %q, want it unchanged", g, got)
+		}
+	}
+	if got := AnchorGlobToDir(`specs\**`, `C:\proj`); got != `C:\proj\specs\**` {
+		t.Errorf("AnchorGlobToDir(specs) = %q, want it joined to the working directory", got)
+	}
+}

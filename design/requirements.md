@@ -3048,6 +3048,7 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1788:** `ark search --help` groups options by purpose: output format, scoring/analysis, and profiling. Filter stack syntax and examples appear above the grouped options.
 - **R1789:** Help text includes concrete examples showing bare terms, polarity toggles, mixed modes, and `-parse` usage.
 - **R3590:** `ark search -system` lifts the `system_exclude` fence for that one search. It is the only way past the fence, no filter-stack row or structural field implies it, and it leaves `search_exclude`'s behavior (R939, R940) unchanged.
+- **R3641:** On Windows a `-files`/`-exclude-files` glob starting with a drive (`C:\X`, `C:/X`) or with `\` is absolute like a `/` glob, and anchoring passes it through untouched; joining it to the working directory would produce a path no file has. A hunt's globs take the same rule (R3192). Off Windows neither form is absolute.
 
 ## Feature: Embed Subcommands
 **Source:** specs/embed-subcommands.md

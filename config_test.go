@@ -51,7 +51,7 @@ default_include = ["*.md", "*.txt"]
 default_exclude = [".git/", ".env"]
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 strategies = {"*.txt" = "lines"}
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -83,7 +83,7 @@ func TestPerSourceIncludeAddExtendsDefault(t *testing.T) {
 default_include = ["*.md", "*.go"]
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 include.add = ["*.lua"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -118,7 +118,7 @@ default_include = ["*.md"]
 default_exclude = [".git/"]
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 exclude.add = ["drafts/"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -143,7 +143,7 @@ default_include = ["*.md", "*.go"]
 default_exclude = []
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 
 include = ["*.txt"]
 `
@@ -168,7 +168,7 @@ func TestPerSourceOmittedInheritsDefault(t *testing.T) {
 default_include = ["*.md", "*.go"]
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 exclude = ["drafts/"]
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
@@ -240,7 +240,7 @@ default_include = ["*.md"]
 default_exclude = [".git/"]
 
 [[source]]
-dir = "` + dir + `"
+dir = '` + dir + `'
 
 `
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {

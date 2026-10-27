@@ -28,7 +28,7 @@ func TestAnchorGlobToDir(t *testing.T) {
 		{"", ""},                                           // empty stays empty
 	}
 	for _, c := range cases {
-		if got := AnchorGlobToDir(c.glob, dir); got != c.want {
+		if got := filepath.ToSlash(AnchorGlobToDir(c.glob, dir)); got != c.want {
 			t.Errorf("AnchorGlobToDir(%q, dir) = %q, want %q", c.glob, got, c.want)
 		}
 	}
@@ -44,7 +44,7 @@ func TestAnchorGlobToDir(t *testing.T) {
 // `filter-files=""` must not silently empty the corpus.
 // Refs: R3185
 func TestAnchorGlobsToDir_DropsEmpty(t *testing.T) {
-	got := AnchorGlobsToDir([]string{"", "  ", "specs/**"}, "/p")
+	got := slashed(AnchorGlobsToDir([]string{"", "  ", "specs/**"}, "/p"))
 	if len(got) != 1 || got[0] != "/p/specs/**" {
 		t.Fatalf("AnchorGlobsToDir = %v, want exactly [/p/specs/**]", got)
 	}
@@ -459,10 +459,10 @@ func TestParseBloodhoundAttrs(t *testing.T) {
 		req := parseBloodhoundAttrs(
 			` filter-files="~/work/ark/**" exclude-files="**/*.jsonl" filter-files="specs/**"`, cwd)
 		want := []string{"~/work/ark/**", "/home/u/work/ark/specs/**"}
-		if len(req.filterFiles) != 2 || req.filterFiles[0] != want[0] || req.filterFiles[1] != want[1] {
+		if got := slashed(req.filterFiles); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 			t.Errorf("filterFiles = %v, want %v (tilde passes through, unanchored joins cwd)", req.filterFiles, want)
 		}
-		if len(req.excludeFiles) != 1 || req.excludeFiles[0] != "/home/u/work/ark/**/*.jsonl" {
+		if got := slashed(req.excludeFiles); len(got) != 1 || got[0] != "/home/u/work/ark/**/*.jsonl" {
 			t.Errorf("excludeFiles = %v, want the cwd-anchored jsonl glob", req.excludeFiles)
 		}
 		if req.notags {
@@ -487,7 +487,7 @@ func TestParseBloodhoundAttrs(t *testing.T) {
 
 	t.Run("unrecognized attribute ignored", func(t *testing.T) {
 		req := parseBloodhoundAttrs(` depth="investigate" filter-files="specs/**"`, cwd)
-		if len(req.filterFiles) != 1 || req.filterFiles[0] != "/home/u/work/ark/specs/**" {
+		if got := slashed(req.filterFiles); len(got) != 1 || got[0] != "/home/u/work/ark/specs/**" {
 			t.Errorf("an unknown attribute broke parsing: %v", req.filterFiles)
 		}
 	})
@@ -537,12 +537,12 @@ func TestScanBloodhounds_AttributesAndCwd(t *testing.T) {
 		t.Fatalf("got %d requests, want 3 (BLOODHOUNDER must not match)", len(reqs))
 	}
 
-	if got := reqs[0].filterFiles; len(got) != 1 || got[0] != "/home/u/work/ark/specs/**" {
+	if got := slashed(reqs[0].filterFiles); len(got) != 1 || got[0] != "/home/u/work/ark/specs/**" {
 		t.Errorf("first hunt filterFiles = %v, want anchored to its own line's cwd", got)
 	}
 	// The second line reports a different cwd — each watermark anchors against
 	// the session that emitted it, not against a watcher-wide notion of "here".
-	if got := reqs[1].excludeFiles; len(got) != 1 || got[0] != "/home/u/work/other/**/*.jsonl" {
+	if got := slashed(reqs[1].excludeFiles); len(got) != 1 || got[0] != "/home/u/work/other/**/*.jsonl" {
 		t.Errorf("second hunt excludeFiles = %v, want anchored to /home/u/work/other", got)
 	}
 	if !reqs[1].notags {
@@ -733,3 +733,13 @@ func TestScopeDirectiveNeverCarriesSystem(t *testing.T) {
 	}
 }
 
+// slashed is the slash form of each glob. Anchoring joins with the platform
+// separator, and every matcher compares the slash form (R3633), so a test of
+// what a glob anchors to reads it the same way.
+func slashed(globs []string) []string {
+	out := make([]string, len(globs))
+	for i, g := range globs {
+		out[i] = filepath.ToSlash(g)
+	}
+	return out
+}

@@ -31,7 +31,7 @@ surface was worth redrawing on every platform, not just Windows.
 - [ ] **Item 6 — audit `init`'s flags against `ark.toml`.** **OPEN (not queued.)** Not verified:
       Measure before Item 4 drops the verb.
 - [ ] **Item 7 — bundle whole skill directories.** **OPEN (not queued.)** The Makefile ships
-      `SKILL.md` alone, and the ui-* skills are built from a hand-kept duplicate
+      `SKILL.md` alone, and the `ui-*` skills are built from a hand-kept duplicate
       (refreshed 2026-09-24, but still a second copy that can drift).
 - [ ] **Item 8 — message to Frictionless.** **OPEN (not queued.)** Drafted, not sent (three
       unknowns listed under "Before sending"). Its skill
@@ -73,12 +73,12 @@ already one install per user, so a per-project link only pointed every project
 at the same directory, and a project definition still overrides a user one when
 someone needs that.
 
-**DECIDED (Bill, 2026-09-24): setup installs every bundled skill, the ui-*
-skills included.** Ark is built on Frictionless, and the ui-* skills are
+**DECIDED (Bill, 2026-09-24): setup installs every bundled skill, the `ui-*`
+skills included.** Ark is built on Frictionless, and the `ui-*` skills are
 necessary for full operation. That retires `specs/main.md`'s rule that
 per-project setup "does NOT install UI building skills… never global"; the rule
 was written for a per-project install that no longer exists. The canonical
-ui-* copies live in the Frictionless repo, and they reach ark's image through
+`ui-*` copies live in the Frictionless repo, and they reach ark's image through
 Frictionless's `install/skills/`. So setup links every `~/.ark/skills/*`
 directory, globbed like the agents, and the hardcoded `ark`/`ui` pair goes.
 
@@ -89,7 +89,7 @@ exposes:
   `ui-highlight`, `ui-testing`, `ui-themer`, `ui-thorough`, and `ui-variables`,
   and setup extracts them to `~/.ark/skills/`, but only `ark` and `ui` reach
   `~/.claude/`. On a clean install the rest are present and invisible to Claude.
-- **The ui-* skills exist in two hand-kept copies in the Frictionless repo.**
+- **The `ui-*` skills exist in two hand-kept copies in the Frictionless repo.**
   The image is built from `install/skills/`, and the skills Frictionless's own
   sessions use are real directories in `.claude/skills/`. The two had drifted:
   the `install/skills/` `ui-basics` lacked the "Slimmest DOM Possible"
@@ -100,7 +100,7 @@ exposes:
   `.claude/skills/ui*` become links into it, so the bundle's source needs no
   change.
 
-**DECIDED (Bill, 2026-09-24): the ui-* skills are global only, and ark's repo
+**DECIDED (Bill, 2026-09-24): the `ui-*` skills are global only, and ark's repo
 copies go.** ark's `.claude/skills/ui*` were a third copy of the same files.
 They are removed, and ark sessions get the ui skills from `~/.claude/skills/`
 like every other project. Every `~/.claude/skills/*` entry is a link into
@@ -274,7 +274,7 @@ one on a later run; the aside copy deletes normally once its process has exited.
   and `--aliases`. Check that each has an `ark.toml` equivalent before the verb
   goes, rather than moving them onto `setup` by reflex.
 - **Item 7.** The Makefile's skill loop copies `.claude/skills/<s>/SKILL.md`
-  only; it should copy the whole directory. The ui-* half is Frictionless's to
+  only; it should copy the whole directory. The `ui-*` half is Frictionless's to
   do (Item 8): its `.claude/skills/ui*` become links into the canonical
   `install/skills/`, so there is one copy to edit and the image cannot drift
   from it.
@@ -294,12 +294,12 @@ one on a later run; the aside copy deletes normally once its process has exited.
     `install/skills/` is canonical, so the `.claude/skills/ui*` entries become
     directory links into it, leaving one copy to edit.
   - **It copies into the project's `.claude/skills/`, and that now shadows
-    ark.** ark's setup will link every bundled skill, ui-* included, into
+    ark.** ark's setup will link every bundled skill, `ui-*` included, into
     `~/.claude/skills/`. Claude Code prefers a project definition over a user
     one, so in any project where Frictionless's install has run, its frozen
     copies override the live linked ones, and they never update. The ask is to
     move to the same model (directory links at user scope), or at least to stop
-    installing ui-* per project when ark's links are present. Measured on the
+    installing `ui-*` per project when ark's links are present. Measured on the
     dev box (2026-09-24): six project directories hold real
     `.claude/skills/ui*` copies (ark and Frictionless among them), and two hold
     links pointing into ark's `.claude/skills/`. So the shadowing is present

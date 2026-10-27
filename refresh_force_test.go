@@ -16,7 +16,7 @@ func TestForceRefreshReindexesUnchangedKeepingChunkIDs(t *testing.T) {
 	// The production path: a forced scan runs only for a file inside a configured
 	// source, through the DB actor and the write actor, so the DB is a real one.
 	dbDir, srcDir := t.TempDir(), t.TempDir()
-	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = \"" + srcDir + "\"\n  include = [\"*.jsonl\"]\n"
+	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = '" + srcDir + "'\n  include = [\"*.jsonl\"]\n"
 	if err := Init(dbDir, InitOpts{ConfigSeed: []byte(seed)}); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestForceRefreshNeedsAPattern(t *testing.T) {
 // the forced path must not).
 func TestForceRefreshKeepsAMissingFile(t *testing.T) {
 	dbDir, srcDir := t.TempDir(), t.TempDir()
-	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = \"" + srcDir + "\"\n  include = [\"*.jsonl\"]\n"
+	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = '" + srcDir + "'\n  include = [\"*.jsonl\"]\n"
 	if err := Init(dbDir, InitOpts{ConfigSeed: []byte(seed)}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestForceRefreshKeepsAMissingFile(t *testing.T) {
 // A full reindex allocates a new file id; an append keeps the old one.
 func TestForceRefreshReindexesAGrownFileInFull(t *testing.T) {
 	dbDir, srcDir := t.TempDir(), t.TempDir()
-	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = \"" + srcDir + "\"\n  include = [\"*.jsonl\"]\n"
+	seed := "[strategies]\n  \"*.jsonl\" = \"chat-jsonl\"\n[[source]]\n  dir = '" + srcDir + "'\n  include = [\"*.jsonl\"]\n"
 	if err := Init(dbDir, InitOpts{ConfigSeed: []byte(seed)}); err != nil {
 		t.Fatal(err)
 	}

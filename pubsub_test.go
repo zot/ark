@@ -336,7 +336,7 @@ func TestSubscriptionFileFiltersO160(t *testing.T) {
 
 	// The shape the CLI actually sends now: already cwd-anchored.
 	anchored := AnchorGlobToDir("specs/**", "/home/me/proj")
-	if anchored != "/home/me/proj/specs/**" {
+	if filepath.ToSlash(anchored) != "/home/me/proj/specs/**" {
 		t.Fatalf("anchoring produced %q", anchored)
 	}
 	if !matchFileFilters(specPath, []string{anchored}, nil) {

@@ -197,3 +197,16 @@ before `/usr/bin`.
 **Fire alarm:** keep the colon in the slug
 **Inject:** db.go:extMirrorPath
 **Pulled:** 2026-10-26 (windows-gpu) — rang: `external\C:-Users-me-notes\a.md.md`
+
+## Test: a drive glob is absolute
+**Purpose:** R3641
+**Input:** AnchorGlobToDir of `C:\notes\**`, `c:/notes/**` and `\notes\**`
+against `C:\proj`; of `specs\**` against `C:\proj`. Off Windows: `C:/notes/**`
+against `/p`.
+**Expected:** the three absolute globs unchanged, `specs\**` joined; off
+Windows the drive shape is joined.
+**Refs:** crc-Searcher.md
+**Code:** drive_windows_test.go, pathcase_test.go
+**Fire alarm:** drop the drive passthrough
+**Inject:** search.go:AnchorGlobToDir
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `AnchorGlobToDir("C:\\notes\\**") = "C:\\proj\\C:\\notes\\**"`

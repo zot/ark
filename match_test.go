@@ -3,6 +3,7 @@ package ark
 // CRC: crc-Matcher.md | Test: test-Matcher.md
 
 import (
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -271,7 +272,7 @@ func TestCLIAnchoredBareGlobIsTopLevelOnly(t *testing.T) {
 	m := &Matcher{Dotfiles: true}
 
 	bare := AnchorGlobToDir("*.go", dir)
-	if bare != "/proj/*.go" {
+	if filepath.ToSlash(bare) != "/proj/*.go" {
 		t.Fatalf("AnchorGlobToDir(*.go) = %q, want /proj/*.go", bare)
 	}
 	if !m.Match(bare, "/proj/main.go", "", false) {

@@ -37,3 +37,11 @@ func TestDriveLenAndPathListOffWindows(t *testing.T) {
 		t.Errorf("PATH = %q, want ark's dir just before /usr/bin", got)
 	}
 }
+
+// Off Windows a drive-shaped glob is relative, so anchoring joins it.
+// CRC: crc-Searcher.md | R3641
+func TestAnchorGlobToDirJoinsADriveShapeOffWindows(t *testing.T) {
+	if got := AnchorGlobToDir("C:/notes/**", "/p"); got != "/p/C:/notes/**" {
+		t.Errorf("AnchorGlobToDir = %q, want it joined to /p", got)
+	}
+}

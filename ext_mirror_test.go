@@ -14,7 +14,8 @@ func TestExtMirrorPathDefaultTree(t *testing.T) {
 	tmp := t.TempDir()
 	setTestHome(t, tmp)
 
-	got, err := extMirrorPath("/src/root", "/src/root/notes/a.md", "")
+	// Native paths, as config load leaves them (DiskSpelling cleans a source dir).
+	got, err := extMirrorPath(filepath.FromSlash("/src/root"), filepath.FromSlash("/src/root/notes/a.md"), "")
 	if err != nil {
 		t.Fatalf("extMirrorPath: %v", err)
 	}
@@ -31,7 +32,7 @@ func TestExtMirrorPathRedirectsInTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extMirrorPath: %v", err)
 	}
-	want := "/src/root/mirrors/books/mark.md.md"
+	want := filepath.FromSlash("/src/root/mirrors/books/mark.md.md")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -62,19 +63,22 @@ func TestExtMirrorPathOutsideRootRejected(t *testing.T) {
 // TestSourceForPath — test-ExtMirror.md "SourceForPath returns the owning
 // source with its fields". R3171.
 func TestSourceForPath(t *testing.T) {
+	// Native paths, as ark stores them: the owning-source test is a prefix
+	// match on the platform separator.
+	p := filepath.FromSlash
 	c := &Config{Sources: []Source{
-		{Dir: "/glob/*", ExtMirror: "ignored"}, // glob source, must be skipped
-		{Dir: "/a", ExtMirror: "m"},
-		{Dir: "/b"},
+		{Dir: p("/glob/*"), ExtMirror: "ignored"}, // glob source, must be skipped
+		{Dir: p("/a"), ExtMirror: "m"},
+		{Dir: p("/b")},
 	}}
 
-	if src, ok := c.SourceForPath("/a/deep/x.md"); !ok || src.Dir != "/a" || src.ExtMirror != "m" {
+	if src, ok := c.SourceForPath(p("/a/deep/x.md")); !ok || src.Dir != p("/a") || src.ExtMirror != "m" {
 		t.Errorf("/a/deep/x.md → %+v ok=%v, want /a with ExtMirror=m", src, ok)
 	}
-	if src, ok := c.SourceForPath("/b/y.md"); !ok || src.Dir != "/b" || src.ExtMirror != "" {
+	if src, ok := c.SourceForPath(p("/b/y.md")); !ok || src.Dir != p("/b") || src.ExtMirror != "" {
 		t.Errorf("/b/y.md → %+v ok=%v, want /b with empty ExtMirror", src, ok)
 	}
-	if _, ok := c.SourceForPath("/none/z.md"); ok {
+	if _, ok := c.SourceForPath(p("/none/z.md")); ok {
 		t.Error("/none/z.md: want ok=false")
 	}
 }

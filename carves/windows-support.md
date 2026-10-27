@@ -309,6 +309,46 @@ and unknown items carry the negative marker rather than a false green.
         filename), and that tests setting only `HOME` wrote into the VM
         user's real home on Windows, where the home is `USERPROFILE`; both
         fixed. Windows suite after it: 26 failures, down from 64, none new.
+  - [x] ~~**7.4.2 — content URLs with a drive letter.**~~ **FOLDED into
+        7.4.1 (2026-10-26 — `#174`.)** Proposed as its own part. The
+        drive-letter rule covers it, so it landed with 7.4.1.
+  - [x] ~~**7.4.3 — tests that assume Unix.**~~ **LANDED (2026-10-27 — `#175`.)** The
+        failures from that 26 whose cause is already known and lies in the
+        test, not the product (measured 2026-10-26 after 7.4.1). Three
+        groups: TOML fixtures that paste a Windows path into a basic string,
+        where `\U` reads as an escape (9: `TestLoadValidConfig`, the four
+        `TestPerSource…` tests, `TestAddIncludePerSourceRoundTrip`, and the
+        three `TestForceRefresh…` tests that seed a config); expectations
+        written as Unix paths (the `AnchorGlobsToDir` tests,
+        `TestCLIAnchoredBareGlobIsTopLevelOnly`, `TestParseBloodhoundAttrs`,
+        `TestScanBloodhounds_AttributesAndCwd`,
+        `TestSubscriptionFileFiltersO160`, the `TestExtMirrorPath…` tests,
+        `TestSourceForPath`, `TestLinkResolvePatternPrefixOnly`); and two
+        tests that read a file relative to the package directory and fail
+        when the test binary runs elsewhere
+        (`TestArkSourceIncludeMatchesInstallTemplate`,
+        `TestNothingElseDecodesTranscripts`). Each fix is checked against the
+        product first: a test that expects `/` where the product writes `\`
+        is a test fix only if `\` is right there. `/mini-spec`. See Item 7.
+        Outcome (2026-10-27): the Windows suite fails 5, down from 26, all
+        7.4.4's. The relative reads were the harness (the suite now runs from
+        a copy of the package source). One product defect turned up behind
+        the expectations: on Windows a drive glob was joined to the working
+        directory, so `-files 'C:\notes\**'` matched nothing; now it passes
+        through (R3641).
+  - [ ] **7.4.4 — the failures not yet diagnosed.** **OPEN (not queued.)**
+        The rest of that 26, cause unknown, each possibly a product defect:
+        `TestVirtualBookAddressResolves` (a bible address
+        `…\BIBLE\1 Samuel:2.2` resolves to nothing, and carries a colon past
+        the drive), `TestBuildChunkFiltersResolvesAliasSpelledFilesRow`,
+        `TestMarkLinkChangedIsScopedAndComponentWise`,
+        `TestClaudeProjectDirEncoding` (whether ark encodes a Windows path
+        the way Claude Code names its project directory there is a product
+        question), and `TestBibleChunker_CollisionIsAnnouncedAndClears`.
+        Two context-discovery tests and `TestLocateSessionJSONL` failed at
+        8.4; whether they still do is not confirmed. Diagnose each first;
+        a test-only cause moves to 7.4.3's kind of fix, a product cause
+        becomes its own part. `/mini-spec`. See Item 7.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

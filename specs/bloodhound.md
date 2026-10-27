@@ -506,7 +506,7 @@ scoped to two different things and nothing says so. They are therefore held to
 one meaning — the meaning `ark search -files GLOB` already has:
 
 - **Anchoring.** A glob starting with `/`, `~`, or `tmp://` is absolute and
-  passes through. Any other glob is **relative to the current project** and is
+  passes through (on Windows, so is one starting with a drive or `\`). Any other glob is **relative to the current project** and is
   joined to it, exactly as the `ark search` CLI joins an unanchored `-files`
   glob to the client's working directory ([cli-commands.md](cli-commands.md),
   `-files`). So `**/*.jsonl` in a hunt means "the JSONL under this project",

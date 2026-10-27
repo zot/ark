@@ -277,7 +277,7 @@ func TestLinkResolvePatternPrefixOnly(t *testing.T) {
 	lt.Observe(link)
 
 	got := lt.ResolvePattern(filepath.Join(link, "**", "*.md"))
-	want := s1 + "/**/*.md"
+	want := filepath.Join(s1, "**", "*.md")
 	if got != want {
 		t.Errorf("ResolvePattern = %q, want %q", got, want)
 	}

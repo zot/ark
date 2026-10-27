@@ -1186,10 +1186,12 @@ func filterChunkScores(scores []ChunkScore, keep []uint64) []ChunkScore {
 // seed and the secretary's own `ark search -files` calls agree: what travels
 // between them is always absolute, so nothing is anchored twice and no
 // server-side component has to invent a working directory.
-// CRC: crc-Searcher.md | R3192, R3193
+// CRC: crc-Searcher.md | R3192, R3193, R3641
 func AnchorGlobToDir(glob, dir string) string {
 	if glob == "" || dir == "" ||
 		strings.HasPrefix(glob, "/") ||
+		strings.HasPrefix(glob, string(filepath.Separator)) || // R3641
+		DriveLen(glob) > 0 || // R3641
 		strings.HasPrefix(glob, "~") ||
 		strings.HasPrefix(glob, "tmp://") {
 		return glob

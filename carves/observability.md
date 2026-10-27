@@ -167,7 +167,7 @@ existing yet. This adds to `specs/lua-api.md`.
 server is busy (form to settle: a `status` flag, its own verb, or reading
 generated paths through `ark fetch`).
 
-**Item 4.** A Frictionless view of the same paths (ui-\* work, separate pass).
+**Item 4.** A Frictionless view of the same paths (`ui-*` work, separate pass).
 
 Its first piece is the identity in the mcp status bar, at the far right after
 the status text: `ark v<version>` with the build stamp on hover. It lives in

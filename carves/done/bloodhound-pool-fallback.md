@@ -116,7 +116,7 @@ landed the same day, in that order.
 
 ### #84 — a reaped watermark hunt was still silent → **R3293**
 
-R3282 covered "cannot be served *at dispatch*", not "accepted, then stranded".
+R3282 covered "cannot be served at dispatch", not "accepted, then stranded".
 `sweepRequests` reaped a pending request past `request_ttl_seconds` and notified
 nobody — correct for a CLI hunt whose client hit `--timeout` and exited, wrong
 for a **watermark** hunt whose emitting session is alive and blocked on `listen`.

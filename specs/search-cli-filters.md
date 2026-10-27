@@ -47,6 +47,8 @@ ark search TERM...
   ran `ark` from, the way UNIX tools behave. `/abs/...` matches absolutely,
   `~/...` expands to home, and `tmp://...` (virtual overlay docs) is left
   untouched; to reach outside the cwd use an absolute path or `../`.
+  On Windows a glob starting with a drive (`C:\notes\**`, `C:/notes/**`)
+  or with `\` is absolute too, and passes through untouched.
   Resolution happens in the CLI because only the CLI knows the cwd — the
   server and the cold-start path both receive already-absolute globs.
   Consequence: a bare `*.jsonl` matches only the cwd's top level; write
