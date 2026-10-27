@@ -239,7 +239,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-Server.md → `server.go`, `watcher.go`, `recall.go`, `embed_debounce.go`
 - [x] crc-ChatVoice.md → `chatvoice.go`, `install/html/ark-content.css`, `theme-patches/base-patch.css`
 - [x] crc-HTTPOperation.md → `httpop.go`
-- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/bundlecheck.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
+- [x] crc-CLI.md → `cmd/ark/main.go`, `cmd/ark/configcheck.go`, `cmd/ark/bundlecheck.go`, `dm.go`, `verbose.go`, `cmd/ark/chats.go`, `chats.go`, `cmd/ark/flat_cli.go`, `connections_doc.go`, `cmd/ark/stop_fallback_unix.go`, `cmd/ark/stop_fallback_windows.go`
 - [x] crc-Checkpoint.md → `cmd/ark/checkpoint.go`
 - [x] crc-CLITree.md → `cmd/ark/main.go`, `cmd/ark/session_identity.go`, `cmd/ark/link_view.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`, `cmd/ark/bloodhound_cli.go`, `cmd/ark/ext_cli.go`, `cmd/ark/patterns_cli.go`
 - [x] crc-TagBlock.md → `tagblock.go`
@@ -277,6 +277,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DirLink.md → `dirlink_test.go`
 - [x] test-LlamaLibs.md → `llamalibs_test.go`, `dllpath_windows_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
+- [x] test-ConfigErrors.md → `cmd/ark/configcheck_test.go`
 - [x] crc-WSLBridge.md → `cmd/ark/wsl.go`, `cmd/ark/wsl_windows.go`, `cmd/ark/wsl_other.go`
 - [x] test-WSLBridge.md → `cmd/ark/wsl_test.go`
 - [x] test-Updater.md → `cmd/ark/update_test.go`

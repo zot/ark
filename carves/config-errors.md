@@ -11,9 +11,7 @@ directory.
 
 ## Status
 
-- [ ] **Item 1 — every CLI execution checks `ark.toml` at startup.** **OPEN
-      (not queued.)** One fork is open: which commands must still run so the
-      user can repair the file. `/mini-spec`. See Item 1.
+- [x] ~~**Item 1 — every CLI execution checks `ark.toml` at startup.**~~ **LANDED (2026-10-27 — `#179`.)** Exemptions decided. `/mini-spec`. See Item 1.
 - [ ] **Item 2 — a failed reload records an error; a good read clears it.**
       **OPEN (not queued.)** `/mini-spec`. See Item 2.
 - [ ] **Item 3 — the UI shows the error.** **OPEN (not queued.)** Whether the
@@ -64,12 +62,36 @@ non-zero. A missing file is not an error, because a fresh install has none
 should still stop swallowing, so a file that breaks between the check and the
 read fails rather than defaulting.
 
-**Open fork: what still runs on a broken config.** A user who has broken the
-file has to be able to fix it and get ark back. Candidates for exemption are
-`--help`, `ark stop`, `ark status` (which would report the error rather than
-fail on it), and `ark config recover`, which exists to restore config from the
-stored `I` records. The alternative is no exemptions, with the error message
-naming the repair. Bill's call.
+**What still runs on a broken config.** DECIDED (Bill, 2026-10-27): four
+exemptions, so a user who has broken the file can still fix it and get ark
+back:
+
+- `--help`, at any level.
+- `ark stop`.
+- `ark status`, which reports the parse error as a warning rather than failing
+  on it.
+- `ark config recover`, which exists to restore config from the stored `I`
+  records.
+
+Every other command fails at startup. The error message should name the
+repair: fix the file, or run `ark config recover`.
+
+Also DECIDED (Bill, 2026-10-27): recover keeps an ark.toml that does not load
+as `ark.toml.broken` before writing, and cold-start `status` (no server) warns,
+says the index was not read, and exits 1, since opening the index needs the
+config.
+
+Outcome (2026-10-27): R3645-R3650. Every command node's Action is wrapped with
+the check except the exempt paths; `--help` needed recognizing in the args,
+because a SkipFlagParsing node (`search`, `status`) receives it raw and the
+live binary refused `ark search --help` until it did. Found on the way:
+`config recover` could not recover anything. It opened the full DB, which
+loads ark.toml first, so it failed on exactly the files it exists for, missing
+ones included. It now reads the I records through `ark.ReadStoredConfig`,
+which opens only the store. The other call sites that swallowed a load error
+(setup's llama provisioning, rebuild's closing note, serve's compact default,
+`luhmann` inspect's context limit) were left alone: the startup check now
+stops a bad file before they run.
 
 ## Item 2
 

@@ -141,6 +141,14 @@ root's `-v` count flag accumulates them.
 
 ## Conventions
 
+### A malformed ark.toml stops the command
+
+Every execution checks ark.toml before running its command. A file that
+exists and does not load is an error naming the repair; a missing one is
+not. Exempt: help at any level, `stop`, `status` (reports it as a
+`config_parse` warning) and `config recover`. Full behavior:
+specs/config-tracking.md, "An ark.toml that does not load".
+
 ### Server detection (`serverClient`)
 
 Every command that may benefit from the running server calls
@@ -554,7 +562,7 @@ Default (`config` with no subcommand): proxies to server if running
 | `remove-pattern PATTERN [--source DIR]` | drop matching include/exclude entry                   |
 | `show-why FILE`                         | JSON: which include/exclude rules cover FILE          |
 | `add-strategy PATTERN STRATEGY`         | append to chunker strategies                          |
-| `recover`                               | rewrite ark.toml from the index I-record snapshot     |
+| `recover`                               | rewrite ark.toml from the index I-record snapshot; works when ark.toml does not load, keeping it as `ark.toml.broken` |
 
 Mutating subcommands proxy to the server's `/config/...` endpoints
 when the server is running so the in-memory config is kept current.

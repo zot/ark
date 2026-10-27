@@ -121,22 +121,34 @@ func configShowAction(_ context.Context, _ *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R1569
+// configRecoverAction rewrites ark.toml from the I-record snapshot. It reads
+// the snapshot without opening the DB, because opening needs an ark.toml that
+// loads (R3648), and keeps a file that does not load as ark.toml.broken so the
+// user's edit survives (R3649).
+// CRC: crc-CLITree.md, crc-CLI.md | R1569, R3648, R3649
 func configRecoverAction(_ context.Context, _ *ucli.Command) error {
-	withExclusiveDB(func(d *ark.DB) {
-		stored, err := d.Store().ReadConfig()
-		if err != nil {
+	if serverClient(arkDir) != nil {
+		fatal(errServerHoldsIndex)
+	}
+	stored, err := ark.ReadStoredConfig(arkDir, dispatchLockTimeout)
+	if err != nil {
+		fatal(err)
+	}
+	if stored == nil {
+		fatal(fmt.Errorf("no stored config found in database"))
+	}
+	configPath := filepath.Join(arkDir, "ark.toml")
+	if configLoadError(arkDir) != nil {
+		broken := configPath + ".broken"
+		if err := os.Rename(configPath, broken); err != nil {
 			fatal(err)
 		}
-		if stored == nil {
-			fatal(fmt.Errorf("no stored config found in database"))
-		}
-		configPath := filepath.Join(arkDir, "ark.toml")
-		if err := stored.SaveConfig(configPath); err != nil {
-			fatal(err)
-		}
-		fmt.Printf("recovered config written to %s\n", configPath)
-	})
+		fmt.Printf("the ark.toml that did not load is kept as %s\n", broken)
+	}
+	if err := stored.SaveConfig(configPath); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("recovered config written to %s\n", configPath)
 	return nil
 }
 

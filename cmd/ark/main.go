@@ -78,6 +78,9 @@ func main() {
 	// so this affects only the help display, not routing.
 	// CRC: crc-CLITree.md | R2953
 	sortCommandTree(root.Commands)
+	// R3645: every command checks ark.toml before it runs, bar the exempt few.
+	// CRC: crc-CLI.md | R3645, R3646
+	guardConfigActions(root.Commands, "")
 	// Errors are handled by the root's ExitErrHandler (which exits); a
 	// returned error here would already have been rendered.
 	_ = root.Run(context.Background(), append([]string{"ark"}, args...))
@@ -252,7 +255,7 @@ func openLocalBounded() *ark.DB {
 			fatal(err) // config or schema failure: real, and not about the lock
 		}
 		if client := serverClient(arkDir); client != nil {
-			fatal(fmt.Errorf("a server is running and holds the index; stop it with `ark stop` to run this command"))
+			fatal(errServerHoldsIndex)
 		}
 		if time.Since(start) >= dispatchStubbornWindow {
 			fatal(fmt.Errorf("index is locked by another process after %s; stop it, or retry", dispatchStubbornWindow))
@@ -260,6 +263,10 @@ func openLocalBounded() *ark.DB {
 		time.Sleep(dispatchRetryInterval)
 	}
 }
+
+// errServerHoldsIndex refuses a command that needs the index to itself while a
+// server holds it.
+var errServerHoldsIndex = errors.New("a server is running and holds the index; stop it with `ark stop` to run this command")
 
 // Stubborn dispatch tunables.
 // CRC: crc-CLI.md | R2996, R2997
@@ -303,7 +310,7 @@ func proxyOrLocal(proxy func(*http.Client) error, local func(*ark.DB) error) {
 	for {
 		if client := serverClient(arkDir); client != nil {
 			if proxy == nil {
-				fatal(fmt.Errorf("a server is running and holds the index; stop it with `ark stop` to run this command"))
+				fatal(errServerHoldsIndex)
 			}
 			err := proxy(client)
 			if err == nil {
@@ -2985,6 +2992,15 @@ func cmdStatus(args []string) {
 	if plan.err != nil {
 		fatal(plan.err)
 	}
+	// R3647: an ark.toml that does not load is a warning here, not a refusal.
+	// A server keeps its last good config, so its status is still worth
+	// printing; with none, the index cannot be opened without the config.
+	// CRC: crc-CLI.md | R3647
+	cfgErr := configLoadError(arkDir)
+	if cfgErr != nil && !plan.proxy {
+		printWarnings(map[string]string{configParseWarning: cfgErr.Error()})
+		fatal(errors.New("index not read: opening it needs an ark.toml that loads"))
+	}
 	if err := heapNeedsServer(client != nil, *heapFile); err != nil {
 		fatal(err)
 	}
@@ -3014,6 +3030,12 @@ func cmdStatus(args []string) {
 		if resp.Version != ark.Version {
 			fmt.Fprintf(os.Stderr, "WARNING: server is v%s but CLI is v%s — restart server to match\n",
 				resp.Version, ark.Version)
+		}
+		if cfgErr != nil { // R3647
+			if resp.Warnings == nil {
+				resp.Warnings = map[string]string{}
+			}
+			resp.Warnings[configParseWarning] = cfgErr.Error()
 		}
 		printWarnings(resp.Warnings)
 		if *heapFile != "" {

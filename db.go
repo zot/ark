@@ -312,6 +312,25 @@ func injectPath(dbPath string) {
 	os.Setenv("PATH", strings.Join(result, string(os.PathListSeparator)))
 }
 
+// ReadStoredConfig reads the config snapshot in the I records without loading
+// ark.toml. Open needs a config that loads, which is the one thing `ark config
+// recover` cannot assume, so this opens only microfts2 and the ark store —
+// nothing that a config drives — and closes them again. timeout bounds the
+// bbolt lock wait as in OpenWithTimeout. Returns nil when no I records exist.
+// CRC: crc-DB.md | R3648
+func ReadStoredConfig(dbPath string, timeout time.Duration) (*Config, error) {
+	fts, err := microfts2.Open(IndexPath(dbPath), microfts2.Options{Timeout: timeout})
+	if err != nil {
+		return nil, fmt.Errorf("open microfts2: %w", err)
+	}
+	defer fts.Close()
+	store, err := OpenStore(fts.DB())
+	if err != nil {
+		return nil, fmt.Errorf("open ark store: %w", err)
+	}
+	return store.ReadConfig()
+}
+
 // Open opens the database at dbPath, blocking on the bbolt file lock
 // until it is available. The server (sole index owner) uses this.
 func Open(dbPath string) (*DB, error) {

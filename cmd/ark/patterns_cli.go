@@ -14,7 +14,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -61,16 +63,29 @@ func patternsCommand() *ucli.Command {
 }
 
 // patternsCollection resolves the configured collection without opening the
-// index. A missing or unreadable ark.toml falls back to the default location
-// rather than failing: a fresh install has no config yet, and `patterns list`
-// must still work there (R3268, R3271).
+// index, and exits on an ark.toml that does not load (patternsCollectionFor).
 // CRC: crc-CLITree.md | R3268, R3270
 func patternsCollection() *ark.Patterns {
-	cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+	p, err := patternsCollectionFor(arkDir)
 	if err != nil {
-		return ark.NewPatterns(filepath.Join(arkDir, "personal-patterns"))
+		fatal(err)
 	}
-	return ark.NewPatterns(cfg.PatternsRoot())
+	return p
+}
+
+// patternsCollectionFor resolves the collection for the ark dir. Only a
+// missing ark.toml falls back to the default (R3271); one that does not load
+// is an error, never a reason to show another collection.
+// CRC: crc-CLITree.md | R3268, R3271, R3650
+func patternsCollectionFor(dir string) (*ark.Patterns, error) {
+	cfg, err := ark.LoadConfig(filepath.Join(dir, "ark.toml"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return ark.NewPatterns(filepath.Join(dir, "personal-patterns")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ark.NewPatterns(cfg.PatternsRoot()), nil
 }
 
 // CRC: crc-CLITree.md | R3269, R3272

@@ -2647,6 +2647,15 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1571:** `GetSettings`/`PutSettings` are replaced by per-field `iGet`/`iPut` calls.
 - **R1572:** The `Extra` map entries (schedule config, ID counters) become their own I record keys.
 
+### An ark.toml that does not load
+
+- **R3645:** Every CLI execution checks ark.toml before running its command. If the file exists and does not load, the command prints the error, names the repair (fix the file, or run `ark config recover`), and exits non-zero. A missing ark.toml is not an error.
+- **R3646:** Exempt from R3645's check: help at any level, `ark stop`, `ark status`, and `ark config recover`.
+- **R3647:** `ark status` with an ark.toml that does not load reports the error as a `config_parse` warning. With a server running it also prints the server's status; with none it says the index was not read, because opening it needs the config, and exits non-zero.
+- **R3648:** `ark config recover` reads the stored I records without loading ark.toml, so it works when the file is missing or does not parse. It refuses while a server is running.
+- **R3649:** Before writing the recovered config, `ark config recover` renames an existing ark.toml that does not load to `ark.toml.broken` and says where it went.
+- **R3650:** `ark patterns` uses its default collection only when ark.toml is missing; any other failure to load it is an error.
+
 ## Feature: files-status
 **Source:** specs/files-status.md
 

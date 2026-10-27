@@ -174,6 +174,31 @@ to make, which meant the plain proxied form printed none at all —
 a condition serious enough to warrant a warning was invisible in exactly
 the state ark normally runs in.
 
+## An ark.toml that does not load
+
+A malformed ark.toml is an error, never a reason to use defaults. A
+command that quietly carried on with something else would show the
+user the wrong data with no hint why.
+
+Every CLI execution checks ark.toml before it runs its command. If the
+file exists and does not load, the command prints the error, names the
+repair (fix the file, or run `ark config recover`), and exits
+non-zero. A missing ark.toml is not an error: a fresh install has none.
+
+Four exemptions, so a user who has broken the file can still fix it and
+get ark back:
+
+- help, at any level;
+- `ark stop`;
+- `ark status`, which reports the error as a `config_parse` warning. With
+  a server running it prints the server's status too, since the server
+  keeps its last good config. With none it cannot read the index, which
+  needs the config to open, so it says so and exits non-zero;
+- `ark config recover`.
+
+`ark patterns` uses its default collection only when ark.toml is
+missing. Any other failure to load the file is an error.
+
 ## Recovery
 
 `ark rebuild` is the universal fix: it deletes the database, re-runs
@@ -181,6 +206,11 @@ init (which writes fresh I records from ark.toml), then re-scans and
 re-indexes everything. All E records are gone because the database
 was recreated.
 
-If ark.toml is corrupted or missing, `ark config recover` (new
-command) reads the stored config from I records and writes it to
-ark.toml. This is the disaster recovery path.
+If ark.toml is corrupted or missing, `ark config recover` reads the
+stored config from the I records and writes it to ark.toml. This is the
+disaster recovery path, so it reads the I records without loading
+ark.toml: opening the full database needs the config, and that is the
+one thing a recovery cannot assume. An existing ark.toml that does not
+load is renamed to `ark.toml.broken` first, and recover says where it
+went, so the user's edit survives for them to merge back. Like the
+other exclusive-access commands it refuses while a server is running.
