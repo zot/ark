@@ -492,15 +492,18 @@ func bibleBookName(fileToken string) string {
 //
 // Nothing on disk answers to this path; recognizing it is what lets the
 // resolver reach the book index instead of the filesystem.
-// CRC: crc-BibleChunker.md | Seq: seq-bible-resolve.md#3.3 | R3216
+// On Windows either separator marks the segment: the search runs on the slash
+// form, which has the same length, so the source keeps its native spelling.
+// CRC: crc-BibleChunker.md | Seq: seq-bible-resolve.md#3.3 | R3216, R3643
 func bibleVirtualTarget(path string) (source, book string, ok bool) {
 	const sep = "/" + bibleVirtualSegment + "/"
-	i := strings.Index(path, sep)
+	slashed := filepath.ToSlash(path)
+	i := strings.Index(slashed, sep)
 	if i <= 0 {
 		return "", "", false
 	}
 	source, book = path[:i], path[i+len(sep):]
-	if book == "" || strings.Contains(book, "/") {
+	if book == "" || strings.Contains(slashed[i+len(sep):], "/") {
 		return "", "", false
 	}
 	return source, book, true

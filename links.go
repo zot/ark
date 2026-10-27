@@ -599,14 +599,14 @@ func (lt *LinkTable) ClassifyChain(hops []string) LinkTier { return lt.classify(
 // mechanism behind namespace-preserving answers — it is what lets
 // `<link>/**/*` answer in the link's namespace while `/**/*` answers
 // canonically.
-// CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.1 | R3362
+// CRC: crc-LinkTable.md | Seq: seq-link-resolve.md#1.1 | R3362, R3642
 func (lt *LinkTable) ResolvePattern(pattern string) string {
 	p := ExpandTilde(pattern)
 	if !IsGlob(p) {
 		return lt.Resolve(p)
 	}
 	wild := strings.IndexAny(p, "*?[")
-	cut := strings.LastIndex(p[:wild], string(filepath.Separator))
+	cut := strings.LastIndexAny(p[:wild], "/"+string(filepath.Separator)) // R3642: either separator on Windows
 	if cut <= 0 {
 		return p // the wildcard is in the first component: nothing concrete to resolve
 	}

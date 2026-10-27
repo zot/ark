@@ -1,5 +1,5 @@
 # BibleChunker
-**Requirements:** R3172, R3173, R3175, R3176, R3177, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221, R3216, R3224, R3225
+**Requirements:** R3172, R3173, R3175-3178, R3209-3216, R3218, R3219, R3221, R3224, R3225, R3643
 
 Chunks scripture held as a publisher's **XHTML** (an ESV epub is the worked
 example) into prose blocks, reading each block's chapter and verse identity

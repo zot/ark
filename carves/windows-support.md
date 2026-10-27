@@ -336,7 +336,7 @@ and unknown items carry the negative marker rather than a false green.
         the expectations: on Windows a drive glob was joined to the working
         directory, so `-files 'C:\notes\**'` matched nothing; now it passes
         through (R3641).
-  - [ ] **7.4.4 — the failures not yet diagnosed.** **OPEN (not queued.)**
+  - [x] ~~**7.4.4 — the failures not yet diagnosed.**~~ **LANDED (2026-10-27 — `#176`.)**
         The rest of that 26, cause unknown, each possibly a product defect:
         `TestVirtualBookAddressResolves` (a bible address
         `…\BIBLE\1 Samuel:2.2` resolves to nothing, and carries a colon past
@@ -349,6 +349,25 @@ and unknown items carry the negative marker rather than a false green.
         8.4; whether they still do is not confirmed. Diagnose each first;
         a test-only cause moves to 7.4.3's kind of fix, a product cause
         becomes its own part. `/mini-spec`. See Item 7.
+        Outcome (2026-10-27): the Windows suite fails 1, down from 5. Two
+        were tests (a JSON-escaped record searched as raw text; hand-written
+        `/` paths against a platform-separator prefix test). Two were product
+        defects, folded in (Bill, 2026-10-27): `ResolvePattern` cut a glob's
+        concrete prefix at the platform separator only, so a `/`-written glob
+        skipped link resolution (R3642), and the virtual `BIBLE/<Book>`
+        address needed a literal `/` (R3643). The last is 7.4.5.
+  - [ ] **7.4.5 — ark encodes a project directory differently from Claude
+        Code.** **OPEN (not queued.)** `claudeProjectSlug` maps only `/` and `.`
+        to `-`, so on Windows a working directory keeps `C:\` and the
+        trust-dialog check (R3128) looks for a project folder that cannot
+        exist. Not Windows-only: any `_`, space or other punctuation in a path
+        gives the wrong folder on Linux too. Measured 2026-10-27 in Claude Code
+        2.1.311's own code: every character outside `[A-Za-z0-9]` becomes `-`
+        (no collapsing; `-home-deck--ark-luhmann` keeps its double dash), and a
+        result over 200 characters is cut to 200 plus `-` and the base-36
+        absolute value of a 32-bit string hash. Confirmed on `windows-gpu`,
+        where `C:\Users\zot\AppData\…` became `C--Users-zot-AppData-…`.
+        `/mini-spec`. See Item 7.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

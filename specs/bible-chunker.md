@@ -168,7 +168,8 @@ file layout:
 
 `~/work/bibles/esv/BIBLE/John` is a **virtual path**: no file by that name
 exists on disk. The `BIBLE/` segment is what marks the reference as a book
-lookup rather than a real path.
+lookup rather than a real path. On Windows the segment is recognized with
+either separator, so the native `C:\bibles\esv\BIBLE\John` works too.
 
 A source may hold more than scripture — notes, a README, the epub's own
 directory tree — so the book names cannot simply live at the source root.

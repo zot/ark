@@ -4,6 +4,7 @@ package ark
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,37 @@ func TestAnchorGlobToDirKeepsADriveGlob(t *testing.T) {
 	}
 	if got := AnchorGlobToDir(`specs\**`, `C:\proj`); got != `C:\proj\specs\**` {
 		t.Errorf("AnchorGlobToDir(specs) = %q, want it joined to the working directory", got)
+	}
+}
+
+// TestResolvePatternCutsAtEitherSeparator: a glob written with `/` after a
+// native link path still resolves the link, because the wildcard-free prefix
+// ends at either separator.
+// CRC: crc-LinkTable.md | R3642
+func TestResolvePatternCutsAtEitherSeparator(t *testing.T) {
+	root := linkTempRoot(t)
+	s1, s2 := filepath.Join(root, "s1"), filepath.Join(root, "s2")
+	mkDirs(t, s1, s2)
+	link := filepath.Join(s2, "link")
+	mkSymlink(t, s1, link)
+	lt := NewLinkTable(linkCfg(s1, s2))
+	lt.Observe(link)
+
+	if got, want := lt.ResolvePattern(link+"/**/*.md"), s1+"/**/*.md"; got != want {
+		t.Errorf("ResolvePattern = %q, want %q", got, want)
+	}
+}
+
+// TestBibleVirtualTargetTakesEitherSeparator: the BIBLE segment is found in a
+// native address, the source keeps its native spelling, and a nested book is
+// still refused.
+// CRC: crc-BibleChunker.md | R3643
+func TestBibleVirtualTargetTakesEitherSeparator(t *testing.T) {
+	src, book, ok := bibleVirtualTarget(`C:\bibles\esv\BIBLE\1 Samuel`)
+	if !ok || src != `C:\bibles\esv` || book != "1 Samuel" {
+		t.Errorf("native address → (%q, %q, %v), want (C:\\bibles\\esv, 1 Samuel, true)", src, book, ok)
+	}
+	if _, _, ok := bibleVirtualTarget(`C:\bibles\esv\BIBLE\a\b`); ok {
+		t.Error("a nested book was accepted; BIBLE names exactly one book")
 	}
 }

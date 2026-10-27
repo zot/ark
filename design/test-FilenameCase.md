@@ -210,3 +210,25 @@ Windows the drive shape is joined.
 **Fire alarm:** drop the drive passthrough
 **Inject:** search.go:AnchorGlobToDir
 **Pulled:** 2026-10-27 (windows-gpu) — rang: `AnchorGlobToDir("C:\\notes\\**") = "C:\\proj\\C:\\notes\\**"`
+
+## Test: a `/`-written glob resolves its link
+**Purpose:** R3642
+**Input:** a link `s2\link` → `s1`; ResolvePattern of the native link path
+followed by `/**/*.md`.
+**Expected:** `s1/**/*.md`: the link resolved, the remainder unchanged.
+**Refs:** crc-LinkTable.md
+**Code:** drive_windows_test.go
+**Fire alarm:** cut at the platform separator only
+**Inject:** links.go:ResolvePattern
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `ResolvePattern = "…\\s2\\link/**/*.md", want "…\\s1/**/*.md"`
+
+## Test: a native BIBLE address is recognized
+**Purpose:** R3643
+**Input:** bibleVirtualTarget of `C:\bibles\esv\BIBLE\1 Samuel`, and of
+`C:\bibles\esv\BIBLE\a\b`.
+**Expected:** source `C:\bibles\esv`, book `1 Samuel`; the nested book refused.
+**Refs:** crc-BibleChunker.md
+**Code:** drive_windows_test.go
+**Fire alarm:** search for a literal `/BIBLE/`
+**Inject:** biblechunker.go:bibleVirtualTarget
+**Pulled:** 2026-10-27 (windows-gpu) — rang: `native address → ("", "", false)`

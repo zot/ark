@@ -3,6 +3,7 @@ package ark
 // CRC: crc-BibleChunker.md | Test: test-BibleChunker.md | R3173, R3175, R3176, R3178, R3209, R3210, R3211, R3212, R3213, R3214, R3215, R3218, R3219, R3221, R3224, R3225
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -483,7 +484,13 @@ func TestBibleChunker_CollisionIsAnnouncedAndClears(t *testing.T) {
 	if !ok {
 		t.Fatalf("no %s record; the failure would live only in the log: %v", ECondSourceActivation, recs)
 	}
-	if !strings.Contains(string(payload), db.dbPath) {
+	// The record maps source dir → reason; decode it rather than substring-match
+	// the JSON, which escapes a Windows path's backslashes.
+	var bySource map[string]string
+	if err := json.Unmarshal(payload, &bySource); err != nil {
+		t.Fatalf("record %s is not a source → reason map: %v", payload, err)
+	}
+	if _, ok := bySource[db.dbPath]; !ok {
 		t.Errorf("record %s does not name the offending source", payload)
 	}
 	// The source stays configured — dropping it would make DiffConfig report a

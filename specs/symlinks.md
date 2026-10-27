@@ -158,7 +158,9 @@ a resolution failure.
 
 **A pattern is not a path.** Globs cannot be resolved wholesale. The longest
 leading portion of a pattern that contains no wildcards is resolved, and the
-pattern's remainder applies unchanged after it.
+pattern's remainder applies unchanged after it. On Windows that portion ends at
+either separator, `\` or `/`, so `C:/notes/link/**` resolves its link the same
+as `C:\notes\link\**`.
 
 **A file filter is resolved where it becomes a closure, not where it enters a
 struct.** Those are two different moments, and an alias-spelled `-files` glob

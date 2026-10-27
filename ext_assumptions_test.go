@@ -181,13 +181,16 @@ func TestPremiseClearedWhenChainDisappears(t *testing.T) {
 // the prefix test respects component boundaries — /a/bc is not under /a/b.
 // CRC: crc-ExtMap.md | R3384
 func TestMarkLinkChangedIsScopedAndComponentWise(t *testing.T) {
+	// Native paths, as resolution records them: PathUnder splits components on
+	// the platform separator.
+	p := filepath.FromSlash
 	m := NewExtMap()
-	m.linkAssumptions[1] = LinkAssumption{Target: "/s/link/target.md", Tier: TierSingleHop}
-	m.linkAssumptions[2] = LinkAssumption{Target: "/s/linkage/target.md", Tier: TierSingleHop}
-	m.linkAssumptions[3] = LinkAssumption{Target: "/s/other/target.md", Tier: TierSingleHop}
-	m.linkAssumptions[4] = LinkAssumption{Target: "/s/link/deep.md", Tier: TierInternalMultiHop}
+	m.linkAssumptions[1] = LinkAssumption{Target: p("/s/link/target.md"), Tier: TierSingleHop}
+	m.linkAssumptions[2] = LinkAssumption{Target: p("/s/linkage/target.md"), Tier: TierSingleHop}
+	m.linkAssumptions[3] = LinkAssumption{Target: p("/s/other/target.md"), Tier: TierSingleHop}
+	m.linkAssumptions[4] = LinkAssumption{Target: p("/s/link/deep.md"), Tier: TierInternalMultiHop}
 
-	flagged := m.MarkLinkChanged("/s/link")
+	flagged := m.MarkLinkChanged(p("/s/link"))
 
 	got := map[uint64]bool{}
 	for _, tv := range flagged {

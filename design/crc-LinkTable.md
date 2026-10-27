@@ -1,5 +1,5 @@
 # LinkTable
-**Requirements:** R3359, R3360, R3361, R3362, R3363, R3364, R3372, R3373, R3374, R3375, R3376, R3378, R3379, R3380, R3381, R3383, R3365, R3369, R3353, R3389, R3390
+**Requirements:** R3353, R3359-3365, R3369, R3372-3376, R3378-3381, R3383, R3389, R3390, R3642
 
 Ark's map of directory symlinks that join one indexed region to another,
 and the translation between an address a caller used and the canonical
