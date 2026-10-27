@@ -897,7 +897,7 @@ func (c *Config) EnsureArkSource() {
 // indexed (not one session file) so the orchestrator's memory spans launches.
 // CRC: crc-Config.md | R3135
 func (c *Config) EnsureLuhmannSource() {
-	dir := claudeProjectDir(luhmannCwd())
+	dir := ClaudeProjectDir(luhmannCwd())
 	if dir == "" {
 		return
 	}

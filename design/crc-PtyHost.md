@@ -1,5 +1,5 @@
 # PtyHost
-**Requirements:** R3114, R3115, R3116, R3117, R3118, R3119, R3120, R3121, R3122, R3124, R3125, R3126, R3127, R3128, R3136, R3139, R3323, R3324, R3326, R3327, R3329, R3330, R3333, R3334, R3335, R3336, R3337, R3338, R3339, R3340, R3341, R3342, R3343, R3447, R3448, R3450
+**Requirements:** R3114-3122, R3124-3128, R3136, R3139, R3323, R3324, R3326, R3327, R3329, R3330, R3333-3343, R3447, R3448, R3450, R3644
 
 The server-side owner of one hosted Claude Code pty session. Holds the pty
 master and the `claude` child, multiplexes the child's byte stream out to a set

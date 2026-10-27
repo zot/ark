@@ -98,6 +98,15 @@ never by pressing Enter on whatever is highlighted. The default is "Yes" today,
 but a future build could default to "No, exit", and a blind Enter would then
 kill the session. Reading the number also answers a reordered menu correctly.
 
+`<cwd-encoded>` is Claude Code's own encoding of the working directory, and
+ark must produce it exactly, or the check looks for a folder that never
+exists. As measured in Claude Code 2.1.311: every character outside `A-Z`,
+`a-z` and `0-9` becomes `-`, one for one, with no collapsing, so
+`/home/deck/.ark/luhmann` is `-home-deck--ark-luhmann` and the Windows
+`C:\Users\me\work` is `C--Users-me-work`. An encoding longer than 200
+characters is cut to 200 and followed by `-` and the base-36 absolute value of
+a 32-bit hash of the original path (`h = h*31 + c` over its UTF-16 code units).
+
 The scan works because the current renderer emits the dialog in reading order,
 the option number ahead of its "Yes … trust" label, once the ANSI escapes are
 stripped. It is a heuristic and it fails safe: if the stream stops matching (say

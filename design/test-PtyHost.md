@@ -191,3 +191,13 @@ covered by the self-exit and stop-race tests above, which drive the same
 **Expected:** the new client receives nothing from either write.
 **Note — what this does not prove.** It asserts the "publishes nothing" half only. The "keeps draining" half is inferred from the second write being accepted rather than measured: proving it properly means filling the pipe buffer past what the kernel will hold, which needs a real pty and belongs to the live smoke test (O152, PENDING #40), not to a fake-and-zero-value unit test.
 **Refs:** crc-PtyHost.md, seq-pty-attach.md#1.3.3
+
+## Test: the project slug is Claude Code's own
+**Purpose:** R3644 — ark looks for a session's project folder under the name Claude Code gives it, on every platform.
+**Input:** `/home/deck/.ark/luhmann`; the Windows cwd Claude Desktop recorded on windows-gpu (2026-10-27); a path holding `_`, a space and `ü`; one holding a surrogate pair; a 237-character path.
+**Expected:** the folder Claude Desktop made for the Windows cwd, and for the rest what node prints running Claude Code 2.1.311's functions verbatim: one `-` per UTF-16 unit outside `A-Za-z0-9`, and the long path cut to 200 plus `-szbxz9`.
+**Refs:** crc-PtyHost.md
+**Code:** ptyhost_test.go
+**Fire alarm:** map only `/` and `.`, as before
+**Inject:** ptyhost.go:claudeProjectSlug
+**Pulled:** 2026-10-27 (local) — rang: `got "-home-u-my_proj dir-über"`, `want "-home-u-my-proj-dir--ber"`; the Windows cwd came back unchanged

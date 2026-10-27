@@ -2499,21 +2499,18 @@ func truncStr(s string, n int) string {
 	return s[:n]
 }
 
-// projectSessionIDs enumerates `<session-uuid>.jsonl` files under
-// ~/.claude/projects/<encoded-cwd>/ where encoded-cwd replaces every
-// "/" with "-" (Claude Code's convention). Returns the basenames
-// without extension. R2744
+// projectSessionIDs enumerates `<session-uuid>.jsonl` files under the cwd's
+// Claude Code project directory (ark.ClaudeProjectDir, R3644). Returns the
+// basenames without extension. R2744
 func projectSessionIDs() ([]string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
+	dir := ark.ClaudeProjectDir(cwd)
+	if dir == "" {
+		return nil, nil
 	}
-	encoded := strings.ReplaceAll(cwd, "/", "-")
-	dir := filepath.Join(home, ".claude", "projects", encoded)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

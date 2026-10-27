@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -669,16 +670,16 @@ func TestScanTrustAcceptNoDialog(t *testing.T) {
 	}
 }
 
-// TestClaudeProjectDirEncoding: cwd encodes to ~/.claude/projects/<'/' and '.' →
-// '-'>, matching Claude Code's per-project log dir used by the new-project check
-// (R3128).
+// TestClaudeProjectDirEncoding: cwd encodes to ~/.claude/projects/<slug>, Claude
+// Code's per-project log dir used by the new-project check (R3128); the slug's
+// own rule is TestClaudeProjectSlugMatchesClaudeCode (R3644).
 //
 // CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3128
 func TestClaudeProjectDirEncoding(t *testing.T) {
-	got := claudeProjectDir("/home/deck/.ark/luhmann")
-	const want = "/.claude/projects/-home-deck--ark-luhmann"
+	got := ClaudeProjectDir("/home/deck/.ark/luhmann")
+	want := string(filepath.Separator) + filepath.Join(".claude", "projects", "-home-deck--ark-luhmann")
 	if !strings.HasSuffix(got, want) {
-		t.Errorf("claudeProjectDir = %q, want suffix %q", got, want)
+		t.Errorf("ClaudeProjectDir = %q, want suffix %q", got, want)
 	}
 }
 
@@ -994,4 +995,26 @@ func TestPtyHostSteadyStateAppendAllocatesNothing(t *testing.T) {
 	// And the bytes are real: releasing the stall delivers everything appended.
 	c.release()
 	waitFor(t, "the stalled output to drain", func() bool { return len(c.bytes()) == 52*len(chunk) })
+}
+
+// TestClaudeProjectSlugMatchesClaudeCode: the slug is Claude Code's own. The
+// Windows case is the folder Claude Desktop made on windows-gpu (2026-10-27);
+// the rest were computed by node running Claude Code 2.1.311's functions
+// verbatim, so neither side is this port checking itself.
+// CRC: crc-PtyHost.md | Test: test-PtyHost.md | R3644
+func TestClaudeProjectSlugMatchesClaudeCode(t *testing.T) {
+	long := "/home/u/" + strings.Repeat("deep/", 45) + "proj"
+	cases := []struct{ cwd, want string }{
+		{"/home/deck/.ark/luhmann", "-home-deck--ark-luhmann"},
+		{`C:\Users\zot\AppData\Roaming\Claude\scratch-workspaces\be970102-5ec5-4cc7-a74e-0c8eb3c41eae\1cf2e764-5b04-4284-8496-e979f8d5d3c9\scratch-2026-10-27-fcba7e`,
+			"C--Users-zot-AppData-Roaming-Claude-scratch-workspaces-be970102-5ec5-4cc7-a74e-0c8eb3c41eae-1cf2e764-5b04-4284-8496-e979f8d5d3c9-scratch-2026-10-27-fcba7e"},
+		{"/home/u/my_proj dir/\u00fcber", "-home-u-my-proj-dir--ber"},  // _ and space too; one unit, one dash
+		{"/home/u/\U0001F600x", "-home-u---x"},                         // a surrogate pair is two units
+		{long, "-home-u-" + strings.Repeat("deep-", 38) + "de-szbxz9"}, // 237 chars: cut to 200 plus the hash
+	}
+	for _, c := range cases {
+		if got := claudeProjectSlug(c.cwd); got != c.want {
+			t.Errorf("claudeProjectSlug(%q)\n got %q\nwant %q", c.cwd, got, c.want)
+		}
+	}
 }

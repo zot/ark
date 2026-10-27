@@ -356,8 +356,8 @@ and unknown items carry the negative marker rather than a false green.
         concrete prefix at the platform separator only, so a `/`-written glob
         skipped link resolution (R3642), and the virtual `BIBLE/<Book>`
         address needed a literal `/` (R3643). The last is 7.4.5.
-  - [ ] **7.4.5 — ark encodes a project directory differently from Claude
-        Code.** **OPEN (not queued.)** `claudeProjectSlug` maps only `/` and `.`
+  - [x] ~~**7.4.5 — ark encodes a project directory differently from Claude
+        Code.**~~ **LANDED (2026-10-27 — `#177`.)** `claudeProjectSlug` maps only `/` and `.`
         to `-`, so on Windows a working directory keeps `C:\` and the
         trust-dialog check (R3128) looks for a project folder that cannot
         exist. Not Windows-only: any `_`, space or other punctuation in a path
@@ -368,6 +368,21 @@ and unknown items carry the negative marker rather than a false green.
         absolute value of a 32-bit string hash. Confirmed on `windows-gpu`,
         where `C:\Users\zot\AppData\…` became `C--Users-zot-AppData-…`.
         `/mini-spec`. See Item 7.
+        Outcome (2026-10-27): ported exactly, cap and hash included, and
+        checked against the real Windows folder and node running Claude Code's
+        functions verbatim (R3644). A second encoder in the CLI's
+        `projectSessionIDs`, which mapped only `/`, now uses the same one. The
+        Windows root suite fails 0.
+  - [ ] **7.4.6 — the `cmd/ark` suite on Windows.** **OPEN (not queued.)**
+        Measured for the first time 2026-10-27 (every earlier count was the
+        root package only): 3 failures. `TestAnchorFilterToCwd` expects Unix
+        paths, the shape 7.4.3 fixed. `TestPatternsCollectionUsesConfiguredDir`
+        ignores the configured directory, cause unknown.
+        `TestInstallLinksAreLinksNotCopies` finds a copy where setup should
+        have linked a skill, cause unknown, and it fails from a scheduled task
+        as well as over ssh, so the ssh junction quirk does not explain it.
+        Diagnose each; test-only causes are fixed here. `/mini-spec`. See
+        Item 7.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

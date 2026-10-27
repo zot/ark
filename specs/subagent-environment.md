@@ -26,10 +26,13 @@ follows from.
 ### Where a subagent's transcript lives
 
 ```
-~/.claude/projects/<cwd-with-slashes-as-dashes>/<parent-session-uuid>/subagents/
+~/.claude/projects/<cwd-encoded>/<parent-session-uuid>/subagents/
     agent-<agentId>.jsonl        the transcript
     agent-<agentId>.meta.json    {"agentType": "...", "description": "..."}
 ```
+
+`<cwd-encoded>` is Claude Code's encoding of the working directory, defined in
+[managed-pty.md](managed-pty.md): every character outside `A-Za-z0-9` becomes `-`.
 
 The `.meta.json` carries **no session id** — only the agent type and the
 description string the *parent* supplied at spawn. Verified 2026-07-30 by reading

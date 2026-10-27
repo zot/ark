@@ -16,9 +16,9 @@ import (
 // idempotently, with no user config (R3135).
 func TestEnsureLuhmannSource(t *testing.T) {
 	setTestHome(t, t.TempDir())
-	want := claudeProjectDir(luhmannCwd())
+	want := ClaudeProjectDir(luhmannCwd())
 	if want == "" {
-		t.Fatal("claudeProjectDir(luhmannCwd()) returned empty")
+		t.Fatal("ClaudeProjectDir(luhmannCwd()) returned empty")
 	}
 	c := &Config{}
 	c.EnsureLuhmannSource()

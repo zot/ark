@@ -15,9 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf16"
 )
 
 const (
@@ -998,9 +1000,9 @@ func scanTrustAccept(out []byte) (keys []byte, ok bool) {
 	return append(append([]byte{}, m[1]...), '\r'), true
 }
 
-// claudeProjectDir is Claude Code's per-project log directory for cwd:
-// ~/.claude/projects/<cwd with '/' and '.' replaced by '-'> (R3128).
-func claudeProjectDir(cwd string) string {
+// ClaudeProjectDir is Claude Code's per-project log directory for cwd:
+// ~/.claude/projects/<claudeProjectSlug(cwd)> (R3128, R3644).
+func ClaudeProjectDir(cwd string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -1009,8 +1011,11 @@ func claudeProjectDir(cwd string) string {
 }
 
 // claudeProjectSlug encodes a cwd the way Claude Code names its project log
-// directory: `/` and `.` become `-`, so /home/deck/work/ark → -home-deck-work-ark
-// and /home/deck/.ark → -home-deck--ark.
+// directory (R3644, measured in Claude Code 2.1.311): every UTF-16 code unit
+// outside A-Za-z0-9 becomes `-`, one for one, so /home/deck/.ark → -home-deck--ark
+// and C:\Users\me → C--Users-me. Past claudeSlugMax characters the slug is cut
+// and suffixed with a base-36 hash of the whole path, Claude Code's
+// `h = (h<<5) - h + charCode | 0`, which is h*31 + c wrapping at 32 bits.
 //
 // **This is the single place the vendor scheme appears.** It is reached from two
 // callers with different standing: the launch path above, which must match what
@@ -1019,9 +1024,35 @@ func claudeProjectDir(cwd string) string {
 // vendor's naming scheme would be hardcoded where every caller inherits it.
 // Deleting the populator use costs `ark sources pair --auto` and nothing else,
 // because the pairing itself lives in the declared logs_for field.
-// CRC: crc-Config.md | R3289, R3290
+// CRC: crc-Config.md, crc-PtyHost.md | R3289, R3290, R3644
 func claudeProjectSlug(cwd string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
+	units := utf16.Encode([]rune(cwd))
+	slug := make([]byte, len(units))
+	var hash int32
+	for i, u := range units {
+		hash = hash*31 + int32(u)
+		if u < 0x80 && isASCIIAlnum(byte(u)) {
+			slug[i] = byte(u)
+		} else {
+			slug[i] = '-'
+		}
+	}
+	if len(slug) <= claudeSlugMax {
+		return string(slug)
+	}
+	abs := int64(hash)
+	if abs < 0 {
+		abs = -abs
+	}
+	return string(slug[:claudeSlugMax]) + "-" + strconv.FormatInt(abs, 36)
+}
+
+// claudeSlugMax is the length past which Claude Code cuts a project slug and
+// appends a hash (R3644).
+const claudeSlugMax = 200
+
+func isASCIIAlnum(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
 }
 
 // isNewClaudeProject reports whether Claude Code has never run in cwd — its project
@@ -1029,7 +1060,7 @@ func claudeProjectSlug(cwd string) string {
 // (R3128). Any stat/home error is treated as "not new" so a false arm never blocks
 // a launch.
 func isNewClaudeProject(cwd string) bool {
-	dir := claudeProjectDir(cwd)
+	dir := ClaudeProjectDir(cwd)
 	if dir == "" {
 		return false
 	}
