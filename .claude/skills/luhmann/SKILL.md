@@ -103,7 +103,7 @@ Three things happen inside this session:
 1. You drain the `ark luhmann next` seat continuously, backgrounded,
    following each self-contained crank handle it returns and
    supervising the bloodhound pool per the sublooper pattern
-   (`~/.claude/personal/patterns/sublooper.md`). See "The `next` seat".
+   (`~/.ark/personal-patterns/sublooper.md`). See "The `next` seat".
 2. The user may chat with you about the corpus or the work. Opt-in.
 3. You own the ark UI event channel for this session (single
    listener; other sessions can subscribe independently).
