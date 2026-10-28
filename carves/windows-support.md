@@ -251,7 +251,7 @@ and unknown items carry the negative marker rather than a false green.
       (2026-10-27.)** Defects the 2026-10-27 run surfaced that are not
       Windows-specific, kept here because the run is where they were measured.
       See Item 13.
-  - [ ] **13.1 — save on a file outside the index fails silently.** **OPEN (#184.)** The content view opens any file under a source, save
+  - [x] ~~**13.1 — save on a file outside the index fails silently.**~~ **LANDED (2026-10-28 — `#184`.)** The content view opens any file under a source, save
         refuses one not in the index (`403 path not within indexed source`,
         unlogged), and the page's `save` treats every response as success.
         `/mini-spec`. See Item 13.
@@ -294,7 +294,7 @@ and unknown items carry the negative marker rather than a false green.
         separator failed, so a nested `node_modules/` or `.git/` from the
         default excludes was indexed. Both matchers now work on the slash
         form, and a drive-prefixed pattern is absolute.
-  - [ ] **8.5 — a source added while the server runs is not watched.** **OPEN (#181.)**
+  - [x] ~~**8.5 — a source added while the server runs is not watched.**~~ **LANDED (2026-10-28 — `#181`.)**
         Found by the 2026-10-27 end-to-end run on the VM: after `config
         add-source`, an edit produced no watch event until a restart.
         Not Windows-specific by reading. `/mini-spec`. See Item 8.
@@ -1449,6 +1449,21 @@ for every source at startup, and afterwards only in `doReconcile` for
 (every proxied `config` mutation) and the ark.toml reload both end in that
 reconcile, so a concrete directory added either way is indexed and never
 watched. Nothing here is platform-specific; not measured on Linux.
+Measured on Linux 2026-10-28: a test through the real `add-source` route
+failed the same way before the fix. Seeing the watch tree at all is
+[observability.md](observability.md) Item 8.
+
+What #181 became (2026-10-28). Watches now follow one definition, the tree the
+reconcile scan descends (R2952): new concrete sources are watched before their
+scan (R3670); each reconcile removes, entry by entry, every watched directory
+the scan rule no longer covers, sparing the `ark.toml` watch (R3671, resolving
+gap O240, R351's removal half); and the scan returns the directories it walked so
+the watcher fills in any it lacks (R3672). The orphan unwatch went with it: an
+orphaned glob source is still a source, still scanned, so it stays watched. The
+tests found a data race, `walkSources` reading the live `Config` while
+`add-source` wrote it, so the `Config` became copy-on-write (R3673-R3675). The
+reload's own off-actor run is
+[actor-discipline.md](actor-discipline.md) Item 8.
 
 <a id="9"></a>
 

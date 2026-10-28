@@ -3719,7 +3719,7 @@ func setLogsFor(dir, name string) error {
 				map[string]string{"dir": dir, "logs_for": name})
 		},
 		func(d *ark.DB) error {
-			if err := d.Config().SetLogsFor(dir, name); err != nil {
+			if err := d.MutateConfig(func(c *ark.Config) error { return c.SetLogsFor(dir, name) }); err != nil { // R3673
 				failure = err
 				return nil
 			}

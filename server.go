@@ -277,10 +277,13 @@ func Serve(dbPath string, opts ServeOpts) error {
 		}
 	}
 
-	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml)
-	db.Config().EnsureArkSource()
-	// Ensure the orchestrator's own session log is indexed (R3135).
-	db.Config().EnsureLuhmannSource()
+	// Ensure ~/.ark is always a source (hardcoded, not in ark.toml), and the
+	// orchestrator's own session log is indexed (R3135). R3673: on a copy.
+	db.MutateConfig(func(c *Config) error {
+		c.EnsureArkSource()
+		c.EnsureLuhmannSource()
+		return nil
+	})
 
 	// R2659, R2663: warn if [recall].discussed_ttl can't be parsed —
 	// we fall back to 24h either way, but the user should see typos.
@@ -956,14 +959,15 @@ func (srv *Server) doReconcile(db *DB) {
 	} else {
 		if len(result.Added) > 0 {
 			log.Printf("reconcile: added %d new source(s)", len(result.Added))
-			for _, dir := range result.Added {
-				srv.watchDirRecursive(dir)
-			}
 		}
-		for _, dir := range result.Orphaned {
-			srv.unwatchDir(dir)
-		}
+		// An orphaned glob source is reported, not removed (R199), so it is still
+		// scanned and stays watched (R3671).
 	}
+	// R3671, R3670: stop watching what the scan rule no longer covers, then
+	// watch every concrete source not yet watched (glob additions among them),
+	// before the walk, so a new source is watched before it is scanned.
+	srv.unwatchStaleDirs(db)
+	srv.watchNewSources(db.Config())
 	// Collect source dirs for indexing state
 	var sourceDirs []string
 	for _, src := range db.Config().Sources {
@@ -1011,6 +1015,7 @@ func (srv *Server) startReconcileWalk(db *DB) {
 			} else {
 				db.scanner.emptyFiles = empties // swap the refreshed empty-set in
 				db.applyReconcileScan(results)
+				srv.watchWalkedDirs(db, results.Dirs) // R3672: fill in the scanned tree
 			}
 			log.Println("reconcile: refreshing...")
 			if err := db.RefreshAsync(); err != nil {
@@ -2682,14 +2687,18 @@ type configWhyRequest struct {
 // DB actor, saves, and triggers reconciliation. Every config mutation
 // handler routes through here, so each one triggers a reconcile (R344).
 // CRC: crc-Server.md | R344
-func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func(*DB) error) {
+func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, fn func(*Config) error) {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := SyncVoid(srv.db, func(db *DB) error {
-		if err := fn(db); err != nil {
+		// R3673: fn edits a copy, installed whole; the walk keeps the old one.
+		if err := db.MutateConfig(fn); err != nil {
 			return err
+		}
+		if srv.scheduler != nil {
+			srv.scheduler.SetConfig(db.Config()) // it holds the pointer too
 		}
 		return db.SaveConfig()
 	}); err != nil {
@@ -2703,13 +2712,13 @@ func (srv *Server) configMutate(w http.ResponseWriter, r *http.Request, v any, f
 // CRC: crc-Server.md | R152
 func (srv *Server) handleConfigAddSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddSource(req.Dir) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.AddSource(req.Dir) })
 }
 
 // CRC: crc-Server.md | R160
 func (srv *Server) handleConfigRemoveSource(w http.ResponseWriter, r *http.Request) {
 	var req configSourceRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemoveSource(req.Dir) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.RemoveSource(req.Dir) })
 }
 
 // configLogsForRequest pairs a log source with the source it records.
@@ -2724,8 +2733,8 @@ type configLogsForRequest struct {
 // CRC: crc-Server.md | R3288, R3290
 func (srv *Server) handleConfigSetLogsFor(w http.ResponseWriter, r *http.Request) {
 	var req configLogsForRequest
-	srv.configMutate(w, r, &req, func(db *DB) error {
-		return db.Config().SetLogsFor(req.Dir, req.LogsFor)
+	srv.configMutate(w, r, &req, func(c *Config) error {
+		return c.SetLogsFor(req.Dir, req.LogsFor)
 	})
 }
 
@@ -2766,19 +2775,19 @@ func (srv *Server) handleChatsList(w http.ResponseWriter, r *http.Request) {
 // CRC: crc-Server.md | R153
 func (srv *Server) handleConfigAddInclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddInclude(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.AddInclude(req.Pattern, req.Source) })
 }
 
 // CRC: crc-Server.md | R154
 func (srv *Server) handleConfigAddExclude(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddExclude(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.AddExclude(req.Pattern, req.Source) })
 }
 
 // CRC: crc-Server.md | R155
 func (srv *Server) handleConfigRemovePattern(w http.ResponseWriter, r *http.Request) {
 	var req configPatternRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().RemovePattern(req.Pattern, req.Source) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.RemovePattern(req.Pattern, req.Source) })
 }
 
 type configStrategyRequest struct {
@@ -2788,7 +2797,7 @@ type configStrategyRequest struct {
 
 func (srv *Server) handleConfigAddStrategy(w http.ResponseWriter, r *http.Request) {
 	var req configStrategyRequest
-	srv.configMutate(w, r, &req, func(db *DB) error { return db.Config().AddStrategy(req.Pattern, req.Strategy) })
+	srv.configMutate(w, r, &req, func(c *Config) error { return c.AddStrategy(req.Pattern, req.Strategy) })
 }
 
 // CRC: crc-Server.md | R156

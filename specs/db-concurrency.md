@@ -174,6 +174,32 @@ operation (`substrateOp`); bringing the remaining bare `fts` readers
 (search, recall normalization, fetch-payload assembly, …) onto operations
 is ongoing tech debt.
 
+### The configuration is copy-on-write
+
+The parsed `ark.toml` (`Config`) is read from many goroutines. The scanner,
+search, the indexer and the link table each hold it, and the reconcile walk
+takes it off the actor for the length of a scan. So a `Config`, once
+published, is never written again. A change is made to a deep copy, and
+the copy is installed by pointing every holder at it at once: a source
+added, a pattern added or removed, a strategy, a log pairing, glob
+expansion, and the built-in sources ensured at startup and after a
+reload. A reader holding the old one keeps a consistent view until it
+finishes, and needs no lock and no actor to get one.
+
+A reload builds its new `Config` completely before installing it,
+including the built-in sources the server ensures and the strategy
+entries chunkers derive at config-resolve, so no holder ever sees a
+half-made one.
+
+The deep copy shares no slice, map or pointer with its original, unexported
+fields included. A field added later that the copy failed to cover would
+be shared, and so written under a reader, without anything failing; a
+test guards it by filling every reference field and checking the copy for
+anything shared.
+
+Found 2026-10-28: the reconcile walk's "snapshot" was the live pointer, so
+`ark config add-source` while a walk ran was a data race.
+
 ### Raciness is a property of the caller, not the reader
 
 `InvalidateCaches` has exactly one call site, and it runs **on the

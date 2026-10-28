@@ -85,6 +85,11 @@ The bbolt index itself is MVCC-safe (one writer + many concurrent readers),
 so bbolt `View` reads (e.g. `ReadCRecord`, `ViewChunkEmbeddings`) are safe
 off the actor — only the Go caches above them are not.
 
+The parsed `Config` is **copy-on-write** instead: never written once
+published, every change made to a deep copy and installed by re-pointing all
+its holders at once, so any goroutine may read the one it holds. (R3673-R3675;
+`db-concurrency.md` §The configuration is copy-on-write canonical.)
+
 ## The operation-object discipline
 
 An **operation object** gathers everything a request-shaped unit of work

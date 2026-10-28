@@ -33,6 +33,10 @@ A skeleton (Bill, 2026-10-07), restructured around generated paths (Bill,
 - [ ] **Item 7 — embedding and routing counts per file.** **OPEN (not queued.)**
       Filed by Bill, 2026-10-25. `ark files --status --detail` also shows each
       file's `EC` and `X` record counts. `/mini-spec`. See Item 7.
+- [ ] **Item 8 — the watch tree inspector.** **OPEN (not queued.)** Filed by
+      Bill, 2026-10-28, while fixing windows-support 8.5 (#181). A generated
+      path showing what the watcher watches against what it should, and the
+      difference. See Item 8.
 
 <a id="problem"></a>
 ## The problem
@@ -255,6 +259,37 @@ gate is still that setting until chat-embeddings Item 1 lands). And whether any
 `@ext` routings existed while bloodhound-fix Item 14 was being designed (none
 did). A per-file count answers both directly, and an `-files` scope narrows it
 to the chat logs or a mirror tree.
+
+**Item 8.** The watch tree: every directory the live watcher holds, set against
+the directories it should hold, and the difference between them. "Should" has
+one definition: watch coverage equals scan coverage
+([source-monitoring.md](../specs/source-monitoring.md), R2952), so the
+directories the reconcile walk descends are the ones to watch. The inspector
+shows, per source, the watched and expected counts; the directories expected
+but not watched (an edit there is never seen until a restart or a later
+reconcile); the directories watched but not expected (a removed source's
+leftovers, an excluded subtree); and the watch on `ark.toml` itself, whose
+absence would silently stop config reload. Event-side counts belong beside
+them: events received, ignored (and the ignored-path cache's size), overflows
+and the reconciles they kicked (R3625), and the time of the last event per
+source.
+
+Every defect in this area so far was that difference, and none of them could be
+seen. The `.scratch/` edits that never re-indexed (R2952's F1) went unnoticed
+for months. Windows-support 8.5 surfaced on 2026-10-27 only because an
+end-to-end run noticed a `watch: file changed` line that never came, and
+fixing it on 2026-10-28 found two more by reading code: a removed source's
+watches leak until a restart, and a source orphaned by its glob is unwatched
+while it is still scanned. With this path each would have been one read.
+
+What #181 provides: if its walk-diff lands (the reconcile walk returning the
+directories it descended, so the watcher adds any it lacks), that list is the
+inspector's "expected" set, recorded by the last reconcile rather than walked
+again. Without it, the inspector would have to walk every source itself. To
+settle in design: whether the expected set is kept from the last walk (cheap,
+stale by up to one reconcile) or recomputed on read (exact, a full directory
+walk), and whether a count-only summary belongs in the state document (Item 2)
+while the directory lists stay on the inspector.
 
 ### Identity decisions
 

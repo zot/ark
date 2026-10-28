@@ -165,6 +165,35 @@ recursive — subdirectories are watched too. When Reconcile() adds
 new sources, new watches start. When sources are removed, watches
 stop.
 
+Every concrete source in the config is watched, however and whenever it
+arrives: at startup, from `ark config add-source`, from a hand edit to
+`ark.toml`, or from a glob expanding to a new directory. Each reconcile
+watches the sources not yet watched, so it never walks a source it is
+already watching, including one nested inside another source. Found
+2026-10-27: only glob expansion started a watch after startup, so a
+directory added by `add-source` or by editing `ark.toml` was indexed and
+then never refreshed by an edit until the next restart.
+
+Watches stop by the same rule they start by. Each reconcile stops
+watching every directory the directory-classification rule no longer
+descends into: the directories of a removed source, and a directory a
+changed exclude now covers. A directory still under a remaining source
+keeps its watch, so removing a source nested inside another changes
+nothing for the outer one, and the watch on `ark.toml` itself is never
+dropped. A source left behind when its glob leaves the config is still a
+source, still scanned, and so still watched.
+
+The reconcile's scan then fills in the rest of the tree. The directories
+it descends are, by the rule above, the directories to watch, so once the
+scan returns the watcher adds any of them it lacks: a subdirectory created
+while its source was out of the config, or one a changed exclude newly
+includes. New sources are still watched before their scan starts, so an
+edit made during the scan is caught; only these remaining directories
+wait for the scan. Watches are removed by the rule rather than by the
+scan's list, because the scan is a snapshot: a directory created after the
+scan passed it is watched by the live watcher, and must not lose its watch
+for being missing from the list.
+
 **Watch coverage equals scan coverage.** The recursive watch descends
 into exactly the directory set the Scanner walks. A subdirectory is
 watched iff the directory-classification rule does not mark it

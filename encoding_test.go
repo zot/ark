@@ -338,15 +338,34 @@ func TestUTF16GrowthReindexesAsync(t *testing.T) {
 	if _, err := db.indexer.AddFile(fp, "markdown"); err != nil {
 		t.Fatal(err)
 	}
+	// Read through the actor: the async refresh writes while this polls, and
+	// the fts path cache is actor-protected (specs/db-concurrency.md).
 	chunkText := func() string {
-		var all string
-		for _, c := range db.AllChunks(fp) {
-			all += c.Content
-		}
+		all, _ := Sync(db, func(db *DB) (string, error) {
+			var all string
+			for _, c := range db.AllChunks(fp) {
+				all += c.Content
+			}
+			return all, nil
+		})
 		return all
 	}
+	fresh := func() bool {
+		ok, _ := Sync(db, func(db *DB) (bool, error) {
+			st, err := db.fts.CheckFile(fp)
+			return err == nil && st.Status == "fresh", nil
+		})
+		return ok
+	}
 	before := chunkText()
-	db.config.Sources = []Source{{Dir: db.dbPath, Include: PatternSpec{Add: []string{"*.md"}}}}
+	if err := SyncVoid(db, func(db *DB) error {
+		return db.MutateConfig(func(c *Config) error { // R3673: never in place
+			c.Sources = []Source{{Dir: db.dbPath, Include: PatternSpec{Add: []string{"*.md"}}}}
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	utf16File(t, db.dbPath, "grow.md", base+"\r\nappended wombatlyre\r\n")
 	// The freshness check reads the modification time first, and two writes
 	// this close can share one; a real edit comes later.
@@ -359,7 +378,7 @@ func TestUTF16GrowthReindexesAsync(t *testing.T) {
 	}
 	all := before
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if st, err := db.fts.CheckFile(fp); err == nil && st.Status == "fresh" {
+		if fresh() {
 			if all = chunkText(); all != before {
 				break
 			}

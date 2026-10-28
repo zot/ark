@@ -38,7 +38,7 @@ surface was worth redrawing on every platform, not just Windows.
       install is hardcoded, per-file, copying, and project-scoped, and it
       creates symlinks; the Frictionless-side halves of Items 3, 7, and
       Windows Item 3.
-- [ ] **Item 9 — the theme block makes bundled html read as user-modified.** **OPEN (#187.)** Filed by Bill, 2026-10-21, from the windows-support 9.2 run.
+- [x] ~~**Item 9 — the theme block makes bundled html read as user-modified.**~~ **LANDED (2026-10-28 — `#187`.)** Filed by Bill, 2026-10-21, from the windows-support 9.2 run.
       Not Windows-specific; re-measured on Linux 2026-10-28. See Item 9.
 - [ ] **Item 10 — a file link under a refreshable root is written through.**
       **OPEN (not queued.)** Found 2026-10-28 beside Item 9. See Item 10.

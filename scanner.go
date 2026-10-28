@@ -32,6 +32,10 @@ type ScanResults struct {
 	// files: the alias lives on the link rather than on each file beneath
 	// it, so the cost is one entry per link. R3352, R3373
 	TrackedLinks []*LinkEntry
+	// Dirs lists every directory the walk descended, once each, only those it
+	// could read. Descent follows the same rule as the watcher, so this is the
+	// tree the watcher should hold (R2952, R3672).
+	Dirs []string
 	// PendingLinks lists every symlink path the walk met, in walk order, when the
 	// scanner ran with deferLinks (the off-actor reconcile walk). Classification —
 	// linksToRegularFile, Observe, and the resulting TrackedLinks / NewUnresolved
@@ -92,10 +96,11 @@ func (sc *Scanner) Links() *LinkTable { return sc.links }
 func (sc *Scanner) Scan() (*ScanResults, error) {
 	results := &ScanResults{}
 
-	leaves, links, err := walkSources(sc.config, sc.matcher, sc.walkWorkers)
+	leaves, links, dirs, err := walkSources(sc.config, sc.matcher, sc.walkWorkers)
 	if err != nil {
 		return results, err
 	}
+	results.Dirs = dirs // R3672
 
 	// Serial merge, in deterministic walk order. R3437
 	for _, lf := range leaves {
@@ -187,7 +192,11 @@ type linkCand struct {
 // descended (matching filepath.WalkDir). It returns the classified leaves and
 // the link candidates in deterministic component-wise DFS order, so the serial
 // merge's Observe order equals a sequential walk's. R3437
-func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []linkCand, error) {
+//
+// It also returns each directory it descended, once, and only after reading it:
+// overlapping sources walk a shared subtree twice, and an unreadable directory
+// cannot be watched. R3672
+func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []linkCand, []string, error) {
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
@@ -196,6 +205,8 @@ func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []link
 	var mu sync.Mutex
 	var leaves []scanLeaf
 	var links []linkCand
+	dirSeen := map[string]bool{}
+	var dirs []string
 
 	// spawn runs fn in a pool goroutine, or inline when the pool is full — the
 	// select's default is what keeps a bounded recursive walk from deadlocking on
@@ -220,6 +231,12 @@ func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []link
 		if rderr != nil {
 			return // inaccessible: skip, as the sequential walk did
 		}
+		mu.Lock()
+		if !dirSeen[dir] {
+			dirSeen[dir] = true
+			dirs = append(dirs, dir)
+		}
+		mu.Unlock()
 		for _, e := range entries {
 			path := filepath.Join(dir, e.Name())
 
@@ -279,7 +296,8 @@ func walkSources(cfg *Config, matcher *Matcher, workers int) ([]scanLeaf, []link
 	// but the link reverse-index order must be preserved. R3437
 	sort.Slice(links, func(i, j int) bool { return dfsLess(links[i].path, links[j].path) })
 	sort.Slice(leaves, func(i, j int) bool { return dfsLess(leaves[i].path, leaves[j].path) })
-	return leaves, links, nil
+	sort.Slice(dirs, func(i, j int) bool { return dfsLess(dirs[i], dirs[j]) })
+	return leaves, links, dirs, nil
 }
 
 // dfsLess orders two paths the way filepath.WalkDir visits them: component by

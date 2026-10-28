@@ -1,5 +1,5 @@
 # Config
-**Requirements:** R8-14, R22-27, R143-146, R148-151, R157-159, R194, R195, R200, R201, R203, R205-209, R340, R341, R396, R397, R624, R625, R631-635, R646, R853-856, R938, R943, R947-960, R1012, R1274, R1588-1592, R1919-1922, R1938, R2125, R2143-2150, R2728-2741, R2767, R2768, R2781, R2797-2800, R2811, R2822, R2830-2837, R2856, R2862, R2886, R2892, R2964-2966, R2968, R3041, R3135, R3171, R3195, R3198-3203, R3218, R3220, R3268, R3278, R3288-3290, R3292, R3329-3331, R3354, R3381, R3487, R3581-3583, R3589
+**Requirements:** R8-14, R22-27, R143-146, R148-151, R157-159, R194, R195, R200, R201, R203, R205-209, R340, R341, R396, R397, R624, R625, R631-635, R646, R853-856, R938, R943, R947-960, R1012, R1274, R1588-1592, R1919-1922, R1938, R2125, R2143-2150, R2728-2741, R2767, R2768, R2781, R2797-2800, R2811, R2822, R2830-2837, R2856, R2862, R2886, R2892, R2964-2966, R2968, R3041, R3135, R3171, R3195, R3198-3203, R3218, R3220, R3268, R3278, R3288-3290, R3292, R3329-3331, R3354, R3381, R3487, R3581-3583, R3589, R3673, R3674
 
 Parses, validates, and mutates ark.toml. Provides the effective pattern
 sets for each source directory. Explains pattern resolution for any file.
@@ -66,6 +66,11 @@ Per-tag config block parsed from `[schedule.tag.X]`. (R2830, R2831)
 - errors: []string — validation errors (identical include/exclude)
 
 ## Does
+- Clone(): a deep copy sharing no slice, map or pointer with c at any depth:
+  the struct copied by value, then every reference reachable through an
+  exported field copied by reflection, and the one unexported reference
+  (derivedStrategies) cloned explicitly. A Config is never written once
+  published, so every mutator here runs on a Clone (R3673, R3674).
 - Load(path): parse ark.toml, validate, return Config
 - WriteDefault(path): write initial ark.toml with default excludes
   and per-chime `[schedule.tag.chime-Nm]` blocks for each of the

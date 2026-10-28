@@ -34,7 +34,7 @@ func TestWalkSourcesTimingRig(t *testing.T) {
 
 	run := func(workers int) (time.Duration, int, int) {
 		start := time.Now()
-		leaves, links, werr := walkSources(cfg, matcher, workers)
+		leaves, links, _, werr := walkSources(cfg, matcher, workers)
 		if werr != nil {
 			t.Fatalf("walkSources(%d): %v", workers, werr)
 		}

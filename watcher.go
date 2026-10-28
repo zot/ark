@@ -58,6 +58,77 @@ func (srv *Server) watchSourceDirs() {
 	}
 }
 
+// watchNewSources watches every concrete config source the watcher is not
+// watching yet. A reconcile calls it, so a source added at runtime (add-source,
+// an ark.toml edit, a glob expansion) is watched as a startup source is. The
+// watch list is the record of what is watched: a source already on it, alone
+// or through a source it sits inside, is not walked again.
+// CRC: crc-Server.md | Seq: seq-reconcile.md#1.3 | R351, R3670
+func (srv *Server) watchNewSources(cfg *Config) {
+	if srv.watcher == nil {
+		return
+	}
+	watched := map[string]bool{}
+	for _, p := range srv.watcher.WatchList() {
+		watched[filepath.Clean(p)] = true
+	}
+	for _, src := range cfg.Sources {
+		if IsGlob(src.Dir) || watched[filepath.Clean(src.Dir)] {
+			continue
+		}
+		srv.watchDirRecursive(src.Dir)
+	}
+}
+
+// unwatchStaleDirs removes each watched directory the scan rule no longer
+// descends into: a removed source's tree, a subtree a changed exclude now
+// covers. It removes entry by entry, never by walking: a directory under a
+// source that remains is still watchable and keeps its watch, which a recursive
+// unwatch of a nested removed source would take. The watch on ark.toml is a
+// file, not a directory, and is never removed. The rule, not the last scan's
+// list, decides removal, so a directory created after a scan passed it keeps
+// the watch the live watcher gave it. On the DB actor (IsWatchableDir reads the
+// config).
+// CRC: crc-Server.md | Seq: seq-reconcile.md#1.3 | R351, R3671
+func (srv *Server) unwatchStaleDirs(db *DB) {
+	if srv.watcher == nil {
+		return
+	}
+	configPath := filepath.Clean(db.ConfigPath())
+	for _, p := range srv.watcher.WatchList() {
+		if filepath.Clean(p) == configPath || db.IsWatchableDir(p) {
+			continue
+		}
+		if err := srv.watcher.Remove(p); err != nil {
+			log.Printf("watch: failed to stop watching %s: %v", p, err)
+		}
+	}
+}
+
+// watchWalkedDirs adds each directory the reconcile scan descended that the
+// watcher lacks, so watches cover the whole scanned tree: a subdirectory made
+// while its source was out of the config, one a changed exclude newly includes.
+// A directory the config stopped covering since the walk is skipped. On the DB
+// actor, in the walk's apply step.
+// CRC: crc-Server.md | Seq: seq-reconcile.md#2.3.2a | R3672
+func (srv *Server) watchWalkedDirs(db *DB, dirs []string) {
+	if srv.watcher == nil || len(dirs) == 0 {
+		return
+	}
+	watched := map[string]bool{}
+	for _, p := range srv.watcher.WatchList() {
+		watched[filepath.Clean(p)] = true
+	}
+	for _, dir := range dirs {
+		if watched[filepath.Clean(dir)] || !db.IsWatchableDir(dir) {
+			continue
+		}
+		if err := srv.watcher.Add(dir); err != nil {
+			log.Printf("watch: failed to watch %s: %v", dir, err)
+		}
+	}
+}
+
 // watchDirRecursive adds a watch for dir and all its watchable subdirectories.
 // R350, R2952: descent matches the Scanner — a subtree is watched iff
 // DB.IsWatchableDir (Classify isDir=true is not Excluded), so dot-dirs like
@@ -79,22 +150,6 @@ func (srv *Server) watchDirRecursive(dir string) {
 			if watchErr := srv.watcher.Add(path); watchErr != nil {
 				log.Printf("watch: failed to watch %s: %v", path, watchErr)
 			}
-		}
-		return nil
-	})
-}
-
-// unwatchDir removes watches for a directory and its subdirectories.
-func (srv *Server) unwatchDir(dir string) {
-	if srv.watcher == nil {
-		return
-	}
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			srv.watcher.Remove(path)
 		}
 		return nil
 	})
@@ -231,9 +286,9 @@ func (srv *Server) watchLoop() {
 			if err := srv.db.ReloadConfig(); err != nil {
 				log.Printf("watch: config reload failed: %v", err)
 			} else {
-				srv.db.Config().EnsureArkSource()
-				srv.db.Config().EnsureLuhmannSource() // R3135
-				if srv.pubsub != nil {                // R3595: subscriptions follow the reload
+				// The built-in sources are ensured inside ReloadConfig, on the
+				// new Config before it is published (R3675).
+				if srv.pubsub != nil { // R3595: subscriptions follow the reload
 					cfg := srv.db.Config()
 					srv.pubsub.SetExcludes(cfg.SystemExcludes(), cfg.SearchExcludes())
 				}

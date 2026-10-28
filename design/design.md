@@ -481,6 +481,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-TagSourceParity.md → `tag_source_parity_test.go`
 - [x] test-Curation.md → `curation_test.go`
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
+- [x] test-ConfigClone.md → `config_clone_test.go`
 - [x] test-FilenameCase.md → `pathcase_test.go`, `pathcase_windows_test.go`, `drive_windows_test.go`, `cmd/ark/locator_windows_test.go`, `contentview_test.go`, `contenturl_test.go`
 - [x] test-FileEncoding.md → `encoding_test.go`
 - [x] test-StatusDBLabels.md → `status_db_labels_test.go`
@@ -1300,3 +1301,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T294: R1373 retired by R3622 (2026-10-26 no renderTagSearchResults; rows are /content iframes (#168 doc check))
 - T295: R20 retired by R3632 (Windows: a backslash is a separator, so the escape is off-Windows only; bracket form escapes everywhere)
 - T296: R3638 retired by R3654 (the route accepted a drive glued onto the prefix, a URL no route delivers; replaced by the slash-before-drive form)
+- [x] O240: R351's removal half holds only for globs: doReconcile unwatches SourcesCheck's Orphaned list (glob-expanded directories), so a concrete source removed by remove-source or an ark.toml edit stays watched. Harmless today, since events under it fail the indexability filter, but the watches leak until restart. A plain unwatch would be wrong when the removed source sits inside a source that remains, because unwatchDir walks and removes every subdirectory; the fix has to keep watches still covered by another source. Found 2026-10-28 while fixing R3670 (#181). **Resolved 2026-10-28 (#181), R3671:** every reconcile removes each watched directory IsWatchableDir rejects, one entry at a time and never the ark.toml watch; the orphan unwatch and the recursive unwatchDir are gone.

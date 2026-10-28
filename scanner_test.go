@@ -146,7 +146,7 @@ func TestWalkSourcesMatchesSequentialWalk(t *testing.T) {
 	}
 
 	for _, workers := range []int{1, 8} {
-		gotLeaves, gotLinks, err := walkSources(cfg, matcher, workers)
+		gotLeaves, gotLinks, _, err := walkSources(cfg, matcher, workers)
 		if err != nil {
 			t.Fatalf("walkSources(%d): %v", workers, err)
 		}
@@ -185,7 +185,7 @@ func TestWalkSourcesConcurrentIsRaceFree(t *testing.T) {
 	matcher := &Matcher{Dotfiles: true}
 
 	want, _ := sequentialWalkOracle(cfg, matcher)
-	got, _, err := walkSources(cfg, matcher, 8)
+	got, _, _, err := walkSources(cfg, matcher, 8)
 	if err != nil {
 		t.Fatal(err)
 	}

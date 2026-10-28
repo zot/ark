@@ -1,5 +1,5 @@
 # Sequence: Reconciliation
-**Requirements:** R343, R344, R345, R346, R347, R2138, R2139, R2140, R2141, R2142, R3433, R3434, R3435, R3436
+**Requirements:** R343-347, R2138-2142, R3433-3436, R3670-3672
 
 Covers the reconciliation cycle — called on startup, after config
 mutations, and on ark.toml fsnotify events. Since indexing-latency #132
@@ -21,7 +21,7 @@ on-actor cycle and diagram 2 is the off-actor walk it kicks.
 
 1.1  Trigger (startup | config mutation | ark.toml change) → Server.reconcile() → postCoalescedReconcile   (R345, R346)
 1.2  DBActor: if reconcileWalking → set reconcileWalkPending, return (a walk is in flight; coalesce)   (R3434)
-1.3  DBActor: SourcesCheck → add/remove fsnotify watches; setIndexing(sourceDirs)   (R347)
+1.3  DBActor: SourcesCheck; unwatchStaleDirs; watchNewSources; setIndexing(sourceDirs)   (R347, R3670, R3671)
 1.4  DBActor: SweepAsync — StaleFiles read, enqueueWrite(RemoveFile) for paths no longer Included   (R2138, R2142)
 1.5  DBActor: startReconcileWalk(db) → diagram 2   (R3433)
 ```
@@ -35,6 +35,7 @@ on-actor cycle and diagram 2 is the off-actor walk it kicks.
 2.3  Goroutine → SyncVoid(db, apply): DBActor applies the result   (R3433)
        2.3.1  swap db.scanner.emptyFiles = empties (the refreshed clone)
        2.3.2  applyReconcileScan: observeScannedLink over PendingLinks (deferred Observe on the shared, actor-owned LinkTable), recordScannedLinks, AddUnresolvedRecord loop, CleanUnresolved, config-file adds, evictEmpty, startFileScan per content file   (R3383, R3433)
+       2.3.2a watchWalkedDirs(results.Dirs): add each walked directory absent from WatchList that IsWatchableDir still accepts   (R3672)
        2.3.3  RefreshAsync — StaleFiles read, startFileScan per stale file
        2.3.4  captureReconcileStats(len(stale)): record stale + M/U-record counts + unresolved-by-reason + timeNow() into db.reconcileStats, so `ark status` reports staleness off-actor without a fresh walk   (R3435)
 2.4  DBActor: finishReconcile — DrainSchedule (config-index schedule items), enqueueWrite(setIndexing(nil)), kick the off-slot embed pass   (R1014, R1058, R3433)

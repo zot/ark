@@ -1057,6 +1057,33 @@ func (db *DB) ConfigPath() string { return filepath.Join(db.dbPath, "ark.toml") 
 // SaveConfig writes the current config to disk and re-validates.
 func (db *DB) SaveConfig() error { return db.config.SaveConfig(db.ConfigPath()) }
 
+// MutateConfig changes the configuration copy-on-write: fn edits a Clone, and
+// on success the Clone is installed whole. A published Config is never
+// written, so a goroutine holding the old one (the off-actor reconcile walk)
+// keeps a consistent view; a failed fn installs nothing. Every config write
+// goes through here. Callers that run beside a server call it on the DB actor.
+// CRC: crc-DB.md | R3673
+func (db *DB) MutateConfig(fn func(*Config) error) error {
+	next := db.config.Clone()
+	if err := fn(next); err != nil {
+		return err
+	}
+	db.installConfig(next)
+	return nil
+}
+
+// installConfig publishes cfg: every holder of the configuration is pointed at
+// it at once. The one place a Config is published.
+// CRC: crc-DB.md | R3673, R3675
+func (db *DB) installConfig(cfg *Config) {
+	db.config = cfg
+	db.scanner.config = cfg
+	db.search.config = cfg
+	db.indexer.config = cfg
+	db.matcher.Dotfiles = cfg.Dotfiles
+	db.scanner.Links().SetConfig(cfg)
+}
+
 // ReloadConfig re-reads ark.toml from disk, diffs against stored I records,
 // applies changes, and propagates to components.
 // CRC: crc-DB.md | R1561, R1562, R1563, R1564, R1021
@@ -1067,11 +1094,18 @@ func (db *DB) ReloadConfig() error {
 		return err
 	}
 	cfg.dbPath = db.dbPath
-	db.config = cfg
-	db.scanner.config = cfg
-	db.search.config = cfg
-	db.indexer.config = cfg
-	db.matcher.Dotfiles = cfg.Dotfiles
+	// R3675: the new Config is finished before it is published: the built-in
+	// sources ensured (~/.ark, and the orchestrator's session log, R3135), as
+	// the server does at startup, and then derived strategies. The fresh
+	// config carries no derived strategy entries (nothing the hook
+	// establishes is persisted), so the hook runs against the new sources
+	// here, before any holder can resolve a path against them (R3217).
+	cfg.EnsureArkSource()
+	cfg.EnsureLuhmannSource()
+	if err := db.activateSourceChunkers(cfg); err != nil {
+		log.Printf("ERROR: %v", err)
+	}
+	db.installConfig(cfg)
 
 	// R3381: re-derive the track/propose predicate against the new sources.
 	// The predicate is a test over (target, source config) with no index
@@ -1089,8 +1123,7 @@ func (db *DB) ReloadConfig() error {
 	// wrote. Without those paths the reload could only demote, and "add the
 	// link first, add the source later" — the case R3381 exists for — would
 	// wait for a full rescan while looking like the proposal was ignored.
-	links := db.scanner.Links()
-	links.SetConfig(cfg)
+	links := db.scanner.Links() // installConfig re-pointed it at cfg
 	// The L records are the complete set of known directory symlinks
 	// (R3383), tracked and proposed alike, so one list is Rebuild's whole
 	// input. Before they existed this had to dig proposals out of the U
@@ -1128,13 +1161,6 @@ func (db *DB) ReloadConfig() error {
 				log.Printf("withdraw symlink candidate %s: %v", rec.Path, err)
 			}
 		}
-	}
-
-	// R3217: the fresh config carries no derived strategy entries — nothing
-	// the hook establishes is persisted — so re-run it against the new
-	// sources before anything resolves a path against them.
-	if err := db.activateSourceChunkers(cfg); err != nil {
-		log.Printf("ERROR: %v", err)
 	}
 
 	// Diff and apply config changes
@@ -5239,7 +5265,11 @@ func (db *DB) IsIndexed(path string) bool {
 
 // SourcesCheck expands glob sources and reconciles with concrete sources.
 func (db *DB) SourcesCheck() (*SourcesCheckResult, error) {
-	result, err := db.config.ResolveGlobs()
+	var result *SourcesCheckResult
+	err := db.MutateConfig(func(c *Config) (err error) { // R3673: glob expansion adds sources
+		result, err = c.ResolveGlobs()
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

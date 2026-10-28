@@ -1,5 +1,5 @@
 # DB
-**Requirements:** R1-3, R5-7, R28-34, R40, R127-130, R135-138, R161-163, R166-168, R196-200, R236-255, R257, R258, R382, R383, R392, R506, R510, R563-568, R605, R606, R617-619, R621, R622, R624-630, R636-638, R663-668, R682, R692, R714, R716, R719-721, R723, R765, R766, R909, R986-990, R993, R995, R1020-1022, R1051-1068, R1130, R1145-1150, R1507, R1508, R1517-1522, R1539-1542, R1550-1555, R1832, R1871, R1879-1882, R1903, R1909-1912, R1923-1925, R1948, R1952, R1976-1978, R1985-1987, R2028, R2086-2088, R2090, R2138-2142, R2147-2150, R2162, R2271-2275, R2281, R2285-2287, R2366-2378, R2386, R2387, R2389-2401, R2403, R2407, R2473, R2478-2482, R2913, R2914, R2952, R2954, R2955, R2974, R2976-2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051-3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100-3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3263, R3264, R3266, R3344, R3346, R3351, R3358-3361, R3367, R3370, R3381, R3382, R3390, R3395, R3433-3436, R3567-3569, R3571, R3574, R3589, R3601, R3602, R3607-3609, R3648, R3651, R3652, R3661-3664
+**Requirements:** R1-3, R5-7, R28-34, R40, R127-130, R135-138, R161-163, R166-168, R196-200, R236-255, R257, R258, R382, R383, R392, R506, R510, R563-568, R605, R606, R617-619, R621, R622, R624-630, R636-638, R663-668, R682, R692, R714, R716, R719-721, R723, R765, R766, R909, R986-990, R993, R995, R1020-1022, R1051-1068, R1130, R1145-1150, R1507, R1508, R1517-1522, R1539-1542, R1550-1555, R1832, R1871, R1879-1882, R1903, R1909-1912, R1923-1925, R1948, R1952, R1976-1978, R1985-1987, R2028, R2086-2088, R2090, R2138-2142, R2147-2150, R2162, R2271-2275, R2281, R2285-2287, R2366-2378, R2386, R2387, R2389-2401, R2403, R2407, R2473, R2478-2482, R2913, R2914, R2952, R2954, R2955, R2974, R2976-2978, R2981, R2982, R2986, R2989, R2994, R2998, R2999, R3005, R3047, R3051-3055, R3069, R3071, R3073, R3075, R3077, R3078, R3086, R3087, R3089, R3090, R3092, R3100-3103, R3106, R3107, R3163, R3165, R3171, R3179, R3180, R3186, R3214, R3216, R3217, R3220, R3221, R3223, R3244, R3245, R3248, R3255, R3263, R3264, R3266, R3344, R3346, R3351, R3358-3361, R3367, R3370, R3381, R3382, R3390, R3395, R3433-3436, R3567-3569, R3571, R3574, R3589, R3601, R3602, R3607-3609, R3648, R3651, R3652, R3661-3664, R3673-3675
 
 Main ark facade. Owns the bbolt database lifecycle — the file is microfts2's
 (`fts.DB() *bbolt.DB`); ark opens its own `ark` bucket inside it, and a
@@ -184,7 +184,17 @@ document this on the API. (R986, R993, R995, R3163)
   side the file's candidate is removed, because nothing else drops one:
   `CleanUnresolved` tests whether the *path* still exists, and an indexable
   file's path exists.
-- ReloadConfig(): rebind the LinkTable's config and re-derive the
+- MutateConfig(fn): copy-on-write. Clone the config, apply fn to the clone,
+  and on success installConfig it; on error install nothing, so the running
+  config never holds a half-made change. Every config write goes through it
+  (R3673).
+- installConfig(cfg): the one place a Config is published: points db.config,
+  the scanner, the searcher, the indexer and the LinkTable at cfg and sets the
+  matcher's Dotfiles. Used by MutateConfig and ReloadConfig (R3673, R3675).
+- ReloadConfig(): builds the new Config completely, the built-in sources
+  ensured and derived strategy entries added (activateSourceChunkers), then
+  installConfig (R3675). It then
+  rebinds the LinkTable's config and re-derives the
   track/propose predicate (R3381), feeding `Rebuild` the tracked links **and**
   the links named by symlink-reason U records. That second list is what makes
   **promotion** work: a proposed link is in no table at all (`Observe` records

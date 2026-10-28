@@ -6,9 +6,11 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -643,6 +645,71 @@ type BracketDefConfig struct {
 	// = scan-restricted, mirroring microfts2.BracketGroup semantics.
 	AllowedInner  *[]string `toml:"allowed_inner,omitempty"`
 	AllowedParent []string  `toml:"allowed_parent,omitempty"`
+}
+
+// Clone returns a deep copy of c: no slice, map or pointer is shared with c
+// at any depth. A published Config is never written; every change is made to
+// a Clone and installed whole (DB.MutateConfig), so a goroutine holding the
+// old one, such as the off-actor reconcile walk, keeps a consistent view.
+// The struct is copied by value, then every reference reachable through an
+// exported field by reflection, so a field added later is covered without
+// touching this; the one unexported reference is cloned by hand.
+// TestConfigCloneSharesNothing is the guard.
+// CRC: crc-Config.md | R3673, R3674
+func (c *Config) Clone() *Config {
+	cp := *c
+	deepCopyFields(reflect.ValueOf(&cp).Elem())
+	cp.derivedStrategies = maps.Clone(c.derivedStrategies)
+	return &cp
+}
+
+// deepCopyFields replaces every settable field of the addressable struct v
+// with a deep copy of itself. Unexported fields are not settable and keep the
+// value-copy their struct already made.
+func deepCopyFields(v reflect.Value) {
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.CanSet() {
+			f.Set(deepCopy(f))
+		}
+	}
+}
+
+// deepCopy returns a copy of v that shares no slice, map or pointer with it.
+// Scalars are returned as they are; nil stays nil.
+func deepCopy(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			return v
+		}
+		p := reflect.New(v.Type().Elem())
+		p.Elem().Set(deepCopy(v.Elem()))
+		return p
+	case reflect.Slice:
+		if v.IsNil() {
+			return v
+		}
+		s := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		for i := 0; i < v.Len(); i++ {
+			s.Index(i).Set(deepCopy(v.Index(i)))
+		}
+		return s
+	case reflect.Map:
+		if v.IsNil() {
+			return v
+		}
+		m := reflect.MakeMapWithSize(v.Type(), v.Len())
+		for it := v.MapRange(); it.Next(); {
+			m.SetMapIndex(deepCopy(it.Key()), deepCopy(it.Value()))
+		}
+		return m
+	case reflect.Struct:
+		s := reflect.New(v.Type()).Elem()
+		s.Set(v)
+		deepCopyFields(s)
+		return s
+	}
+	return v
 }
 
 // Source is a directory entry in the configuration.

@@ -1,5 +1,5 @@
 # Scanner
-**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206, R207, R208, R1644, R1645, R1646, R1647, R1648, R1649, R1650, R1651, R3352, R3353, R3373, R3433, R3437
+**Requirements:** R8, R9, R14, R15, R35, R75, R106, R206-208, R1644-1651, R3352, R3353, R3373, R3433, R3437, R3672
 
 Walks configured source directories and classifies files using the
 pattern matcher. Identifies new files to index and new unresolved
@@ -16,8 +16,10 @@ files.
   source directories concurrently with a bounded pool (`walkWorkers`, default
   `runtime.NumCPU()`): each directory is one `os.ReadDir`, each leaf one `lstat`
   (`DirEntry.Info`) for type/size/mtime, `Matcher.Classify` per entry (pure,
-  read-only), no file contents read. It returns leaf records and directory-symlink
-  candidates. `Scan` then runs the **serial merge** in deterministic walk order —
+  read-only), no file contents read. It returns leaf records, directory-symlink
+  candidates, and the directories it descended (each once, only those whose
+  `ReadDir` succeeded), which Scan hands on as `ScanResults.Dirs`: by R2952 the
+  tree the watcher should hold (R3672). `Scan` then runs the **serial merge** in deterministic walk order —
   the empty-file set, the already-indexed `CheckFile`, and symlink `Observe` — so
   the actor-confined `emptyFiles`, the shared `fts`, and the `LinkTable` are
   touched by one goroutine, and a symlink's classification and reverse-index
