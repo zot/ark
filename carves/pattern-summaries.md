@@ -15,9 +15,8 @@ a work list: the patterns themselves live outside this repository.
 
 ## Status
 
-- [ ] **Item 1 — the actor-turn pattern.** **OPEN (not queued.)** Named Hall
-      Pass (by Daneel) and installed in the collection 2026-10-28, with its links;
-      lands when that collection is checkpointed. See Item 1.
+- [x] ~~**Item 1 — the actor-turn pattern.**~~ **LANDED (fossil `5a432197`,
+      2026-10-28.)** Named Hall Pass (by Daneel), with its links. See Item 1.
 - [ ] **Item 2 — measure summary/body drift across the collection.** **OPEN (#189.)** A measurement, not a rewrite. See Item 2.
 
 ## Parts
