@@ -3,6 +3,9 @@ package ark
 // CRC: crc-Server.md | Seq: seq-content-fetching.md | Test: test-ContentView.md
 
 import (
+	"bytes"
+	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,5 +190,55 @@ func TestContentView_UnindexedFallback(t *testing.T) {
 	}
 	if got := chunkDivCount(html); got != 0 {
 		t.Errorf("chunk divs = %d, want 0 for an unindexed file", got)
+	}
+}
+
+// TestContentView_PencilOnlyWhereSaveWorks — test-ContentView.md "the pencil
+// is offered only where save accepts the file". R3665.
+func TestContentView_PencilOnlyWhereSaveWorks(t *testing.T) {
+	db := encodingDB(t)
+	mux := encodingServer(t, db)
+	indexed := filepath.Join(db.dbPath, "kept.md")
+	loose := filepath.Join(db.dbPath, "loose.md")
+	for _, p := range []string{indexed, loose} {
+		if err := os.WriteFile(p, []byte(mdSample), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.indexer.AddFile(indexed, "markdown"); err != nil {
+		t.Fatal(err)
+	}
+	if got := serve(t, mux, "GET", "/content"+ContentURLPath(indexed), "").Body.String(); !strings.Contains(got, "hide=false") {
+		t.Errorf("indexed file: %q, want the pencil", got[:min(40, len(got))])
+	}
+	if got := serve(t, mux, "GET", "/content"+ContentURLPath(loose), "").Body.String(); !strings.Contains(got, "hide=true") {
+		t.Errorf("unindexed file: %q, want no pencil, since save refuses it", got[:min(40, len(got))])
+	}
+}
+
+// TestSave_RefusalIsLogged — test-ContentView.md "a refused save is logged".
+// R1087, R3668.
+func TestSave_RefusalIsLogged(t *testing.T) {
+	db := encodingDB(t)
+	mux := encodingServer(t, db)
+	loose := filepath.Join(db.dbPath, "loose.md")
+	if err := os.WriteFile(loose, []byte(mdSample), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	body, _ := json.Marshal(map[string]string{"path": loose, "content": "changed"})
+	rec := serve(t, mux, "POST", "/file/save", string(body))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("save of an unindexed file → %d, want 403", rec.Code)
+	}
+	if data, _ := os.ReadFile(loose); string(data) != mdSample {
+		t.Errorf("refused save changed the file: %q", data)
+	}
+	if got := buf.String(); !strings.Contains(got, "save refused") || !strings.Contains(got, loose) {
+		t.Errorf("log = %q, want the refusal with its path", got)
 	}
 }

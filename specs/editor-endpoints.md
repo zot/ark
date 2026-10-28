@@ -140,7 +140,10 @@ Request:
 
 Response: 200 OK on success.
 
-The path must be within an indexed source directory. Write the content,
+The path must be an indexed file; a save is refused with 403
+otherwise, and the server logs each refused save with its path and
+reason, so a refusal is visible in `ark.log` as well as to the page.
+Write the content,
 then trigger a refresh of that single file. The watcher will also
 notice the change, but an explicit refresh avoids the debounce delay
 for immediate feedback.

@@ -804,7 +804,17 @@ per-file collision policy live in `~/.ark/install-manifest.json`, reusing
 the `{hash, onCollision, group}` entry shape rather than living in
 `ark.toml`, whose hand-edited config would otherwise churn on every update
 (R3479). Update reads the manifest so it never clobbers a user-edited file
-and never replaces a link with a copy (R3474). Built-in apps are extracted
+and never replaces a link with a copy (R3474). The server rewrites one part
+of some installed files itself: at every start, and whenever a theme's CSS
+changes, it writes the current theme block between the `<!-- #frictionless -->`
+and `<!-- /frictionless -->` markers of each html file in `~/.ark/html`, and
+the bundle ships that region empty. So for an html file the manifest compares
+the file with that region put back as shipped, empty and at the opening
+marker's indent: an edit anywhere else is still the user's, while the block
+the server wrote never counts as one. Without this, every server start would
+mark the content templates edited, and no update would refresh them again.
+The shipped file is already in that form, so hashes recorded before this
+rule still match. Built-in apps are extracted
 into `~/.ark/apps` precisely so a user can edit them in place, and those
 edits survive an update. An app that this update extracts for the first
 time (no `~/.ark/apps/<app>` before the refresh) is activated as setup

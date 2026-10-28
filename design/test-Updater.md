@@ -121,3 +121,16 @@ green happy path while breaking exactly the guarantee the field exists for.
 **Fire alarm:** build a bare `&githubReleaseFetcher{}` in newUpdater; red, reading "" instead of the override
 **Inject:** cmd/ark/staged_update.go:newUpdater
 **Pulled:** 2026-10-21 — rang: bare fetcher; read "" instead of the override
+
+## Test: a refresh sees through the injected theme block
+**Purpose:** R3669 — the theme block the server writes between the frictionless markers of an html file is not a user edit, so a later refresh takes the bundle's new copy, while an edit outside the markers is still preserved and reported
+**Input:** two bundled html files with empty markers, installed by RefreshAssets; Frictionless's own `flib.InjectAllThemeBlocks` run over the install (not a hand-made block, so the test follows the injector); one file then edited outside the markers; a second bundle with new bodies refreshed over both
+**Expected:** the themed-only file equals the new bundle copy; the edited file keeps its edit and is reported `preserved user-modified`. The test fails at once if the injector wrote no block, since it would then prove nothing
+**Refs:** crc-Updater.md, R3669
+**Code:** cmd/ark/update_test.go
+**Fire alarm:** manifestContent returns every file unchanged (the defect)
+**Inject:** install_manifest.go:manifestContent
+**Pulled:** 2026-10-28 (local) — rang: `a file the server only themed was not refreshed`
+**Fire alarm:** manifestContent maps every html file to the same bytes (too broad)
+**Inject:** install_manifest.go:manifestContent
+**Pulled:** 2026-10-28 (local) — rang: `the edited file was not reported preserved`; with all html hashing alike, both files read as already current and nothing was written

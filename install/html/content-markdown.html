@@ -809,11 +809,19 @@ const api = {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({tag, prefix}),
   }).then(r => r.json()),
+  // R3666: a save is done only when the server accepts it. A refusal (or a
+  // failed request) is reported, leaves the text dirty, and rejects.
   save: (p, c) => fetch('/file/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({path: p, content: c}),
-  }).then(() => { savedContent = c; }),
+  }).then(async r => {
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    savedContent = c;
+  }).catch(err => {
+    alert('Not saved: ' + err.message);
+    throw err;
+  }),
   navigate: (p) => { window.location.href = '/content' + contentURLPath(p); },
   setTags: (p, tags) => fetch('/tags/set', {
     method: 'POST',
@@ -935,7 +943,8 @@ if (btn) btn.addEventListener('click', async () => {
     if (current !== savedContent) {
       const choice = confirm('You have unsaved changes. Save before switching to read view?');
       if (choice) {
-        await api.save(path, current);
+        // R3667: a refused save stays in the editor, edits intact.
+        try { await api.save(path, current); } catch { return; }
       }
     }
     location.reload();
@@ -946,7 +955,7 @@ if (btn) btn.addEventListener('click', async () => {
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault();
-    if (editor) api.save(path, editor.getDoc());
+    if (editor) api.save(path, editor.getDoc()).catch(() => {}); // R3666: save reported it
   }
 });
 

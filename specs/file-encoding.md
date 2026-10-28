@@ -48,7 +48,8 @@ to it re-indexes the whole file. Appending works on the raw bytes, and chat
 logs, the files appending exists for, are UTF-8.
 
 The external-command strategies (`lines-overlap`, `words-overlap`) run a
-separate program that opens the file itself, so for now they read UTF-8 only.
+separate program that opens the file itself, so they read UTF-8 only, and are
+meant to: decided 2026-10-27, they need no UTF-16 coverage.
 When one meets a UTF-16 file, the message names the encoding rather than
 calling the file invalid UTF-8.
 

@@ -17,6 +17,7 @@ import type { SearchAPI } from "../../ark-search/src/search-api";
  * server, in-process Lua mcp calls, or a mock for testing.
  */
 export interface HostAPI extends SearchAPI {
+  /** Resolves once the host has accepted the save; rejects if it refused. */
   save(path: string, content: string): Promise<void>;
   setTags(path: string, tags: Record<string, string>): Promise<void>;
 }

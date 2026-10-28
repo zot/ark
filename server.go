@@ -4426,6 +4426,14 @@ func (srv *Server) handleTagValues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, results)
 }
 
+// refuseSave answers a save the server will not make with 403 and logs it,
+// so a refusal reaches ark.log as well as the page.
+// CRC: crc-Server.md | R3668
+func refuseSave(w http.ResponseWriter, path, reason string) {
+	log.Printf("save refused: %s: %s", path, reason)
+	http.Error(w, reason, http.StatusForbidden)
+}
+
 // handleSave writes file content and triggers re-indexing.
 // CRC: crc-Server.md | Seq: seq-editor-endpoints.md | R1086-R1089
 func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
@@ -4448,7 +4456,7 @@ func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		return db.IsIndexed(req.Path), nil
 	})
 	if !indexed {
-		http.Error(w, "path not within indexed source", http.StatusForbidden)
+		refuseSave(w, req.Path, "path not within indexed source")
 		return
 	}
 
@@ -4457,7 +4465,7 @@ func (srv *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	// survive re-encoding is refused rather than altered.
 	content, err := EncodeForFile(req.Path, content)
 	if errors.Is(err, errNotWritable) {
-		http.Error(w, err.Error(), http.StatusForbidden)
+		refuseSave(w, req.Path, err.Error())
 		return
 	}
 	if err != nil {
@@ -4841,9 +4849,12 @@ func (srv *Server) newContentRender(r *http.Request, path string, data []byte) *
 	// bible page draws the pencil and opens the publisher's XHTML in the
 	// markdown editor with a save action — against R3178, which makes
 	// non-writability the reason the view has no edit affordance at all.
+	// R3665: the pencil appears only where handleSave would accept the file,
+	// so the same IsIndexed check. The view opens any file under a source,
+	// and one no pattern covers (~/.ark/resources) would refuse every save.
 	writable, _ := Sync(srv.db, func(db *DB) (bool, error) {
 		w, _ := db.chunkerMetadata(cr.strategy)
-		return w, nil
+		return w && db.IsIndexed(path), nil
 	})
 	cr.shell = contentShellData{
 		Title:      path,

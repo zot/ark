@@ -38,9 +38,10 @@ surface was worth redrawing on every platform, not just Windows.
       install is hardcoded, per-file, copying, and project-scoped, and it
       creates symlinks; the Frictionless-side halves of Items 3, 7, and
       Windows Item 3.
-- [ ] **Item 9 — the theme block makes bundled html read as user-modified.** **OPEN
-      (not queued.)** Filed by Bill, 2026-10-21, from the windows-support 9.2 run.
-      Not Windows-specific. See Item 9.
+- [ ] **Item 9 — the theme block makes bundled html read as user-modified.** **OPEN (#187.)** Filed by Bill, 2026-10-21, from the windows-support 9.2 run.
+      Not Windows-specific; re-measured on Linux 2026-10-28. See Item 9.
+- [ ] **Item 10 — a file link under a refreshable root is written through.**
+      **OPEN (not queued.)** Found 2026-10-28 beside Item 9. See Item 10.
 
 Preconditions, no checkbox: the portable directory-link helper (symlink on Unix,
 junction on Windows) is decided in windows-support Item 3 and shared with
@@ -345,3 +346,21 @@ one on a later run; the aside copy deletes normally once its process has exited.
   injected block, which is regenerated at every start and never hand-edited, is
   not. Check `crc-Updater.md` RefreshAssets and the manifest's hashing when
   designing it; the theme injector lives in frictionless (`internal/mcp/theme.go`).
+  Re-measured 2026-10-28 on Linux: `update --no-exe` preserved
+  `html/content-markdown.html`, `content-plain.html` and `index.html` as
+  user-modified, so the live content templates predated windows-support 7.4.7
+  (the slash-before-drive URL form) and the refused-save handling of 13.1. Their
+  only difference from the bundle besides those changes was the injected block.
+  Injection runs at every server start and whenever a theme CSS file changes, so
+  no install that has served once can take a new content template by update.
+
+- **Item 10.** RefreshAssets skips a file whose *ancestor* directory is a link
+  (`ancestorIsLink`), but never asks whether the file itself is one. A file link
+  is read and written through (`os.ReadFile`, `os.WriteFile` follow it): the link
+  survives, and its **target** is overwritten. A developer install has such
+  links: measured 2026-10-28, `~/.ark/html` held 15, pointing into the repo's
+  `install/html` and the components' `dist/`. A write needs the target to match
+  its manifest hash while differing from the bundle, which the developer flow
+  rarely produces, since the bundle is built from those same targets (all 15 were
+  byte-identical to `cache/html` that day). Proposed fix: skip a file that is
+  itself a link, as a directory link is skipped.

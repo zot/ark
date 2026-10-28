@@ -14,6 +14,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path"
+	"strings"
 )
 
 // Collision policies for a manifest entry's OnCollision field.
@@ -75,6 +77,43 @@ func HashContent(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// The markers Frictionless's theme injector writes its block between, in every
+// html file under ~/.ark/html (frictionless internal/mcp/theme.go).
+const (
+	themeBlockStart = "<!-- #frictionless -->"
+	themeBlockEnd   = "<!-- /frictionless -->"
+)
+
+// manifestContent is what the manifest hashes for relPath: an html file with
+// the region between the theme markers put back as shipped (a newline, then the
+// opening marker's indent), anything else as is. The server rewrites that
+// region at every start, so without this every served install would read its
+// html as user-edited and never take a refresh. A shipped file is already in
+// this form, so hashes recorded before it still match.
+// CRC: crc-Updater.md | R3669
+func manifestContent(relPath string, content []byte) []byte {
+	if path.Ext(relPath) != ".html" {
+		return content
+	}
+	text := string(content)
+	start := strings.Index(text, themeBlockStart)
+	if start < 0 {
+		return content
+	}
+	open := start + len(themeBlockStart)
+	end := strings.Index(text[open:], themeBlockEnd)
+	if end < 0 {
+		return content
+	}
+	indent := text[strings.LastIndex(text[:start], "\n")+1 : start]
+	return []byte(text[:open] + "\n" + indent + text[open+end:])
+}
+
+// manifestHash hashes relPath's content the way the manifest compares it.
+func manifestHash(relPath string, content []byte) string {
+	return HashContent(manifestContent(relPath, content))
+}
+
 // ShouldWrite decides whether a refresh may write newContent to the file
 // currently on disk (diskContent, diskExists). The rule (R3474): a brand-new
 // file installs; a file whose on-disk bytes still match what the manifest last
@@ -87,8 +126,8 @@ func (m *InstallManifest) ShouldWrite(relPath string, diskContent []byte, diskEx
 	if !diskExists {
 		return true, false
 	}
-	newHash := HashContent(newContent)
-	diskHash := HashContent(diskContent)
+	newHash := manifestHash(relPath, newContent) // R3669
+	diskHash := manifestHash(relPath, diskContent)
 	if diskHash == newHash {
 		return false, false // already current — nothing to do
 	}
@@ -112,7 +151,7 @@ func (m *InstallManifest) ShouldWrite(relPath string, diskContent []byte, diskEx
 // Record writes back the entry for a file the refresh just installed. R3479
 func (m *InstallManifest) Record(relPath string, content []byte) {
 	entry := m.Files[relPath]
-	entry.Hash = HashContent(content)
+	entry.Hash = manifestHash(relPath, content) // R3669
 	if entry.OnCollision == "" {
 		entry.OnCollision = CollisionReport
 	}

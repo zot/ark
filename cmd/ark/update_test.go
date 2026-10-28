@@ -1,6 +1,6 @@
 package main
 
-// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3472, R3474, R3476, R3477, R3478, R3479, R3484, R3547, R3548, R3549, R3550, R3551
+// CRC: crc-Updater.md | Test: test-Updater.md | R3471, R3472, R3474, R3476, R3477, R3478, R3479, R3484, R3547, R3548, R3549, R3550, R3551, R3669
 //
 // Update's decision logic against a fake install root and a fake release source
 // (no network). The whole class here is invisible when violated: a refresh that
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/zot/ark"
+	"github.com/zot/frictionless/flib"
 )
 
 // fakeFetcher is an in-memory ReleaseFetcher.
@@ -389,5 +390,61 @@ func TestNewUpdaterHonoursReleaseURL(t *testing.T) {
 	}
 	if f.documentURL != override {
 		t.Errorf("newUpdater's fetcher reads %q, want the override %q", f.documentURL, override)
+	}
+}
+
+// TestRefreshSeesThroughInjectedThemeBlock: the server's theme injector rewrites
+// the region between the frictionless markers of every html file at each start.
+// That must not make the file read as user-edited (else no update refreshes it
+// again), while an edit outside the markers still must. The block is written by
+// Frictionless's own injector, not a hand-made copy, so the test follows it.
+// test-Updater.md. R3669
+func TestRefreshSeesThroughInjectedThemeBlock(t *testing.T) {
+	arkRoot := t.TempDir()
+	themes := filepath.Join(arkRoot, "html", "themes")
+	if err := os.MkdirAll(themes, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, css := range []string{"base.css", "lcars.css"} {
+		if err := os.WriteFile(filepath.Join(themes, css), []byte("/* css */"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(body string) []byte {
+		return []byte("<html><head>\n  <!-- #frictionless -->\n  <!-- /frictionless -->\n</head><body>" + body + "</body></html>\n")
+	}
+	u := &Updater{ArkDir: arkRoot, Out: &bytes.Buffer{}}
+	v1 := fakeAssets{files: map[string][]byte{"html/kept.html": page("v1"), "html/edited.html": page("v1")}}
+	if err := u.RefreshAssets(v1); err != nil {
+		t.Fatalf("RefreshAssets v1: %v", err)
+	}
+
+	if err := flib.InjectAllThemeBlocks(arkRoot); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(arkRoot, "html", "kept.html")
+	if data, _ := os.ReadFile(kept); !bytes.Contains(data, []byte("/themes/lcars.css")) {
+		t.Fatalf("the injector wrote no theme block, so this test proves nothing: %q", data)
+	}
+	edited := filepath.Join(arkRoot, "html", "edited.html")
+	data, _ := os.ReadFile(edited)
+	if err := os.WriteFile(edited, bytes.Replace(data, []byte("v1"), []byte("mine"), 1), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &bytes.Buffer{}
+	u.Out = out
+	v2 := fakeAssets{files: map[string][]byte{"html/kept.html": page("v2"), "html/edited.html": page("v2")}}
+	if err := u.RefreshAssets(v2); err != nil {
+		t.Fatalf("RefreshAssets v2: %v", err)
+	}
+	if data, _ := os.ReadFile(kept); !bytes.Equal(data, page("v2")) {
+		t.Errorf("a file the server only themed was not refreshed: %q\n%s", data, out)
+	}
+	if data, _ := os.ReadFile(edited); !bytes.Contains(data, []byte("mine")) {
+		t.Errorf("an edit outside the markers was overwritten: %q", data)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("preserved user-modified html/edited.html")) {
+		t.Errorf("the edited file was not reported preserved:\n%s", out)
 	}
 }

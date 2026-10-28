@@ -64,3 +64,25 @@ in the index still renders, just without per-chunk structure.
 **Expected:** the markdown is rendered (heading becomes `<h1>`) and no
 `ark-chunk` div is emitted.
 **Refs:** crc-Server.md, R1160-R1164
+
+## Test: the pencil is offered only where save accepts the file
+**Purpose:** R3665 — the view hides the editor for a file handleSave would refuse, by the same IsIndexed check, while an indexed file keeps it
+**Input:** two markdown files under the source, one indexed and one not; `GET /content/<path>` through the real mux, template `hide={{.HideToggle}}`
+**Expected:** `hide=false` for the indexed file, `hide=true` for the unindexed one
+**Refs:** crc-Server.md, R3665
+**Code:** contentview_test.go
+**Fire alarm:** drop the IsIndexed term from newContentRender's writable check
+**Inject:** server.go:newContentRender
+**Pulled:** 2026-10-27 (local) — rang: `unindexed file: "hide=false …", want no pencil, since save refuses it`
+
+## Test: a refused save is logged
+**Purpose:** R1087, R3668 — a save of an unindexed file is refused with 403, leaves the file untouched, and logs the refusal with its path
+**Input:** an unindexed markdown file under the source; `POST /file/save` through the real mux, with the log captured
+**Expected:** 403; the file's bytes unchanged; `save refused` and the path in the log
+**Refs:** crc-Server.md, R1087, R3668
+**Code:** contentview_test.go
+**Fire alarm:** refuseSave answers 403 without logging
+**Inject:** server.go:refuseSave
+**Pulled:** 2026-10-27 (local) — rang: `log = "", want the refusal with its path`
+
+Not tested here: the page's side (R3666, R3667), which is browser JavaScript in `install/html/content-markdown.html`, checked live in a browser.

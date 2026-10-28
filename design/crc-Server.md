@@ -1,5 +1,5 @@
 # Server
-**Requirements:** R4, R61-70, R89-102, R132-134, R152-156, R160, R164, R165, R170, R171, R175-177, R202, R204, R210-213, R229, R257, R261-272, R338, R339, R342-359, R387-391, R393-395, R410-412, R414-417, R419, R420, R437-441, R541-546, R563-571, R620, R623, R641, R648, R657-662, R685-691, R735-737, R748-750, R758-764, R767-777, R789, R790, R799, R804, R805, R812, R813, R835-848, R893-898, R914, R917, R919-921, R923, R927-932, R961-963, R975, R990-992, R994, R1014, R1015, R1069-1093, R1098, R1111, R1112, R1151-1199, R1216-1221, R1225-1234, R1243, R1248, R1249, R1266, R1267, R1292, R1295, R1297, R1300, R1378, R1383, R1402-1405, R1423-1432, R1469, R1485-1489, R1495, R1496, R1499, R1501, R1504-1506, R1509-1513, R1556-1564, R1703, R1739, R1740, R1761, R1783-1785, R1859, R1860, R1889, R1979-1982, R2065, R2073-2076, R2078-2080, R2085, R2086, R2089, R2091, R2117, R2129, R2258-2270, R2277, R2280, R2282, R2288-2294, R2296-2301, R2305, R2308, R2313, R2322-2325, R2355, R2356, R2358, R2360, R2361, R2363, R2364, R2379, R2386, R2389-2391, R2393, R2395-2402, R2404-2406, R2408, R2410-2415, R2421, R2426, R2432-2456, R2472, R2480, R2628-2630, R2660, R2661, R2687, R2688, R2694, R2695, R2700, R2701, R2713-2715, R2780, R2787, R2788, R2794, R2795, R2805, R2842, R2843, R2955, R2984-2989, R2998-3001, R3049, R3057, R3077, R3094, R3165, R3231, R3246-3250, R3257, R3259-3262, R3291, R3325, R3329, R3332, R3366, R3370, R3371, R3378, R3379, R3390, R3393, R3395, R3397, R3399, R3414, R3416-3418, R3433, R3434, R3436, R3439-3441, R3446, R3515, R3522, R3524, R3572, R3574, R3579, R3580, R3587, R3590, R3595, R3605, R3606, R3613, R3614, R3619, R3625, R3654, R3655, R3661-3663
+**Requirements:** R4, R61-70, R89-102, R132-134, R152-156, R160, R164, R165, R170, R171, R175-177, R202, R204, R210-213, R229, R257, R261-272, R338, R339, R342-359, R387-391, R393-395, R410-412, R414-417, R419, R420, R437-441, R541-546, R563-571, R620, R623, R641, R648, R657-662, R685-691, R735-737, R748-750, R758-764, R767-777, R789, R790, R799, R804, R805, R812, R813, R835-848, R893-898, R914, R917, R919-921, R923, R927-932, R961-963, R975, R990-992, R994, R1014, R1015, R1069-1093, R1098, R1111, R1112, R1151-1199, R1216-1221, R1225-1234, R1243, R1248, R1249, R1266, R1267, R1292, R1295, R1297, R1300, R1378, R1383, R1402-1405, R1423-1432, R1469, R1485-1489, R1495, R1496, R1499, R1501, R1504-1506, R1509-1513, R1556-1564, R1703, R1739, R1740, R1761, R1783-1785, R1859, R1860, R1889, R1979-1982, R2065, R2073-2076, R2078-2080, R2085, R2086, R2089, R2091, R2117, R2129, R2258-2270, R2277, R2280, R2282, R2288-2294, R2296-2301, R2305, R2308, R2313, R2322-2325, R2355, R2356, R2358, R2360, R2361, R2363, R2364, R2379, R2386, R2389-2391, R2393, R2395-2402, R2404-2406, R2408, R2410-2415, R2421, R2426, R2432-2456, R2472, R2480, R2628-2630, R2660, R2661, R2687, R2688, R2694, R2695, R2700, R2701, R2713-2715, R2780, R2787, R2788, R2794, R2795, R2805, R2842, R2843, R2955, R2984-2989, R2998-3001, R3049, R3057, R3077, R3094, R3165, R3231, R3246-3250, R3257, R3259-3262, R3291, R3325, R3329, R3332, R3366, R3370, R3371, R3378, R3379, R3390, R3393, R3395, R3397, R3399, R3414, R3416-3418, R3433, R3434, R3436, R3439-3441, R3446, R3515, R3522, R3524, R3572, R3574, R3579, R3580, R3587, R3590, R3595, R3605, R3606, R3613, R3614, R3619, R3625, R3654, R3655, R3661-3663, R3665-3668
 
 HTTP server on Unix domain socket. Highlander (one per database).
 Keeps embedding model warm. Runs reconciliation on startup and
@@ -620,9 +620,10 @@ Optionally starts the embedded ui-engine alongside.
 - HandleTagValues: POST /tags/values — tag value completion. Accepts
   tag + prefix, returns {value, count} array. Delegates to
   Store.QueryTagValues for O(1) index lookup. (R1081-R1085, R1111)
-- HandleSave: POST /save — write file + re-index. Validates path
-  is within indexed source. Writes content, triggers single-file
-  refresh. (R1086-R1089)
+- HandleSave: POST /save — write file + re-index. Refuses (403) a
+  path that is not an indexed file (IsIndexed), logging each refusal
+  with path and reason. Writes content, triggers single-file
+  refresh. (R1086-R1089, R3668)
 - HandleSetTags: POST /set-tags — atomic tag block update via HTTP.
   Same logic as Lua mcp.setTags: read file, parse tag block, set
   tags, auto-set status-date, write back. (R1090-R1093)
@@ -658,7 +659,13 @@ Optionally starts the embedded ui-engine alongside.
   - GET /content/PATH — rich HTML presentation. Markdown: server-side
     goldmark rendering with link/image rewriting, plus a pencil/eye
     toggle button that lazy-loads ink-mde editor on demand via the
-    ark-markdown-editor.js bundle. Other types: chunked view —
+    ark-markdown-editor.js bundle. The pencil is drawn only where
+    HandleSave would accept the file: newContentRender hides it for a
+    file IsIndexed rejects, as well as for a non-writable strategy, a
+    lossy encoding or a read-only path (R3665). The page's HostAPI
+    save rejects on a non-OK response, alerts the server's reason and
+    leaves the text dirty; the eye button stays in Edit View when its
+    save fails (R3666, R3667). Other types: chunked view —
     reads all chunks via ChunkCache, renders each as
     `<div class="ark-chunk" data-range="..." data-chunkid="..." data-fileid="...">`
     with per-chunk wrapTagElements. `data-chunkid` sourced from

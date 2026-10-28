@@ -432,7 +432,8 @@ and unknown items carry the negative marker rather than a false green.
         chunker decodes, not only the three behind the wrapper. Found when
         Vim's `bubba.md~` fell to the `lines` chunker. The external-command
         strategies (`lines-overlap`, `words-overlap`) read the file
-        themselves and are left open. `/mini-spec`. See Item 7.
+        themselves; DECIDED (Bill, 2026-10-27): they need no coverage.
+        `/mini-spec`. See Item 7.
   - [x] ~~**7.6 — verify the ark app's checkpoint repo after 7.3.**~~
         **ASSESSED (Bill, 2026-10-21.)** Real: the `local` branch is gone, and
         the loss is accepted, since the app's source is in git. The cause

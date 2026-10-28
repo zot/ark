@@ -33,6 +33,14 @@ BASEDIR is the directory portion of the requested file's path.
 A pencil icon button sits at the upper right of the page. Clicking
 it switches to Edit View.
 
+The pencil is offered only for a file a save would accept: one in the
+index, which is the check save itself makes, and one that is writable
+(not a read-only strategy, and surviving re-encoding). The content
+view opens any file under a source, indexed or not, so without this a
+file outside every source pattern, such as ark's bundled
+`~/.ark/resources/intro.md`, would open in the editor and refuse every
+save.
+
 ## Edit View
 
 Clicking the pencil button:
@@ -54,6 +62,12 @@ shell: `/search/grouped`, `/tags/complete`, `/tags/values`,
 
 Ctrl+S saves via the HostAPI.
 
+A refused save says so. When the server rejects a save, the page shows
+the server's reason and the text stays unsaved: the document is still
+dirty, so returning to read view prompts again rather than discarding
+the edit. A save is never taken as done until the server has accepted
+it.
+
 ## Returning to Read View
 
 Clicking the eye button:
@@ -61,7 +75,8 @@ Clicking the eye button:
 1. If the document has been modified since last save, prompts
    "Save changes?" with Save / Discard options
 2. If Save: saves via HostAPI, then reloads the page (gets fresh
-   goldmark rendering from server)
+   goldmark rendering from server). If the save is refused, the page
+   reports it and stays in Edit View, with the edits intact
 3. If Discard: reloads the page without saving
 4. If not dirty: reloads the page
 

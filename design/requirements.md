@@ -1844,9 +1844,10 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 
 ### File Save Endpoint
 - **R1086:** `POST /save` accepts JSON body with `path` and `content` strings
-- **R1087:** Path must be within an indexed source directory — reject with 403 if not
+- **R1087:** Path must be an indexed file (the `IsIndexed` check) — reject with 403 if not
 - **R1088:** Writes file content, then triggers single-file refresh for immediate re-indexing
 - **R1089:** (inferred) The watcher will also notice the change, but explicit refresh avoids debounce delay
+- **R3668:** A refused save is logged with its path and reason
 
 ### Set Tags Endpoint
 - **R1090:** `POST /set-tags` accepts JSON body with `path` and `tags` (object of name→value pairs)
@@ -2029,6 +2030,13 @@ Bigrams removed from microfts2 (2026-03-22). Typo tolerance now via SearchFuzzy.
 - **R1193:** `handleSave` normalizes tag lines before writing to disk
 - **R1194:** `renderMarkdownForContent` normalizes tag lines before goldmark rendering (safety net for hand-edited files)
 - **R1195:** The editor JS normalizes tag lines before loading into ink-mde and sets dirty state if content changed
+
+### Where the Editor Is Offered
+- **R3665:** The content view offers the pencil only for a file save would accept: an indexed file, by the same check save makes, besides the existing writable conditions (strategy, re-encoding, read-only path)
+
+### A Refused Save
+- **R3666:** When the server rejects a save, the page shows the server's reason and does not mark the text saved
+- **R3667:** Returning to read view after a refused save stays in Edit View with the edits intact, instead of reloading
 
 ### Content Template Externalization
 - **R1196:** Content HTML shells are loaded from `~/.ark/html/` at request time, not compiled into the binary
@@ -5284,6 +5292,7 @@ reason.
 - **R3477:** When `~/.ark/ark` is a symbolic link (a developer install), plain `ark update` gripes — telling the user to use `--no-exe` — and refreshes nothing.
 - **R3478:** `ark update --no-exe` refreshes every asset (skills, agents, apps, and the model if missing) from the running binary's own bundle, downloading nothing for the executable and assuming the running exe is already current; the refresh is manifest-aware and never replaces a link with a copy, and on a symlinked `~/.ark/ark` it proceeds normally.
 - **R3479:** Installed-file hashes and a per-file collision policy live in `~/.ark/install-manifest.json` (not `ark.toml`), reusing the `{hash, onCollision, group}` entry shape.
+- **R3669:** For an html file the manifest hashes the file with the region between the `#frictionless` markers restored to its shipped form (empty, at the opening marker's indent), so the theme block the server injects is never a user edit and an edit outside the markers still is
 - **R3480:** The per-model download URL and pinned SHA-256 come from `[embedding]` config keys (`model_url`, `model_sha256`), so model download stays model-neutral and fetches whatever model the config names.
 - **R3481:** `ark setup` (when it performs the global install) and `ark update` (other than `--check` and `--stage`, R3529) stop a running ark server first, through the graceful `ark stop` path, and neither starts one afterward; on Windows a live server holds `~/.ark/lib` and loaded apps that cannot be overwritten. When the graceful stop does not complete within the grace period, setup and update **abort** with a message telling the user to run `ark stop -f` and retry, rather than continuing to overwrite files a live server holds.
 - **R3482:** The bundled reference `install/ark.toml` carries `model_url` and `model_sha256` for its default model (nomic-embed-text-v1.5 Q8_0).
@@ -5465,4 +5474,4 @@ reason.
 - **R3661:** A file is writable only if encoding its decoded text reproduces its bytes exactly; one that does not is indexed but never written, and the editor is not offered for it.
 - **R3662:** Everything that rewrites a user's file as text (editor save, setting a file's tags from the editor, `ark tag set` or the apps' `mcp.setTags`, inserting or removing an inline tag, the curation region edit, rescheduling a tag) reads the file as text and writes it back in the encoding the file has at the moment of writing, byte-order mark included, refusing a file that is not writable.
 - **R3663:** The content view and `/fetch` serve a file's decoded text, as does every reader of a file's tag block outside the index (`ark tag get`, `ark tag check`, the inbox fields, the apps' `mcp.readMessage`); `/raw` serves its bytes unchanged.
-- **R3664:** Every text chunker decodes a UTF-16 file before chunking it: besides the wrapped markdown, bracket and indent chunkers (R3657), the `lines` strategy function is registered wrapped, and ark's own `chat-jsonl` and `bible` chunkers decode at the top of their `Chunks`, keeping every method ark calls on them directly. The PDF chunker is binary and exempt; the external-command strategies, which open the file themselves, are not covered.
+- **R3664:** Every text chunker decodes a UTF-16 file before chunking it: besides the wrapped markdown, bracket and indent chunkers (R3657), the `lines` strategy function is registered wrapped, and ark's own `chat-jsonl` and `bible` chunkers decode at the top of their `Chunks`, keeping every method ark calls on them directly. The PDF chunker is binary and exempt; the external-command strategies, which open the file themselves, read UTF-8 only by decision.
