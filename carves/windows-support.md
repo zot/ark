@@ -153,8 +153,10 @@ and unknown items carry the negative marker rather than a false green.
         junctions, libs, runtime, model), then `serve` logged "Loaded 48
         viewdefs from 6 apps", the UI came up, and `ui conflicts` answered
         through the server.
-  - [ ] **3.3 — detect junctions the session cannot read.** **OPEN (not
-        queued.)** Optional. DECIDED (Bill, 2026-10-13, superseding the
+  - [x] ~~**3.3 — detect junctions the session cannot read.**~~ **CLOSED,
+        obsolete (Bill, 2026-10-29),** on the level-set below: only ssh
+        sessions enforce RedirectionTrust, and ssh is our harness, not a
+        product path. Was optional. DECIDED (Bill, 2026-10-13, superseding the
         same day's "required"): normal users always run from the desktop, which
         does not enforce RedirectionTrust; ssh is only how we test from Linux,
         and the harness already copes (`winrun.sh`). So this is not product work.
@@ -239,14 +241,10 @@ and unknown items carry the negative marker rather than a false green.
       `windows-gpu` (WSL2 needed a named CPU model there). Open: gaps O221
       (Ctrl-C and `luhmann attach` through interop) and O222 (a working
       directory on the Linux filesystem). See Item 11.
-- [ ] **Item 12 — `ark claude`: run Claude Code inside the ark server.**
-      **OPEN (not queued.)** PARKED (Bill, 2026-10-13): not now; the
-      level-set in Item 3 removed its Windows motivation. Originally, DECIDED
-      (Bill, 2026-10-13): the general way past
-      the ssh junction problem. Gated: measured 2026-10-13, a default standard user
-      cannot run a task from ssh, so it needs another way to start the server
-      outside the session (Item 3 lists the candidates).
-      See Item 12.
+- [x] ~~**Item 12 — `ark claude`: run Claude Code inside the ark server.**~~
+      **MOVED (Bill, 2026-10-29)** to its own carve,
+      [ark-claude.md](ark-claude.md): once the Item 3 level-set removed its
+      Windows motivation, what was left is a feature, not Windows support.
 - **Item 13 — what the end-to-end run found beyond Windows.** **SPLIT
       (2026-10-27.)** Defects the 2026-10-27 run surfaced that are not
       Windows-specific, kept here because the run is where they were measured.
@@ -258,7 +256,7 @@ and unknown items carry the negative marker rather than a false green.
   - [ ] **13.2 — the ark app's source list does not follow a config
         reload.** **OPEN (#185.)** Not yet measured in the app.
         `/ui-fast`. See Item 13.
-  - [ ] **13.3 — four small CLI and config papercuts.** **OPEN (#190.)**
+  - [x] ~~**13.3 — four small CLI and config papercuts.**~~ **LANDED (2026-10-29 — `#190`.)**
         Config mutations print nothing; a pattern given as a string gets a
         cryptic error; bare `ark sources` changes the config and nothing lists
         sources; editor side files are indexed. `/mini-spec`. See Item 13.
@@ -745,8 +743,8 @@ Performance Log Users; Users is not on it.
   logon privilege needs to be enabled for the task principal", then never
   executes, `Last Result 267011`.
 
-So the `--task` route fails for exactly the users it was for, and Item 12 cannot
-rest on it as proposed. What is left, none measured yet:
+So the `--task` route fails for exactly the users it was for, and `ark claude`
+(Item 12, now [ark-claude.md](ark-claude.md)) cannot rest on it as proposed. What is left, none measured yet:
 - **A one-time grant.** An administrator gives the user (or Users) the batch-logon
   right; after that the password-logon task works, as it does for `arktest`. It
   costs an admin step and a stored password (S4U was still denied above).
@@ -1366,30 +1364,10 @@ a copy of the source list that a config reload does not refresh.
 
 ## Item 12
 
-DECIDED (Bill, 2026-10-13): an `ark claude` subcommand that starts Claude Code
-as a pty session hosted by the ark server and attaches the current terminal to
-it. On Windows this is the general way past the ssh junction problem in
-[Item 3](#3): a hosted session is a child of the server, so when the server runs
-outside the ssh session (as a scheduled task) Claude Code inherits that context
-and reads the `~/.claude` junctions, while the user drives it from ssh through
-the attach path Item 4 and Item 1 already proved there. It is an explicit command,
-so it stays inside the rule that ark never starts Claude on its own.
-
-Grounded 2026-10-13: the server holds exactly one `PtyHost` (`server.go:100`,
-made at `:349`) and it is the Luhmann seat, so this needs hosts per session, not
-a new mode on the existing one.
-
-Open questions:
-- **The gate.** Whether a fresh standard user can start the server as a task from
-  ssh (Item 3's `--task` proposal). If not, this does not help the users it is for.
-- One session per invocation, or named sessions a user can detach from and
-  re-attach to later.
-- How it carries the caller's working directory, environment and arguments into
-  the hosted `claude`.
-- Whether `ark claude` starts the server itself, as a task, when it finds none
-  and the session enforces RedirectionTrust.
-- What it means off Windows, where it is a persistent, re-attachable session
-  (tmux-like) rather than a workaround.
+**MOVED (Bill, 2026-10-29)** to [ark-claude.md](ark-claude.md), with its
+decision, its grounding and its open questions. It began here as the general way
+past the ssh junction problem in [Item 3](#3); the level-set there removed that
+motivation, and what remains is a feature rather than Windows support.
 
 <a id="8"></a>
 
