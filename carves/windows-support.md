@@ -229,13 +229,13 @@ and unknown items carry the negative marker rather than a false green.
         directory (`SetDllDirectoryW`) before yzma loads; a DLL loaded by full
         path does not search its own folder. Live on the VM: the model loads
         with no `PATH` change, and the Windows test's fire alarm rang.
-- [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
-      Windows install path, beside `ark setup`, not replacing it: a portable
-      package. DECIDED (Bill, 2026-10-29): no submission to the public winget
-      repository until ark itself goes public; until then a local manifest
-      (`winget install --manifest`). DECIDED (Bill, 2026-10-29): an `exe`
-      installer that runs setup, with `~\.ark\ark.exe` the one copy. Specced
-      2026-10-29; not yet queued. See Item 10.
+- [x] ~~**Item 10 — a winget package.**~~ **LANDED (2026-10-29, commit
+      e13951f, R3680-R3699.)** The ordinary Windows install path, beside
+      `ark setup`: an `exe` installer running `ark.exe _winget-install`, with
+      `~\.ark\ark.exe` the one copy, plus the Windows registration (`Zot.Ark`)
+      and `ark uninstall` (Bill, 2026-10-29). Verified live through a local
+      manifest. Not yet submitted to the public winget repository, and not
+      until ark itself goes public (Bill, 2026-10-29). See Item 10.
 - [x] ~~**Item 11 — Claude in WSL2, ark on Windows.**~~ **LANDED
       (2026-10-05, R3494-R3514.)** Projects on NTFS, the ark server native on
       Windows, Claude Code inside WSL2 using the CLI. `ark.exe` called from
