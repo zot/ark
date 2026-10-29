@@ -43,9 +43,10 @@ const (
 	asideSuffix = ".old"
 )
 
-// refreshableAssetRoots are the top-level bundle directories a refresh touches.
-// The exe and the database are never in this set. R3474
-var refreshableAssetRoots = []string{"html", "lua", "viewdefs", "apps", "skills", "agents", "install"}
+// refreshableAssetRoots are the top-level bundle entries a refresh touches and
+// the manifest records: every directory and file the bundle ships. The exe and
+// the database are never in this set. R3474, R3698
+var refreshableAssetRoots = []string{"html", "lua", "viewdefs", "apps", "skills", "agents", "install", "patterns", "resources", "README.md", "mcp", "linkapp"}
 
 // ReleaseFetcher fetches the latest release metadata and its assets. The
 // GitHub implementation is githubReleaseFetcher; tests inject a fake.
@@ -149,10 +150,28 @@ func (u *Updater) Update(noExe bool) error {
 
 	// --no-exe path (and the re-exec'd new binary): refresh from the running
 	// binary's own bundle. R3478
+	return u.RefreshInstalled()
+}
+
+// RefreshInstalled is the refresh an installed binary runs from its own bundle:
+// the assets, the model if missing, and, when the running exe is the one in
+// ~/.ark, the Windows registration with its own version, so the installed-apps
+// entry names the version actually installed. Shared by `update --no-exe`, the
+// staged update finished at serve startup, and the winget upgrade.
+// CRC: crc-Updater.md | Seq: seq-install.md#3.3 | R3478, R3539, R3685
+func (u *Updater) RefreshInstalled() error {
 	if err := u.RefreshAssets(u.Assets); err != nil {
 		return err
 	}
-	return u.provisionModel()
+	if err := u.provisionModel(); err != nil {
+		return err
+	}
+	if self, err := os.Executable(); err == nil && samePath(self, filepath.Join(u.ArkDir, arkExeName())) {
+		if _, err := registerInstall(u.ArkDir, u.Version); err != nil {
+			fmt.Fprintf(u.out(), "warning: could not update the Windows registration: %v\n", err)
+		}
+	}
+	return nil
 }
 
 // fetchVerified downloads latest's platform binary and checks it against the

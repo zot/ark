@@ -261,15 +261,9 @@ func runStagedUpdate() error {
 		ServerRunning: func() bool { return serverClient(arkDir) != nil },
 		VersionOf:     binaryVersion,
 		Stage:         func(attempts int) error { return newUpdater().Stage(attempts) },
-		Refresh: func() error {
-			u := newUpdater()
-			if err := u.RefreshAssets(u.Assets); err != nil {
-				return err
-			}
-			return u.provisionModel()
-		},
-		Chain: chainTo,
-		Lock:  lockFile,
+		Refresh:       func() error { return newUpdater().RefreshInstalled() }, // R3685
+		Chain:         chainTo,
+		Lock:          lockFile,
 	}
 	return s.Run(os.Args[1:])
 }

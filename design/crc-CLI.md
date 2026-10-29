@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71-88, R108-110, R131, R139-147, R159, R161, R165, R166, R169, R170, R178-183, R185, R189, R192, R196-199, R201, R230, R232-234, R256, R259, R260, R273-293, R295, R297-302, R304-318, R326-337, R370, R371, R396-402, R429-437, R442, R450-458, R462, R464, R466-471, R477, R479-497, R499-501, R506-510, R512-516, R525-540, R572, R573, R579-585, R590-592, R594, R599, R605-616, R639, R654-656, R669-681, R692-696, R708-713, R715, R718, R722, R724-734, R738-743, R748, R849-852, R881, R882, R909, R910, R914-926, R937-940, R944, R981-985, R1015-1017, R1027, R1033, R1034, R1043-1050, R1129, R1131-1138, R1252, R1378, R1514-1516, R1523-1528, R1531, R1565-1569, R1573-1586, R1770-1782, R1786-1816, R1855-1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103-2107, R2113, R2126, R2127, R2315-2318, R2430-2462, R2473-2477, R2480, R2483-2485, R2600-2602, R2604-2619, R2625, R2627, R2630-2633, R2635-2638, R2641, R2645, R2646, R2650-2659, R2662, R2663, R2716-2727, R2744, R2745, R2755-2758, R2782, R2784-2790, R2794-2796, R2801, R2805, R2838-2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956-2958, R2960, R2984, R2985, R2990, R2993, R2995-3003, R3035, R3191, R3193, R3197, R3204-3206, R3208, R3242, R3243, R3284-3287, R3290, R3296, R3297, R3356, R3357, R3366, R3370, R3391-3394, R3396-3398, R3403-3413, R3418, R3442-3445, R3456-3462, R3464-3470, R3512, R3516, R3518-3521, R3523-3525, R3569, R3572, R3590, R3605, R3606, R3610, R3613, R3614, R3645-3650, R3653, R3662, R3663, R3677, R3679
+**Requirements:** R29, R71-88, R108-110, R131, R139-147, R159, R161, R165, R166, R169, R170, R178-183, R185, R189, R192, R196-199, R201, R230, R232-234, R256, R259, R260, R273-293, R295, R297-302, R304-318, R326-337, R370, R371, R396-402, R429-437, R442, R450-458, R462, R464, R466-471, R477, R479-497, R499-501, R506-510, R512-516, R525-540, R572, R573, R579-585, R590-592, R594, R599, R605-616, R639, R654-656, R669-681, R692-696, R708-713, R715, R718, R722, R724-734, R738-743, R748, R849-852, R881, R882, R909, R910, R914-926, R937-940, R944, R981-985, R1015-1017, R1027, R1033, R1034, R1043-1050, R1129, R1131-1138, R1252, R1378, R1514-1516, R1523-1528, R1531, R1565-1569, R1573-1586, R1770-1782, R1786-1816, R1855-1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103-2107, R2113, R2126, R2127, R2315-2318, R2430-2462, R2473-2477, R2480, R2483-2485, R2600-2602, R2604-2619, R2625, R2627, R2630-2633, R2635-2638, R2641, R2645, R2646, R2650-2659, R2662, R2663, R2716-2727, R2744, R2745, R2755-2758, R2782, R2784-2790, R2794-2796, R2801, R2805, R2838-2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956-2958, R2960, R2984, R2985, R2990, R2993, R2995-3003, R3035, R3191, R3193, R3197, R3204-3206, R3208, R3242, R3243, R3284-3287, R3290, R3296, R3297, R3356, R3357, R3366, R3370, R3391-3394, R3396-3398, R3403-3413, R3418, R3442-3445, R3457-3462, R3464-3470, R3512, R3516, R3518-3521, R3523-3525, R3569, R3572, R3590, R3605, R3606, R3610, R3613, R3614, R3645-3650, R3653, R3662, R3663, R3677, R3679, R3683, R3684, R3686, R3690
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -326,8 +326,13 @@ dispatches operations via proxy or cold-start.
 - cmdUIStatus: output "ui: running (port N)" + browser count + indexing
   state. When UI not running: "ui: not available". Queries server
   via GET /status for UI fields.
-- cmdSetup: the install path, idempotent on a marker — the database file —
-  not on ~/.ark existing (R3456). When the marker is absent it runs the
+- cmdSetup: the install path. An install is the marker — the database file —
+  plus the executable in ~/.ark, not ~/.ark existing (R3683); with both present
+  the global part does nothing but the Windows registration. With the marker
+  and no executable (what `ark uninstall` leaves) it reinstalls over the kept
+  data: the same steps without creating the database, the bundle written
+  through Updater.RefreshAssets rather than extracted over the tree, and every
+  bundled app activated (R3684). When the marker is absent it runs the
   global install in order (seq-install.md#1): stop a running server first,
   through the graceful `ark stop` path (`stopServerForInstall`, never starts
   one, and aborts the install if the stop does not complete, R3481);
@@ -342,8 +347,15 @@ dispatches operations via proxy or cold-start.
   crc-Updater.md ProvisionModel via provisionModelForInstall, which prints the
   missing-keys guidance rather than failing when the model is absent and
   model_url/model_sha256 are unset, R3483); print that new agents appear in the
-  next session (R3464). It copies no skills or agents anywhere (R3465). With the
-  marker present the global part does nothing.
+  next session (R3464). Before that report, on every run, crc-Registration.md
+  Register writes the Windows registration (R3680), and the user is told to
+  open a new terminal when `Path` changed. It copies no skills or agents
+  anywhere (R3465).
+- cmdUninstall(--yes): crc-Uninstaller.md. Refuses on a symlinked ~/.ark/ark,
+  prints the plan, asks unless --yes (only `y`/`yes` proceeds), then runs it
+  (R3690).
+- cmdWingetInstall: the hidden `_winget-install` verb, crc-WingetInstall.md
+  built with the real effects (R3686).
 - stopServerForInstall(arkDir): the R3481 precondition shared by cmdSetup's
   global install and cmdUpdate. Reuses the graceful `ark stop` path
   (`serverClient` + POST /shutdown + `socketReleasedWithin`) rather than

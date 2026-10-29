@@ -191,6 +191,8 @@ func arkCommands() []*ucli.Command {
 		listenCommand(),
 		searchCommand(),
 		releaseAssetCommand(),
+		wingetInstallCommand(),
+		uninstallCommand(),
 	}
 	return append(cmds, flatCommands()...)
 }
@@ -585,7 +587,7 @@ ark update --stage   download and verify the latest release as ~/.ark/ark.new
                      without stopping a server; the next ` + "`ark serve`" + ` swaps
                      it in and refreshes the assets.`
 
-// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3456, R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481
+// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481, R3683
 func cmdSetup(args []string) {
 	local := false
 	for _, a := range args {
@@ -608,8 +610,8 @@ func cmdSetup(args []string) {
 	}
 }
 
-// markerPresent reports whether ~/.ark holds the database marker. "Installed"
-// means the index exists, which is exactly what the marker records. R3456
+// markerPresent reports whether ~/.ark holds the database marker; with the
+// executable it makes an install (installState). R3683
 func markerPresent(arkDir string) bool {
 	_, err := os.Stat(filepath.Join(arkDir, ark.IndexFileName))
 	return err == nil
@@ -624,13 +626,16 @@ func userClaudeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
-// runGlobalSetup is the global install, idempotent on the marker (the database
-// file), not on ~/.ark existing. With the marker present it does nothing.
-// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3456, R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481
+// runGlobalSetup is the global install. An install is the marker (the database
+// file) plus the executable, not ~/.ark existing: with both it only registers;
+// with the marker alone it reinstalls the program over the kept data.
+// CRC: crc-CLI.md | Seq: seq-install.md#1 | R3457, R3458, R3459, R3460, R3461, R3462, R3463, R3464, R3465, R3481, R3680, R3683, R3684
 func runGlobalSetup(arkDir string) error {
-	// R3456: marker present → the global install is a no-op.
-	if markerPresent(arkDir) {
+	state := installState(arkDir)
+	// R3683: installed → nothing but the Windows registration (R3680).
+	if state == stateInstalled {
 		fmt.Fprintln(os.Stderr, "ark already installed (index present); nothing to do")
+		registerForSetup(arkDir, ark.Version)
 		return nil
 	}
 	// R3481: stop a running server before mutating ~/.ark; never start one.
@@ -648,18 +653,27 @@ func runGlobalSetup(arkDir string) error {
 	if err := copyRunningExe(arkDir); err != nil {
 		return fmt.Errorf("copy executable: %w", err)
 	}
-	// R3459: extract the bundle.
-	if err := extractBundleAssets(arkDir); err != nil {
-		return err
-	}
-	// R3484: seed the install manifest with each extracted asset's hash, so the
-	// first `ark update` can tell a real user edit from an unchanged bundle copy.
-	if err := SeedManifest(arkDir, bundleAssetSource{}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not seed install manifest: %v\n", err)
-	}
-	// R3460: create the database (leaves the marker), via the shared function.
-	if err := setupDatabase(ark.InitOpts{CaseInsensitive: true}); err != nil {
-		return fmt.Errorf("create database: %w", err)
+	if state == stateReinstall {
+		// R3684: the data is kept; write the bundle through the manifest-aware
+		// refresh and activate every app. No database to create.
+		fmt.Println("reinstalling ark over the data kept in", arkDir)
+		if err := reinstallOverData(arkDir, bundleAssetSource{}); err != nil {
+			return err
+		}
+	} else {
+		// R3459: extract the bundle.
+		if err := extractBundleAssets(arkDir); err != nil {
+			return err
+		}
+		// R3484: seed the install manifest with each extracted asset's hash, so the
+		// first `ark update` can tell a real user edit from an unchanged bundle copy.
+		if err := SeedManifest(arkDir, bundleAssetSource{}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not seed install manifest: %v\n", err)
+		}
+		// R3460: create the database (leaves the marker), via the shared function.
+		if err := setupDatabase(ark.InitOpts{CaseInsensitive: true}); err != nil {
+			return fmt.Errorf("create database: %w", err)
+		}
 	}
 	// R3461, R3462: directory links into ~/.claude; R3465: no copies.
 	claudeDir, err := userClaudeDir()
@@ -675,6 +689,8 @@ func runGlobalSetup(arkDir string) error {
 	provisionLlamaLibs(arkDir)
 	// R3463, R3483: download the configured model if missing.
 	provisionModelForInstall(arkDir)
+	// R3680, R3681: on Windows, the user Path and the installed-apps entry.
+	registerForSetup(arkDir, ark.Version)
 	// R3464: agent definitions load at session start.
 	fmt.Println("ark installed in", arkDir)
 	fmt.Println("Newly installed agents appear in your NEXT Claude session (agent definitions load at session start).")

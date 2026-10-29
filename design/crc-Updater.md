@@ -1,5 +1,5 @@
 # Updater
-**Requirements:** R3463, R3471-3484, R3517, R3547-3551, R3669
+**Requirements:** R3463, R3471-3484, R3517, R3547-3551, R3669, R3685, R3692, R3698
 
 `ark update` and the shared refresh machinery it lends to `ark setup`. Brings
 an install up to the running project's latest GitHub release, or (with
@@ -84,6 +84,21 @@ install manifest and the model provisioner, both reused by setup.
   error) rather than downloading (R3483). Reuses `llamalibs.go`'s GitHub
   download path (`downloadFileVerified`, a single verified file rather than an
   archive).
+
+- refreshableAssetRoots: every top-level entry the bundle ships — the html,
+  lua, viewdefs, apps, skills, agents and install trees, patterns, resources,
+  and README.md, mcp, linkapp — so setup's seed records them all, update
+  refreshes them all, and uninstall can sort them all (R3698). Before
+  2026-10-29 the last five were extracted but never recorded or refreshed.
+- RefreshInstalled(): the refresh an installed binary runs from its own
+  bundle — RefreshAssets, then ProvisionModel, then, when the running exe is
+  `~/.ark`'s, crc-Registration.md Register with its own version, so the
+  installed-apps entry names the version actually installed (R3685). Shared by
+  `update --no-exe` (the re-run second phase), the staged update finished at
+  `ark serve` startup, and the winget upgrade.
+- InstallManifest.Unchanged(path, disk): whether the file on disk still has
+  the content the manifest recorded (the same comparison ShouldWrite makes,
+  injected theme block seen through), for `ark uninstall` (R3692).
 
 ## Collaborators
 - CLI: `cmdUpdate` dispatches here; `cmdSetup` reuses RefreshAssets / ProvisionModel / the manifest

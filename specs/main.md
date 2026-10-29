@@ -547,6 +547,16 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
   intact on failure. Gripes on a symlinked `~/.ark/ark`. `--no-exe`
   refreshes assets from the running binary's own bundle without touching
   the exe. See Setup and Install.
+- `ark uninstall [--yes]`
+  Remove the program and keep the data: the executable, the unedited
+  installed files, setup's links, the provisioned libraries and a
+  downloaded model, and on Windows the PATH and installed-apps entries.
+  Keeps the database, `ark.toml`, app storage and edited files. Asks
+  first unless `--yes`. See Setup and Install.
+- `ark _winget-install`
+  Internal, Windows only: what winget runs. Setup when nothing is
+  installed, an upgrade from this binary when the install is older, and
+  only the Windows registration otherwise. See Setup and Install.
 - `ark _release-asset [--terse] OS ARCH`
   Internal, for the Makefile: report the release asset name `ark update`
   downloads for that platform at this binary's version, in baby food by
@@ -712,8 +722,19 @@ keys idempotency on a **marker** — the database file — rather than on
 `~/.ark/` existing, because the README install places the binary at
 `~/.ark/ark` before running it, so `~/.ark/` is present on every fresh
 install and cannot be the test. With the marker present, the global part
-of setup does nothing (R3456). "Installed" means the index exists, which
-is exactly what the marker records.
+of setup does nothing (R3456), except the Windows registration (step 8),
+which checks its own entries on every run. "Installed" means the index
+exists, which is exactly what the marker records, and the executable is in
+`~/.ark`.
+
+The marker without the executable is what `ark uninstall` leaves: the
+program gone, the user's data kept. Setup then **reinstalls the program over
+the kept data**: it runs the steps below except creating the database, and
+the bundled assets go through the same manifest-aware refresh `ark update`
+uses rather than being extracted over what is there, so a file the user
+edited, which uninstall kept, is kept again. Every bundled app is activated,
+as on a fresh install, since uninstall removed the activations. A later
+`ark setup` therefore picks up where the user left off.
 
 Neither setup nor update starts a server, since installing and running are
 separate acts. Both **stop a running ark server first**, through the same
@@ -776,7 +797,22 @@ When the marker is absent, setup runs the global install in order:
    this a default install points at a model it never fetched and search
    silently falls back to trigram-only (R1276).
 
-8. **Report, and note the next session.** Setup prints that newly
+8. **On Windows, register the install.** Two per-user entries, neither
+   needing elevation. `~\.ark` joins the user `Path` (the `HKCU\Environment`
+   value), added only when no entry already names that directory, and setup
+   announces the change to the system so terminals opened afterwards find
+   `ark`; one already open does not, and setup says to open a new one. And an
+   entry in Windows' installed-apps list (`Apps & features`), under
+   `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zot.Ark`: display
+   name `Zot.Ark`, the running version, the publisher, `~\.ark` as the install
+   location, and `ark.exe uninstall` (with `--yes` as the quiet form) as the
+   way to remove it. Windows lists ark like any installed program, and winget
+   recognizes the install by this entry. Unlike the steps above, this one does
+   not wait on the marker: every setup on Windows checks both entries and adds
+   or corrects what is missing, so an install made before this step gains it
+   from a plain re-run of `ark setup`.
+
+9. **Report, and note the next session.** Setup prints that newly
    installed agents appear in the *next* Claude session, since agent
    definitions are read at session start (R3464).
 
@@ -822,6 +858,14 @@ running `~/.ark/ark.exe` aside, writes the new binary at the original
 name, and deletes the aside copy on a later run, since a running exe
 cannot delete its own aside copy while alive (R3473).
 
+The asset refresh covers **every file the bundle ships**: the html, Lua,
+viewdefs, apps, skills, agents and install trees, the Frictionless `patterns`
+and the `resources` documents, and the top-level `README.md`, `mcp` and
+`linkapp`. Setup records each of them in the install manifest, so update keeps
+all of them current and uninstall can tell which are still as installed. A file
+an older install extracted but never recorded is treated as the user's on the
+first refresh, unless it already matches the bundle.
+
 The asset refresh is **manifest-aware**. Installed-file hashes and a
 per-file collision policy live in `~/.ark/install-manifest.json`, reusing
 the `{hash, onCollision, group}` entry shape rather than living in
@@ -849,7 +893,10 @@ failed download, a bad checksum, a failed swap — leaves the old binary and
 
 The download URL and pinned SHA-256 for the model come from `[embedding]`
 config keys (`model_url` and `model_sha256`), so update stays
-model-neutral and fetches whatever model the config names (R3480). The
+model-neutral and fetches whatever model the config names (R3480). On
+Windows, every update that replaces the executable also sets the version in
+ark's installed-apps entry (setup step 8), so Windows and winget report the
+version that is actually installed. The
 bundled reference `install/ark.toml` carries both keys for its default model,
 nomic-embed-text-v1.5 Q8_0, so every fresh install knows where its model comes
 from (R3482). An older `ark.toml` without them gets a message saying the model
@@ -970,6 +1017,82 @@ where things stand, for the UI to poll while one is in flight. A staged
 update is reported as "takes effect the next time ark starts", naming its
 version, which the status reads from `update.json` so the UI can still name it
 after a restart.
+
+### Installing through winget (Windows)
+
+winget, Windows' package manager, can install and upgrade ark. The package is
+an **installer**, not a portable file: winget downloads `ark.exe` to a temporary
+folder and runs it as `ark.exe _winget-install`, so the download is a throwaway
+and `~\.ark\ark.exe` stays the one installed copy, at the path skills, agents
+and the apps already call. A portable package could not do this, because winget
+runs nothing after placing a portable file, so setup would never run, and its
+copy on `PATH` would be a second `ark.exe` that `ark update` never touched.
+
+`_winget-install` is internal (the leading underscore), run by winget rather
+than by people, and only on Windows; elsewhere it refuses. It never prompts. It
+does one of three things, by what it finds:
+
+- **No install** (no marker, or the marker without the executable): `ark
+  setup`, which installs fresh or reinstalls over the kept data.
+- **An install, older than this binary:** an upgrade from this binary. It stops
+  a running server as update does (R3481), copies itself over
+  `~\.ark\ark.exe` with the same rename-aside swap update uses (R3473),
+  refreshes the assets from its own bundle with the same manifest-aware refresh
+  as `update --no-exe`, downloads the model if missing, and runs setup step 8,
+  which sets the entry's version.
+- **An install at this version or newer:** setup step 8 alone. It never
+  downgrades, and a reinstall at the same version repairs the registration and
+  nothing else.
+
+The installed version is the one `~\.ark\ark.exe version` reports. One it
+cannot read, or one that is not a release version (a plain `go build` reports
+`dev`), counts as older, so winget's release replaces it. On a
+developer install (a symlinked `~/.ark/ark`) it refuses, as update does. It
+exits with a non-zero status on any failure, which is how winget learns an
+install failed, and as with update a failure leaves the old binary and `~\.ark`
+intact.
+
+The manifest declares no dependencies: the runtime ships app-local (see "The
+MSVC runtime (Windows)" in `specs/llama-libs.md`), so declaring the VC++ redistributable would add
+an administrator prompt for nothing. Nothing is submitted to the public winget
+repository yet; until then the package is tested from a local manifest
+(`winget install --manifest`).
+
+### `ark uninstall` — remove the program, keep the data
+
+`ark uninstall` removes what setup and update installed, and keeps what the
+user made. It asks for confirmation first, listing both, unless given `--yes`;
+the installed-apps entry's quiet form passes `--yes`, so `winget uninstall` does
+not stop to ask. It stops a running server first, as setup and update do
+(R3481), and on a developer install (a symlinked `~/.ark/ark`) it refuses.
+
+**Removed:**
+- the executable, `~/.ark/ark` (`ark.exe` on Windows). A running exe cannot
+  delete itself on Windows, so there it is removed just after the uninstall
+  process exits;
+- every file the install manifest records whose content still matches its
+  recorded hash: every bundled file as it was installed (see the refresh,
+  under `ark update`);
+- the directory links setup made: each skill link and `agents/ark` under
+  `~/.claude/`, and each app activation under `~/.ark/lua/`. Only links are
+  removed, through the link helper (R3454), never a real directory found there;
+- the llama.cpp libraries setup provisioned, and the embedding model when setup
+  downloaded it. A model file that is a link (the developer case) is left alone;
+- the server's runtime files: its logs (`logs/`, `log/`) and its pid file;
+- on Windows, the `~\.ark` entry in the user `Path` and the installed-apps entry.
+
+**Kept:** the database, `ark.toml`, app storage, any installed file the user
+has edited (its hash no longer matches), and anything under `~/.ark` that the
+install manifest does not record. That includes what is made with the database
+and then belongs to the user: `tags.md` (the tag definitions), `chimes.md`
+(which the user may extend), and `searching/`, which a reinstall over the kept
+data does not recreate. Uninstall also removes its own bookkeeping, the
+install manifest and any staged-update leftovers (`ark.new`, `ark.old`,
+`update.json`), since nothing they describe remains. It ends by saying what it
+kept and where, so the user can delete `~/.ark` by hand if they want everything
+gone. A later `ark setup` or winget install finds the database without the
+executable and reinstalls the program over the kept data (see the marker,
+above).
 
 ### `ark init` and `ark ui install`
 

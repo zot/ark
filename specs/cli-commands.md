@@ -44,6 +44,7 @@ otherwise emit a different order each run). R2953.
 | Command            | Synopsis                                                                                                             | Server                   | Notes                                                |
 |--------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------|------------------------------------------------------|
 | `_release-asset`   | `_release-asset [--terse] OS ARCH`                                                                                   | n/a                      | internal, build-time: release asset name for the Makefile |
+| `_winget-install`  | `_winget-install`                                                                                                    | none                     | internal, Windows only: what the winget package runs; setup, upgrade from this binary, or registration only (details below) |
 | `add`              | `add [--strategy S] [--content C \| --from-file F] [--append] PATH...`                                               | optional                 | tmp:// requires server                               |
 **A verb that acts as the calling session takes no identity flag at all.**
 `bloodhound listen`, `connections recall listen`, `luhmann next`, `luhmann
@@ -104,6 +105,7 @@ so no agent types a routing address either. Canonical:
 | `sweep`            | `sweep correlations`                                                                                                | required                 | hot-correlations top-K cache refresh (subcommands below) |
 | `tag`              | `tag SUBCOMMAND ...`                                                                                                 | mixed                    | subcommands below                                    |
 | `ui`               | `ui [SUBCOMMAND ...]`                                                                                                | required (most)          | 16 subcommands                                       |
+| `uninstall`        | `uninstall [--yes]`                                                                                                  | none                     | remove the program, keep the data; asks first unless `--yes` (details below) |
 | `unresolved`       | `unresolved [--reason KIND]`                                                                                         | optional                 | lists U records with why; `--reason` narrows to one  |
 | `update`           | `update [--no-exe \| --check \| --stage]`                                                                          | none                     | refresh install to latest GitHub release; gripes on a symlinked binary; `--no-exe` refreshes assets from the running bundle only; `--check` reports the latest version; `--stage` downloads it as `ark.new` for the next `serve` (details below) |
 | `wsl-init`         | `wsl-init`                                                                                                           | none                     | Windows `ark.exe` only; prints a `sh` script to `eval` inside WSL2 (details below) |
@@ -1413,8 +1415,11 @@ directory and the agents directory into `~/.claude/`, provisions llama
 libs, and downloads the configured embedding model if it is missing. It
 copies no skills or agents — the `~/.claude/` entries are directory links
 (symlink on Unix, junction on Windows). It prints that new agents appear
-in the next Claude session. With the marker present the global part does
-nothing. Requires the running binary to be bundled.
+in the next Claude session. On Windows it also registers the install:
+`~\.ark` on the user `Path`, and an installed-apps entry whose uninstall
+command is `ark.exe uninstall`. With the marker present the global part does
+nothing except that registration, which every run on Windows checks and
+repairs. Requires the running binary to be bundled.
 
 `ark setup --local` connects the current directory to an existing
 install: it refuses without the marker, makes the same directory links
@@ -1424,6 +1429,38 @@ into the cwd's `.claude/`, and prints the CLAUDE.md crank-handle hint
 `ark setup` removes a flat `~/.claude/agents/<name>.md` only when it is a
 regular file byte-identical to the bundled agent; a changed file or a
 hand-made link is reported and left, since either may be the user's.
+
+### `uninstall` — remove the program, keep the data
+
+```
+ark uninstall
+ark uninstall --yes
+```
+
+Removes what setup and update installed: the executable (on Windows, just
+after the process exits), every installed file whose hash still matches the
+install manifest, setup's directory links in `~/.claude/` and `~/.ark/lua/`
+(links only, never a real directory), the provisioned llama libs and a
+downloaded model (a linked model is left), and on Windows the `Path` and
+installed-apps entries. Keeps the database, `ark.toml`, app storage, edited
+installed files, and anything the manifest does not record, and ends by
+saying what it kept and where. Lists both and asks first unless `--yes`.
+Stops a running server first; refuses on a symlinked `~/.ark/ark`.
+
+### `_winget-install` — internal, the winget package's installer
+
+```
+ark _winget-install
+```
+
+Windows only; elsewhere it refuses. winget downloads `ark.exe` to a
+temporary folder and runs this. With no install it runs all of `ark setup`;
+with an older install it upgrades from the running binary (stop the server,
+swap itself over `~\.ark\ark.exe`, refresh assets from its own bundle as
+`update --no-exe` does, model if missing, registration); with an install at
+this version or newer it only repairs the Windows registration, never
+downgrading. Never prompts, refuses on a symlinked `~/.ark/ark`, and exits
+non-zero on failure, leaving the old install intact.
 
 ### `update` — refresh an install
 
@@ -1445,7 +1482,8 @@ manifest-aware through `~/.ark/install-manifest.json`, so it never
 clobbers a user-edited file and never replaces a link with a copy, and it
 downloads the model if missing. Any failure leaves the old binary and
 `~/.ark/` intact. On a symlinked `~/.ark/ark` (a developer install), plain
-`update` gripes and tells the user to use `--no-exe`.
+`update` gripes and tells the user to use `--no-exe`. On Windows, an update that replaces the executable also sets the version in
+ark's installed-apps entry.
 
 `ark update --no-exe` refreshes every asset from the *running* binary's
 own bundle, downloading nothing for the executable and assuming the

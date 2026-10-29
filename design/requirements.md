@@ -5276,7 +5276,7 @@ reason.
 - **R3453:** A portable directory-link helper makes a directory link — a symbolic link on Unix, a directory junction on Windows — needing no privilege or Developer Mode; the junction is created through `golang.org/x/sys/windows` reparse points, not by shelling out to `mklink`.
 - **R3454:** The link helper's removal uses `os.Remove` on the link itself and refuses to delete a real (non-link) directory at the destination, since a non-link directory there is the user's data.
 - **R3455:** The link helper uses `os.Readlink` to recognize a link it already owns (same target), so re-linking is idempotent.
-- **R3456:** `ark setup` keys idempotency on a marker — the database file — not on `~/.ark/` existing; with the marker present the global install does nothing.
+- **~~R3456:~~** (Retired T297 — see R3683) `ark setup` keys idempotency on a marker — the database file — not on `~/.ark/` existing; with the marker present the global install does nothing.
 - **R3457:** When the marker is absent, `ark setup` creates `~/.ark/` if it does not exist.
 - **R3458:** `ark setup` copies the running executable into `~/.ark/` (`ark.exe` on Windows); the copy is skipped when setup is already running from `~/.ark/`.
 - **R3459:** `ark setup` extracts the bundled assets (html/, lua/, viewdefs/, apps/, skills/, agents/) into `~/.ark/`.
@@ -5316,6 +5316,26 @@ reason.
 - **R3549:** When `ARK_RELEASE_URL` is set, update reads its release document (GitHub's latest-release shape: `tag_name`, `assets` of `name` and `browser_download_url`) from that URL instead of GitHub's API, for plain `update`, `--check`, `--stage`, and the UI update bridge alike.
 - **R3550:** Each asset URL in the release document is resolved against the document's own URL, so a relative name such as `ark-0.5.1-linux-amd64` fetches the file beside the document and an absolute URL passes through unchanged.
 - **R3551:** (inferred) A release document that cannot be fetched or parsed fails update before any download or swap, leaving the old binary and `~/.ark/` as they were.
+- **R3680:** On Windows, every global `ark setup` run registers the install, marker or not: `~\.ark` is added to the user `Path` (`HKCU\Environment`) when no entry already names that directory (compared case-insensitively, environment variables expanded, a trailing separator ignored), and only then is the change announced to the system and the user told to open a new terminal.
+- **R3681:** The registration writes the installed-apps entry `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zot.Ark`: `DisplayName` `Zot.Ark` (plain `ark` collides with KDE's archive manager in winget's catalog), `DisplayVersion` the running version, `Publisher`, `InstallLocation` `~\.ark`, `DisplayIcon` the installed exe, `UninstallString` `"<exe>" uninstall`, `QuietUninstallString` `"<exe>" uninstall --yes`, `NoModify` and `NoRepair` 1. Every run writes every value, so a missing or wrong one is corrected.
+- **R3682:** Off Windows the registration does nothing.
+- **R3683:** An install is present when the marker exists and the executable is in `~/.ark`; with both, the global part of setup does nothing but the registration (R3680).
+- **R3684:** With the marker present and the executable absent (what `ark uninstall` leaves), setup reinstalls the program over the kept data: every global step except creating the database, with the bundled assets written through the manifest-aware refresh `ark update` uses rather than extracted over the tree, and every bundled app activated.
+- **R3685:** On Windows, the refresh phase an installed binary runs after it replaced the executable (the re-run `update --no-exe`, and the staged update finished at `ark serve` startup) writes the registration with its own version, when the running executable is the one in `~/.ark`.
+- **R3686:** `ark _winget-install` refuses off Windows and on a symlinked `~/.ark/ark`, never prompts, and exits non-zero on any failure.
+- **R3687:** `ark _winget-install` with no install present (R3683) runs global `ark setup`.
+- **R3688:** `ark _winget-install` with an install older than the running binary (by `~\.ark\ark.exe version`; a version it cannot read, or one that is not a release version such as the `dev` a plain `go build` reports, counts as older) stops a running server as R3481 does, replaces `~\.ark\ark.exe` with itself through the rename-aside swap (R3473), refreshes the assets from its own bundle manifest-aware, provisions the model if missing, and writes the registration.
+- **R3689:** `ark _winget-install` with an install at the running binary's version or newer only writes the registration; it never downgrades.
+- **R3690:** `ark uninstall` refuses on a symlinked `~/.ark/ark`. It lists what it will remove and what it will keep and asks for confirmation unless given `--yes`; any answer but yes, or no answer, changes nothing.
+- **R3691:** `ark uninstall` stops a running server first through the graceful stop path, and aborts if it does not stop.
+- **R3692:** `ark uninstall` removes every file the install manifest records whose content still matches its recorded hash, keeps any whose content differs, then removes the directories under the refreshable roots that this left empty.
+- **R3693:** `ark uninstall` removes setup's directory links: each link `installLinkSet` names under `~/.claude/` and each `~/.ark/lua/<app>` activation, only when it is a link to its `~/.ark` target, and only through the link helper, which never removes a real directory (R3454).
+- **R3694:** `ark uninstall` removes the provisioned llama.cpp library directory when it lies inside `~/.ark`, and the configured embedding model when it is a regular file inside `~/.ark` (a linked model is left).
+- **R3695:** `ark uninstall` removes its own bookkeeping: the install manifest and the staged-update leftovers (`ark.new`, `ark.old` and their `.exe` forms, `update.json`); and on Windows the `Path` entry (announcing the change) and the installed-apps entry.
+- **R3696:** `ark uninstall` removes the executable: directly on Unix, and directly on Windows unless the running process is that executable, in which case a detached helper deletes it once the process has exited.
+- **R3697:** `ark uninstall` keeps the database, `ark.toml`, app storage, edited installed files, and anything the manifest does not record, and ends by saying what it kept, where, and that deleting `~/.ark` removes the rest.
+- **R3698:** The install manifest records, and `ark update` refreshes, every file the bundle ships: the `html`, `lua`, `viewdefs`, `apps`, `skills`, `agents` and `install` trees, `patterns`, `resources`, and the top-level `README.md`, `mcp` and `linkapp`.
+- **R3699:** `ark uninstall` removes the server's runtime files: `logs/`, `log/` and the pid file. It keeps `tags.md`, `chimes.md` and `searching/`, which are made with the database and belong to the user's data.
 
 ## Feature: Requested update, staged for the next serve
 **Source:** specs/main.md

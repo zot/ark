@@ -148,6 +148,16 @@ func (m *InstallManifest) ShouldWrite(relPath string, diskContent []byte, diskEx
 	return false, true
 }
 
+// Unchanged reports whether diskContent is still what the manifest recorded for
+// relPath, by the same comparison ShouldWrite makes (the injected theme block
+// seen through). An untracked path is never unchanged: uninstall removes only
+// what the install wrote and the user left alone.
+// CRC: crc-Updater.md | R3692
+func (m *InstallManifest) Unchanged(relPath string, diskContent []byte) bool {
+	entry, tracked := m.Files[relPath]
+	return tracked && entry.Hash == manifestHash(relPath, diskContent)
+}
+
 // Record writes back the entry for a file the refresh just installed. R3479
 func (m *InstallManifest) Record(relPath string, content []byte) {
 	entry := m.Files[relPath]

@@ -270,6 +270,9 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] crc-DirLink.md → `dirlink.go`, `dirlink_unix.go`, `dirlink_windows.go`
 - [x] crc-AppActivation.md → `appactivation.go`
 - [x] crc-Updater.md → `cmd/ark/update.go`, `cmd/ark/release_asset_cli.go`, `cmd/ark/update_windows.go`, `cmd/ark/update_unix.go`, `install_manifest.go`, `modelprovision.go`
+- [x] crc-Registration.md → `cmd/ark/registration.go`, `cmd/ark/registration_windows.go`, `cmd/ark/registration_other.go`
+- [x] crc-WingetInstall.md → `cmd/ark/winget_install.go`
+- [x] crc-Uninstaller.md → `cmd/ark/uninstall.go`, `cmd/ark/selfdelete_windows.go`, `cmd/ark/selfdelete_other.go`, `cmd/ark/install_lifecycle.go`
 - [x] crc-StagedUpdate.md → `cmd/ark/staged_update.go`, `cmd/ark/staged_update_unix.go`, `cmd/ark/staged_update_windows.go`, `cmd/ark/update.go`, `cmd/ark/main.go`
 - [x] crc-UpdateBridge.md → `update_bridge.go`, `server.go`
 - [x] test-StopCommand.md → `cmd/ark/stop_test.go`, `cmd/ark/stop_fallback_unix_test.go`, `cmd/ark/stop_fallback_windows_test.go`, `shutdown_race_test.go`
@@ -278,6 +281,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-DirLink.md → `dirlink_test.go`
 - [x] test-LlamaLibs.md → `llamalibs_test.go`, `dllpath_windows_test.go`
 - [x] test-Setup.md → `cmd/ark/setup_test.go`
+- [x] test-InstallLifecycle.md → `cmd/ark/install_lifecycle_test.go`, `cmd/ark/registration_test.go`, `cmd/ark/setup_test.go`
 - [x] test-ConfigErrors.md → `cmd/ark/configcheck_test.go`, `configparse_test.go`
 - [x] crc-WSLBridge.md → `cmd/ark/wsl.go`, `cmd/ark/wsl_windows.go`, `cmd/ark/wsl_other.go`
 - [x] test-WSLBridge.md → `cmd/ark/wsl_test.go`
@@ -295,7 +299,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] seq-cli-urfave.md → `cmd/ark/main.go`, `cmd/ark/connections_cli.go`, `cmd/ark/monitoring_cli.go`, `cmd/ark/embed_cli.go`, `cmd/ark/discussed_cli.go`, `cmd/ark/tag_cli.go`, `cmd/ark/config_cli.go`, `cmd/ark/schedule_cli.go`, `cmd/ark/message_cli.go`, `cmd/ark/ui_cli.go`, `cmd/ark/pubsub_cli.go`, `cmd/ark/flat_cli.go`, `cmd/ark/search_cli.go`
 - [x] seq-config-mutate.md → `config.go`, `cmd/ark/main.go`, `server.go`
 - [x] seq-sources-check.md → `config.go`, `db.go`, `cmd/ark/main.go`, `server.go`
-- [x] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`, `cmd/ark/staged_update.go`, `update_bridge.go`
+- [x] seq-install.md → `cmd/ark/main.go`, `cmd/ark/update.go`, `dirlink.go`, `cmd/ark/staged_update.go`, `update_bridge.go`, `cmd/ark/winget_install.go`, `cmd/ark/uninstall.go`, `cmd/ark/install_lifecycle.go`, `cmd/ark/registration.go`
 - [x] seq-wsl.md → `cmd/ark/wsl.go`, `cmd/ark/main.go`
 - [x] seq-reconcile.md → `server.go`, `db.go`
 - [x] seq-parallel-refresh.md → `indexer.go`
@@ -1303,3 +1307,4 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - T295: R20 retired by R3632 (Windows: a backslash is a separator, so the escape is off-Windows only; bracket form escapes everywhere)
 - T296: R3638 retired by R3654 (the route accepted a drive glued onto the prefix, a URL no route delivers; replaced by the slash-before-drive form)
 - [x] O240: R351's removal half holds only for globs: doReconcile unwatches SourcesCheck's Orphaned list (glob-expanded directories), so a concrete source removed by remove-source or an ark.toml edit stays watched. Harmless today, since events under it fail the indexability filter, but the watches leak until restart. A plain unwatch would be wrong when the removed source sits inside a source that remains, because unwatchDir walks and removes every subdirectory; the fix has to keep watches still covered by another source. Found 2026-10-28 while fixing R3670 (#181). **Resolved 2026-10-28 (#181), R3671:** every reconcile removes each watched directory IsWatchableDir rejects, one entry at a time and never the ark.toml watch; the orphan unwatch and the recursive unwatchDir are gone.
+- T297: R3456 retired by R3683 (an install is the marker plus the executable; marker without exe reinstalls (R3684))

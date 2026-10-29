@@ -231,7 +231,11 @@ and unknown items carry the negative marker rather than a false green.
         with no `PATH` change, and the Windows test's fire alarm rang.
 - [ ] **Item 10 — a winget package.** **OPEN (not queued.)** The ordinary
       Windows install path, beside `ark setup`, not replacing it: a portable
-      package whose manifest declares the VC++ redistributable as a dependency.
+      package. DECIDED (Bill, 2026-10-29): no submission to the public winget
+      repository until ark itself goes public; until then a local manifest
+      (`winget install --manifest`). DECIDED (Bill, 2026-10-29): an `exe`
+      installer that runs setup, with `~\.ark\ark.exe` the one copy. Specced
+      2026-10-29; not yet queued. See Item 10.
 - [x] ~~**Item 11 — Claude in WSL2, ark on Windows.**~~ **LANDED
       (2026-10-05, R3494-R3514.)** Projects on NTFS, the ark server native on
       Windows, Claude Code inside WSL2 using the CLI. `ark.exe` called from
@@ -1606,6 +1610,124 @@ the manifest details, the review process for the public winget repository, and
 whether the redistributable's admin prompt is acceptable on that path. The
 dependency support was described from memory and wants checking against
 winget's documentation before this part is queued.
+
+**Checked 2026-10-29 against winget's documentation.**
+- A portable package is copied under `%LOCALAPPDATA%\Microsoft\WinGet\Packages`,
+  with a link in `…\WinGet\Links` on the user PATH (the Links detail from a
+  third-party guide; to confirm on the VM). User scope needs no admin.
+- Dependencies are installed by default (`skipDependencies` is off unless set).
+  But 6.2 has landed since this part was written: the runtime ships app-local,
+  so declaring `Microsoft.VCRedist.2015+.x64` would add an admin prompt for
+  nothing. The proposal is to declare no dependency.
+- Publishing is a pull request to `microsoft/winget-pkgs` on GitHub, validated
+  and reviewed, one per package version, each carrying the release asset's URL
+  and SHA256 (`wingetcreate update` automates it).
+- Testing needs none of that. `winget install --manifest <dir>` installs from
+  local YAML once an administrator runs `winget settings --enable
+  LocalManifestFiles` (machine-wide); `winget validate <dir>` checks a manifest.
+  The installer is still fetched from `InstallerUrl`, so the test serves the exe
+  over HTTP on `localhost`, as Microsoft's PowerToys guide does.
+
+**DECIDED (Bill, 2026-10-29):** no public submission until ark goes public.
+Until then, the local manifest.
+
+**Open: two copies of `ark.exe`.** winget owns its copy and upgrades it with
+`winget upgrade`; `ark setup` copies itself into `~/.ark`, and `ark update`
+replaces that copy. The `ark` on PATH is winget's, so `ark update` would upgrade
+the one the user does not run. Shapes: (1) winget delivers only the bootstrap,
+and ark owns everything after `setup`; (2) winget owns the binary, `setup` links
+to it and `ark update` defers to `winget upgrade`; (3) `ark update` rewrites the
+winget copy in place, which fights winget's bookkeeping. To be grounded by the
+local-manifest test: where winget puts the exe, what PATH resolves, and what
+`setup` and `update` then do.
+
+**DECIDED (Bill, 2026-10-29), the shape.** The two-copies question is settled
+by not making a second copy. winget cannot run anything after placing a
+portable file (its schema has no post-install field, and `Commands` "does not
+support any behavior"), so the package is an `exe` installer instead: winget
+downloads `ark.exe` to a temporary folder and runs it, and setup's copy into
+`~\.ark` is the one installed binary, at the path the skills already call. Setup
+knows it is on Windows, so no flag (Bill): every setup there registers the
+install, putting `~\.ark` on the user PATH (winget manages PATH only for
+portable packages) and writing an installed-apps entry, which is how winget
+recognizes the install. winget runs an internal `ark.exe _winget-install`, not
+plain setup, because setup does nothing on an existing install and an upgrade
+must swap the exe and refresh the assets; the internal verb keeps setup's own
+semantics unchanged everywhere (Bill chose it over teaching setup to upgrade).
+The entry's uninstall command is a new `ark uninstall`, which removes the program
+and keeps the data: database, `ark.toml`, storage, edited files (Bill). The
+spec is in `specs/main.md` under Setup and Install.
+
+**Measured 2026-10-29 on `windows-gpu`, as `arkfresh` over ssh** (winget
+1.29.380; a portable manifest served from `localhost`):
+- `winget settings --enable LocalManifestFiles` run as `zot` did not reach
+  `arkfresh` ("This feature needs to be enabled by administrators"), so that
+  admin setting is per user despite the docs' wording. The machine-wide switch
+  is the policy value `EnableLocalManifestFiles = 1` under
+  `HKLM\SOFTWARE\Policies\Microsoft\Windows\AppInstaller`, set from an elevated
+  session; with it the install ran.
+- `winget install --manifest … --scope user` downloaded from `localhost`,
+  verified the hash, and reported "Command line alias added". It made **no
+  link**: `WinGet\Links` exists and stays empty, and winget instead appended the
+  package directory, `%LOCALAPPDATA%\Microsoft\WinGet\Packages\zot.ark__DefaultSource`,
+  to the user PATH. Presumably the symlink fallback for a standard user without
+  Developer Mode; the guide's Links description holds only where a link can be
+  made.
+- That directory holds `ark.exe` alone, and a new shell resolves `ark` to it.
+  So the two-copies problem is real: after `setup`, `ark` on PATH is winget's
+  copy, not `~\.ark\ark.exe`.
+- Over ssh the install needed no desktop; winget ran as a standard user there.
+
+**Built and verified 2026-10-29** (R3680–R3697, uncommitted at the time of
+writing), on `windows-gpu` as `arkfresh` over ssh, with `exe` manifests for
+builds versioned 0.5.1 and 0.5.2:
+- `winget install` over the existing 0.5.0 install took the upgrade path:
+  `~\.ark\ark.exe` reported 0.5.1, `~\.ark` joined the user PATH, and the
+  installed-apps entry carried the version and both uninstall commands.
+- `winget upgrade` to 0.5.2: exe and entry at 0.5.2, PATH not duplicated, the
+  previous aside copy swept.
+- `winget uninstall` ran the quiet uninstall: the running `ark.exe` was deleted
+  by the detached helper after the process exited (it broke away from the ssh
+  session's job), the entry, the PATH entry, the `~\.claude` links and the
+  libraries were removed, and the index and `ark.toml` were kept.
+- `winget install` again reinstalled over the kept data: 0.5.2, registered, the
+  links and six app activations back, `ark status` reading the kept index.
+
+Found by the run (the first three resolved the same day, below):
+- **winget matched the entry to KDE's Ark.** The uninstall reported
+  `Found ark [KDE.Ark]`: the public `KDE.Ark` package (an archive manager)
+  claims the same installed-apps name. Our own uninstall command still ran, but
+  once a public source is in play, `winget upgrade --all` could offer KDE's
+  package as an upgrade. The entry's key and display name need to be distinct
+  before ark is published (the same clash on Linux is why everything calls
+  `~/.ark/ark`).
+- **Files outside the manifest stay after uninstall.** `resources`, `patterns`,
+  `README.md`, `linkapp`, `mcp`, `searching` and the logs remained. That is the
+  rule as specified (anything the manifest does not record is kept), but some
+  are program files the bundle extracts outside the refreshable roots or the
+  runtime writes, so a user sees leftovers.
+- **A `dev` install looks newer than any release.** `compareVersions` falls back
+  to string order for a non-numeric version, so a plain `go build` installed in
+  `~\.ark` (version `dev`) would get only the registration from winget, never
+  the release binary. Not reached in practice (developer installs are symlinked
+  and refused), but the rule says an unreadable version counts as older, and
+  `dev` arguably belongs with it.
+
+**DECIDED (Bill, 2026-10-29), and verified the same day:**
+1. The entry is `Zot.Ark`, key and display name. A second round (builds 0.5.3
+   and 0.5.4) uninstalled with `Found Zot.Ark [ARP\User\X64\Zot.Ark]`: winget
+   matched our own entry.
+2. The manifest records every file the bundle ships (R3698): `patterns`,
+   `resources`, `README.md`, `mcp` and `linkapp` joined the refreshable roots,
+   so update now refreshes them too (before, they stayed at the version first
+   installed). Uninstall also removes the server's logs and pid file (R3699).
+   Live, the upgrade recorded all 29 of those files, and after the uninstall
+   `~\.ark` held only data: the index, `ark.toml`, storage, `tags.md`,
+   `chimes.md` and `searching/` (made with the database, so kept), plus a backup
+   made by hand and `.cached`, an empty file nothing in ark, ui-engine or
+   frictionless names. The reinstall brought back the patterns, all 16 links
+   and six app activations, and read the kept index.
+3. A version that is not a release, such as `dev`, counts as older (R3688).
 
 <a id="11"></a>
 

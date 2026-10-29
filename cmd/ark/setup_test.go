@@ -1,6 +1,6 @@
 package main
 
-// CRC: crc-CLI.md | Test: test-Setup.md | R3456, R3461, R3462, R3465, R3466, R3469, R3470, R3481, R3484
+// CRC: crc-CLI.md | Test: test-Setup.md, test-InstallLifecycle.md | R3683, R3680, R3461, R3462, R3465, R3466, R3469, R3470, R3481, R3484
 //
 // Setup's decision logic against a fake install root (a temp ~/.ark and a temp
 // ~/.claude) — no live home, no server. The marker check and the byte-identical
@@ -44,11 +44,18 @@ func seedInstall(t *testing.T, withMarker bool) string {
 	return dir
 }
 
-// TestGlobalSetupNoOpWhenMarkerPresent: with the marker present, the global
-// install does nothing. R3456 (marker test carried by runGlobalSetup).
+// TestGlobalSetupNoOpWhenMarkerPresent: with the marker and the executable
+// present, the global install changes nothing and only registers. R3683, R3680
 func TestGlobalSetupNoOpWhenMarkerPresent(t *testing.T) {
 	arkRoot := seedInstall(t, true)
 	withArkDir(t, arkRoot)
+	if err := os.WriteFile(filepath.Join(arkRoot, arkExeName()), []byte("exe"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	registered := 0
+	oldRegister := registerInstall
+	registerInstall = func(string, string) (bool, error) { registered++; return false, nil }
+	t.Cleanup(func() { registerInstall = oldRegister })
 
 	// A pre-existing ~/.claude sentinel that must survive untouched.
 	claude := t.TempDir()
@@ -71,6 +78,9 @@ func TestGlobalSetupNoOpWhenMarkerPresent(t *testing.T) {
 	}
 	if !before.ModTime().Equal(after.ModTime()) {
 		t.Fatal("marker-present setup mutated ~/.claude")
+	}
+	if registered != 1 {
+		t.Fatalf("an installed setup registered %d times, want once (R3680: every run on Windows checks the registration)", registered)
 	}
 }
 
