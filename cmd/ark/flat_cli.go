@@ -98,7 +98,7 @@ func flatCommands() []*ucli.Command {
 		{
 			Name:   "sources",
 			Usage:  "manage source directories",
-			Action: flatDelegate(cmdSources), // default: `sources` alone → check
+			Action: sourcesListAction, // R3679: `sources` alone lists, read-only; `check` reconciles
 			Commands: []*ucli.Command{
 				{Name: "check", Usage: "expand globs, add new directories, report orphans", Action: flatDelegate(cmdSources)},
 				{

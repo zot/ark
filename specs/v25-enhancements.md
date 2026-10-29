@@ -26,6 +26,15 @@ each pattern.
 
 ### CLI
 
+- `ark sources` — list the configured sources, read-only: each concrete
+  source's directory, marked when it came from a glob, when it records
+  another source's work (`logs_for`), or when the directory is missing; each
+  glob source as its pattern. With a server running it lists the server's
+  sources, the built-in ones (the ark home, the orchestrator's session log)
+  included; without one, the same list from `ark.toml` with those built-ins
+  added, so the answer does not depend on whether a server is up. Bare
+  `ark sources` used to run `check`, so a command that only looked was
+  changing the configuration.
 - `ark sources check` — expand globs, report new/MIA/orphan
   directories. Output is human-readable: lines like
   `+ /home/deck/.claude/projects/-foo/memory` (new),

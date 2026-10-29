@@ -1,5 +1,5 @@
 # CLI
-**Requirements:** R29, R71-88, R108-110, R131, R139-147, R159, R161, R165, R166, R169, R170, R178-183, R185, R189, R192, R196-199, R201, R230, R232-234, R256, R259, R260, R273-293, R295, R297-302, R304-318, R326-337, R370, R371, R396-402, R429-437, R442, R450-458, R462, R464, R466-471, R477, R479-497, R499-501, R506-510, R512-516, R525-540, R572, R573, R579-585, R590-592, R594, R599, R605-616, R639, R654-656, R669-681, R692-696, R708-713, R715, R718, R722, R724-734, R738-743, R748, R849-852, R881, R882, R909, R910, R914-926, R937-940, R944, R981-985, R1015-1017, R1027, R1033, R1034, R1043-1050, R1129, R1131-1138, R1252, R1378, R1514-1516, R1523-1528, R1531, R1565-1569, R1573-1586, R1770-1782, R1786-1816, R1855-1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103-2107, R2113, R2126, R2127, R2315-2318, R2430-2462, R2473-2477, R2480, R2483-2485, R2600-2602, R2604-2619, R2625, R2627, R2630-2633, R2635-2638, R2641, R2645, R2646, R2650-2659, R2662, R2663, R2716-2727, R2744, R2745, R2755-2758, R2782, R2784-2790, R2794-2796, R2801, R2805, R2838-2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956-2958, R2960, R2984, R2985, R2990, R2993, R2995-3003, R3035, R3191, R3193, R3197, R3204-3206, R3208, R3242, R3243, R3284-3287, R3290, R3296, R3297, R3356, R3357, R3366, R3370, R3391-3394, R3396-3398, R3403-3413, R3418, R3442-3445, R3456-3462, R3464-3470, R3512, R3516, R3518-3521, R3523-3525, R3569, R3572, R3590, R3605, R3606, R3610, R3613, R3614, R3645-3650, R3653, R3662, R3663
+**Requirements:** R29, R71-88, R108-110, R131, R139-147, R159, R161, R165, R166, R169, R170, R178-183, R185, R189, R192, R196-199, R201, R230, R232-234, R256, R259, R260, R273-293, R295, R297-302, R304-318, R326-337, R370, R371, R396-402, R429-437, R442, R450-458, R462, R464, R466-471, R477, R479-497, R499-501, R506-510, R512-516, R525-540, R572, R573, R579-585, R590-592, R594, R599, R605-616, R639, R654-656, R669-681, R692-696, R708-713, R715, R718, R722, R724-734, R738-743, R748, R849-852, R881, R882, R909, R910, R914-926, R937-940, R944, R981-985, R1015-1017, R1027, R1033, R1034, R1043-1050, R1129, R1131-1138, R1252, R1378, R1514-1516, R1523-1528, R1531, R1565-1569, R1573-1586, R1770-1782, R1786-1816, R1855-1858, R1865, R1866, R1871, R1889, R1936, R1940, R2085, R2092, R2093, R2099, R2103-2107, R2113, R2126, R2127, R2315-2318, R2430-2462, R2473-2477, R2480, R2483-2485, R2600-2602, R2604-2619, R2625, R2627, R2630-2633, R2635-2638, R2641, R2645, R2646, R2650-2659, R2662, R2663, R2716-2727, R2744, R2745, R2755-2758, R2782, R2784-2790, R2794-2796, R2801, R2805, R2838-2841, R2844, R2845, R2849, R2880, R2887, R2888, R2953, R2956-2958, R2960, R2984, R2985, R2990, R2993, R2995-3003, R3035, R3191, R3193, R3197, R3204-3206, R3208, R3242, R3243, R3284-3287, R3290, R3296, R3297, R3356, R3357, R3366, R3370, R3391-3394, R3396-3398, R3403-3413, R3418, R3442-3445, R3456-3462, R3464-3470, R3512, R3516, R3518-3521, R3523-3525, R3569, R3572, R3590, R3605, R3606, R3610, R3613, R3614, R3645-3650, R3653, R3662, R3663, R3677, R3679
 
 Command-line interface. Parses flags, detects running server,
 dispatches operations via proxy or cold-start.
@@ -306,7 +306,17 @@ dispatches operations via proxy or cold-start.
   Exit 1 when not running, on Windows graceful-stop timeout, or if a
   kill fails to release. `timeoutKill` is the platform-split fallback
   (`stop_fallback_unix.go` / `stop_fallback_windows.go`).
-- cmdSourcesCheck: expand globs, add new dirs, report MIA/orphan.
+- cmdSourcesCheck: expand globs, add new dirs, report MIA/orphan. Reached by
+  `ark sources check` only; bare `ark sources` is sourcesListAction.
+- sourcesListAction: bare `ark sources`. Gets the effective Config (the
+  server's `GET /config` when one runs; else LoadConfig with the built-in
+  sources ensured on that private copy) and prints one baby-food bullet per
+  source via formatSourceList: the directory, or a glob's pattern, with
+  `from glob`, `logs for` and `missing` marks. Read-only (R3679).
+- Config mutation actions (add-source, remove-source, add-include,
+  add-exclude, remove-pattern, add-strategy): on success each prints one line
+  from configMutationLine naming what changed and where (global or the
+  source), on the server path and the cold path alike (R3677).
   Output: +/−/? prefix per line. Proxies to server if running.
 - cmdUI: gateway for all UI operations. Reads mcp-port/ui-port from
   dbPath. No subcommand → open browser. Subcommands:

@@ -4,7 +4,7 @@ case_insensitive = true
 
 # Default patterns — apply to any source that doesn't override
 default_include = ["*.md", "*.go", "*.js", "*.ts", "*.css", "*.lua", "*.txt", "*.json", "*.pdf"]
-default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store", "*~", "*.un~", "*.swp", "#*#", ".#*"]
 search_exclude = ["/home/deck/.claude/projects/**", "/home/deck/.ark/schedule/**"]
 
 # Chunker settings

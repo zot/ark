@@ -36,6 +36,7 @@
 - **R3634:** A pattern starting with a volume (`C:/X`, `C:\X`) is filesystem-absolute, the same form as `/X`: matched against the file's absolute path.
 - **~~R21:~~** (Retired T48 — see R2133) Patterns without leading `/` match at any depth; with leading `/` anchored to watched directory root
 - **R22:** `ark init` ships default excludes for `.git/`, `.env`, etc.
+- **R3676:** The default excludes a new `ark.toml` is written with (and the bundled reference `install/ark.toml`) also cover editors' side files: `*~`, `*.un~`, `*.swp`, `#*#`, `.#*`. Include still wins over exclude, so a side file an include matches is taken: every one under an include of `**`, and Emacs's lock file (`.#notes.md`) under the default `*.md`
 - **R2954:** Explicit `ark add` of a single file with no `--strategy` resolves the chunking strategy from the file's enclosing source via `StrategyForFile` (per-source map over global, default `lines`), matching the directory-walk resolution — not the empty strategy passed straight to microfts2.
 - **R2955:** Adding a file outside every configured source with no `--strategy` is a client error (no source to resolve against) reported as HTTP 400, not a server 500; an explicit `--strategy` is always honored regardless of source membership.
 
@@ -276,6 +277,7 @@
 - **R144:** `ark config add-include <pattern> [--source <dir>]` adds an include pattern — global if no --source, per-source otherwise
 - **R145:** `ark config add-exclude <pattern> [--source <dir>]` adds an exclude pattern — global if no --source, per-source otherwise
 - **R146:** `ark config remove-pattern <pattern> [--source <dir>]` removes a pattern from include or exclude lists — global if no --source, per-source otherwise
+- **R3677:** Each config mutation (`add-source`, `remove-source`, `add-include`, `add-exclude`, `remove-pattern`, `add-strategy`) prints one line on success saying what it did and where (global or the source), through the server or not
 - **R147:** `ark config show-why <file-path>` explains why a file is included, excluded, or unresolved — shows the matching pattern(s), their source (global, per-source, .gitignore, .arkignore), and whether include-wins-conflicts applied
 - **R148:** (inferred) `add-source` validates the directory exists before writing
 - **R149:** (inferred) `add-include`/`add-exclude` validate the pattern syntax before writing
@@ -367,6 +369,7 @@
 - **R194:** A source `dir` in ark.toml can be a glob pattern (contains `*`, `?`, or `[`)
 - **R195:** Glob patterns are stored as-is in ark.toml — they are directives, not concrete directories
 - **R196:** `ark sources check` expands globs from config, diffs against existing concrete sources
+- **R3679:** Bare `ark sources` lists the configured sources read-only, one per line: a concrete source's directory, marked `from glob PATTERN`, `logs for NAME` or `missing` as they apply, and a glob source as its pattern; from the server's config when one runs, else from ark.toml with the built-in sources ensured on a private copy, so both give the same list. `ark sources check` stays the explicit reconciliation
 - **R197:** New directories from glob expansion are added as sources automatically
 - **R198:** Directories that no longer exist are flagged as MIA but not removed
 - **R199:** Sources previously resolved from a glob that is no longer in config are reported as orphans
@@ -3732,6 +3735,7 @@ implementation, not a separate format break.
 - **R2144:** When a source sets `include`, those patterns *replace* `default_include` for that source — no merging. Same for `exclude`. The two patterns are independent: a source may set only `include` (inheriting `default_exclude`) or only `exclude` (inheriting `default_include`). Replaces R13 (Retired T55).
 - **R2145:** ark.toml uses TOML keys `default_include` and `default_exclude` at the top level. Per-source `[[source]]` blocks continue to use `include` and `exclude`. Replaces R26 (Retired T56).
 - **R2146:** A per-source `include`/`exclude` may be written either as an array (`include = [...]`) for replace form or as a table with key `add` (`include.add = [...]`) for extend form. Replace substitutes the default entirely; extend appends per-source patterns to the default. The two forms are mutually exclusive within one source (TOML enforces this — a key cannot be both array and table). A source that uses neither form inherits the default unchanged.
+- **R3678:** A per-source `include`/`exclude` of any other type (a string, most commonly) fails to load with an error naming the two accepted forms, an array (`include = ["**"]`) and the `add` table (`include.add = ["**"]`); it is never read as a one-item array
 
 ## Feature: tag-definition embeddings (ED records)
 **Source:** specs/tag-def-embeddings.md

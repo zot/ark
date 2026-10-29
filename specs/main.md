@@ -77,7 +77,19 @@ path, so every rule above, `**` and the trailing `/` among them, means
 the same thing on Windows as elsewhere. Measured 2026-10-26: before this,
 every pattern holding a separator failed on Windows, so a nested
 `node_modules/` or `.git/` from the default excludes was indexed.
-`ark init` ships with default excludes for `.git/`, `.env`, etc.
+`ark init` ships with default excludes for `.git/`, `.env`, etc., and for
+editors' side files: Vim's backup, undo and swap files (`*~`, `*.un~`,
+`*.swp`) and Emacs's autosave and lock files (`#*#`, `.#*`), which are written
+beside the file being edited and otherwise get indexed with it. These are the
+list a new `ark.toml` is written with; an existing one takes them with
+`ark config add-exclude`. An include always wins over an exclude, so these
+keep out only the side files no include matches. A source with
+`include = ["**"]` (or `include.add = ["**"]`) takes every file under it,
+editors' side files included; that is what `**` asks for. And Emacs's lock
+file for `notes.md` is `.#notes.md`, which the default `*.md` include matches,
+so it is taken too. On Linux and macOS Emacs makes that lock a symlink, which
+the scanner records as a link rather than indexing; on Windows it is a real
+file, and is indexed.
 
 ### Three anchoring forms
 
@@ -190,6 +202,12 @@ when narrowing the default set (e.g. only `*.md` here), extend when
 broadening it (e.g. defaults plus this directory's special files).
 
 The same forms apply to `exclude` / `exclude.add`.
+
+Any other value, a single string such as `include = "**"` most commonly, is
+refused: the file does not load, and the error names the two forms it accepts
+(an array, `include = ["**"]`, or the `add` table, `include.add = ["**"]`)
+rather than only the type it got. A string is not read as a one-item array,
+because the two forms mean different things and a string says neither.
 
 A source's `include` and `exclude` are independent: setting only
 `include` (any form) keeps `default_exclude` in effect; setting only
@@ -591,6 +609,11 @@ module path, not `ark`); a plain `go build` leaves it as `dev`.
 - `ark config remove-pattern [--dir <path>] <pattern> [--source <dir>]`
   Remove a pattern from include or exclude lists. If --source given,
   removes from per-source; otherwise global.
+
+Each of these mutations, and `add-strategy`, says what it did in one line:
+the source or pattern, and where it went (global, or the source it was
+added to). A command that changes the configuration and prints nothing
+leaves the user unsure it ran.
 - `ark config set-embed-cmd [--dir <path>] <command>`
   Set or change the embedding command. Enables vector search on an
   FTS-only database. Existing files will need `ark refresh` to

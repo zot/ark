@@ -258,11 +258,16 @@ and unknown items carry the negative marker rather than a false green.
   - [ ] **13.2 — the ark app's source list does not follow a config
         reload.** **OPEN (#185.)** Not yet measured in the app.
         `/ui-fast`. See Item 13.
+  - [ ] **13.3 — four small CLI and config papercuts.** **OPEN (#190.)**
+        Config mutations print nothing; a pattern given as a string gets a
+        cryptic error; bare `ark sources` changes the config and nothing lists
+        sources; editor side files are indexed. `/mini-spec`. See Item 13.
 - **Item 8 — filesystem change events under Windows.** **SPLIT (Bill,
       2026-10-26.)** An independent track: the mechanism is portable
       (fsnotify); conduct under Windows' quirks, and recovery from dropped
       events, are unchecked. See Item 8. Closed 2026-10-27 with four parts
-      landed, reopened the same day by 8.5.
+      landed, reopened the same day by 8.5, closed again 2026-10-28 (Bill)
+      with all five landed.
   - [x] ~~**8.1 — an event overflow kicks a reconcile.**~~ **LANDED (2026-10-26 — `#170`.)**
         `/mini-spec`, both platforms: `ErrEventOverflow` means events were
         dropped, so the existing coalesced reconcile catches the gap instead
@@ -306,7 +311,7 @@ and unknown items carry the negative marker rather than a false green.
   - [x] ~~**7.2 — ark's update bridge for the UI.**~~ **LANDED (2026-10-19 — `#142`.)**
   - [x] ~~**7.5 — `sys.updateStatus` names the staged version.**~~ **LANDED (2026-10-19 — `#143`.)**
   - [x] ~~**7.3 — the apps drop their shell-outs.**~~ **LANDED (2026-10-19 — `#144`.)**
-  - [ ] **7.4 — the rest of the sweep.** **OPEN (reopened 2026-10-27 by 7.4.7.)** Was closed
+  - [x] ~~**7.4 — the rest of the sweep.**~~ **LANDED (2026-10-28, through its sub-parts; closed by Bill.)** Reopened 2026-10-27 by 7.4.7, which has landed since. The separate grep pass below was never run; Bill closed the part without it. Was closed
         with no change of its own: every sub-part landed, and both the root and
         `cmd/ark` suites pass on Windows (7.4.6). Not done as a separate pass:
         a grep for Unix-only `os/exec`, file modes, and CRLF. The Go-side
@@ -1290,6 +1295,67 @@ which takes the 403 as success and marks the text saved, and `handleSave`
 logs nothing. Bill saved an indexed file (`PLAN.md`) locally without trouble.
 Two halves: offer the editor only where save will accept the file, and make the
 page report a refused save.
+
+**13.3.** Four findings from the same run, re-measured against the code on
+2026-10-28. DECIDED (Bill, 2026-10-28) where a choice was needed.
+
+- **Config mutations are silent.** `config add-source` exits 0 with no output,
+  and so do `remove-source`, `add-include`, `add-exclude`, `remove-pattern` and
+  `add-strategy`, through the server or not. Each should say what it did.
+- **A pattern list given as a string.** `include = "**"` fails to load, and
+  since #180 `status` reports it with the line and key, but the message ends
+  `unsupported pattern form: string` without saying a list is wanted. DECIDED: a
+  clearer error, not leniency. The array form replaces and the table form
+  (`{ add = [...] }`) adds, so a string has no single right reading.
+- **Bare `ark sources` runs `check`**, which can add sources, and no command
+  lists the configured ones. DECIDED: bare `ark sources` lists them, read-only;
+  `ark sources check` stays the explicit way to expand globs.
+- **Editor side files are indexed.** Vim's `bubba.md~` and `.bubba.md.un~` were
+  indexed under `include = "**"`. DECIDED: the default excludes cover Vim
+  backups and undo files (`*~`, `*.un~`), Vim swap files (`*.swp`), and Emacs
+  autosave and lock files (`#*#`, `.#*`). `default_exclude` is the list a new
+  `ark.toml` is written with, so this reaches new installs; an existing one
+  takes the patterns with `ark config add-exclude`.
+
+  Measured 2026-10-28, before shipping: the matcher's rule is that an include
+  wins over an exclude, so these defaults protect only sources that leave
+  their include alone. Through the real config and matcher, under a new
+  install's defaults:
+
+  | a source's include | `b.md` | `b.md~` and the other four editor files |
+  |---|---|---|
+  | none (the defaults) | unresolved | excluded |
+  | `include = ["**"]` | included | included |
+  | `include.add = ["**"]` | included | included |
+
+  The run's source had `include = "**"`, whose corrected form is the second
+  row, so the defaults alone would not have kept `bubba.md~` out. A second
+  instance turned up 2026-10-29: the bundled config's `default_include` has
+  `*.md`, and Emacs's lock file for `notes.md` is `.#notes.md`, so it is
+  included under the defaults themselves. On Linux and macOS that lock is a
+  symlink, recorded as a link and never indexed; on Windows it is a file. DECIDED
+  (Bill, 2026-10-29): ship the defaults with that limit stated, and leave the
+  rest an open design question, unqueued until a second case shows which shape
+  is earned. Bill hesitates to change the include/exclude precedence itself.
+  The shapes considered:
+
+  1. **The defaults alone** (shipped): side-file patterns in `default_exclude`.
+  2. **A known-types include:** an option that turns the `[strategies]`
+     patterns into includes, so a source indexes every file ark can chunk
+     without `**`. Side files match no strategy, so the defaults apply.
+  3. **A carve-out list:** a second exclude applied after include, a file
+     matching it dropped whatever included it, with the replace and `add`
+     forms per source (`never_include = []` opting out). One new named tier;
+     include and exclude unchanged.
+  4. **A local-only source:** immune from the global lists. Already
+     expressible: a source that uses the replace form for both `include` and
+     `exclude` uses only its own (`EffectivePatterns` reads nothing else).
+  5. **Named pattern groups:** include and exclude bundles defined once, like
+     `[[chunker]]` blocks, that a source opts into by name. A group may carry
+     an optional `default` boolean saying whether a source uses it unless it
+     says otherwise (Bill). Shapes 2 and 3 are each a group. A group's
+     excludes would still lose to a source's `**` unless groups get their own
+     precedence.
 
 **13.2.** Bill added a `[[source]]` to `arkfresh`'s ark.toml by hand. The
 reload at 10:07:07 loaded it and the server tried to index the directory at

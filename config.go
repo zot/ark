@@ -773,7 +773,10 @@ func (p *PatternSpec) UnmarshalTOML(data interface{}) error {
 	case nil:
 		return nil
 	default:
-		return fmt.Errorf("unsupported pattern form: %T", data)
+		// R3678: say which forms are accepted, not only what arrived. A
+		// string is not coerced: replace and add mean different things.
+		return fmt.Errorf("a pattern list must be an array, %s, or an add table, %s; got a %T",
+			`include = ["**"]`, `include.add = ["**"]`, data)
 	}
 }
 
@@ -906,7 +909,7 @@ func (c *Config) EnsureDefaultScheduleTags() {
 // If configSeed is non-nil, uses that (from install/ark.toml bundle).
 // Otherwise falls back to a minimal built-in default.
 // CRC: crc-Config.md | R631, R632, R633, R2781, R2834
-// CRC: crc-Config.md | R22
+// CRC: crc-Config.md | R22, R3676
 func WriteDefaultConfig(path string, configSeed []byte) error {
 	if len(configSeed) > 0 {
 		return os.WriteFile(path, configSeed, 0644)
@@ -917,7 +920,7 @@ case_insensitive = true
 
 # Default patterns — apply to any source that doesn't override
 default_include = []
-default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store"]
+default_exclude = [".git/", ".env", "node_modules/", "__pycache__/", ".DS_Store", "*~", "*.un~", "*.swp", "#*#", ".#*"]
 
 # Strategy mapping — glob pattern to chunking strategy
 [strategies]

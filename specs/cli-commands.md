@@ -566,7 +566,9 @@ Default (`config` with no subcommand): proxies to server if running
 
 Mutating subcommands proxy to the server's `/config/...` endpoints
 when the server is running so the in-memory config is kept current.
-Cold-start mutations call `withConfig` (load → mutate → save).
+Cold-start mutations call `withConfig` (load → mutate → save). Each
+mutation prints one line saying what it did, e.g. `added source DIR` or
+`added exclude *~ (global)`.
 
 ### `dismiss` — drop missing files
 
@@ -1505,14 +1507,21 @@ and limits: [wsl.md](wsl.md).
 ### `sources` — manage source directories
 
 ```
-ark sources [check]
+ark sources
+ark sources check
 ark sources pair [--auto] [--dry-run]
 ```
 
-Default subcommand is `check`: expand globs in ark.toml's
-`[sources]`, add new directories, report orphans. Output uses `+` /
-`-` / `?` prefixes (added / MIA / orphaned). Server-proxy if
-available.
+Bare `sources` lists the configured sources, read-only: one bullet per
+source, marked `glob`, `from glob PATTERN`, `logs for NAME` or `missing`
+where those apply. From the server when one is running, else from
+`ark.toml`, with the built-in sources (the ark home and the orchestrator's
+session log) included either way.
+
+`check` expands globs in ark.toml's `[sources]`, adds new directories,
+and reports orphans. Output uses `+` / `-` / `?` prefixes (added / MIA /
+orphaned). Server-proxy if available. (Bare `sources` ran `check` until
+2026-10-28.)
 
 `pair` proposes a `logs_for` for each unpaired **chat** source, by
 matching a source's directory name against the mangled form of each

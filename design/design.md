@@ -482,6 +482,7 @@ widgets are active in read mode, standard CM6 editing in edit mode.
 - [x] test-Curation.md → `curation_test.go`
 - [x] test-WatchCoverage.md → `watch_coverage_test.go`
 - [x] test-ConfigClone.md → `config_clone_test.go`
+- [x] test-ConfigFeedback.md → `config_defaults_test.go`, `cmd/ark/config_feedback_test.go`
 - [x] test-FilenameCase.md → `pathcase_test.go`, `pathcase_windows_test.go`, `drive_windows_test.go`, `cmd/ark/locator_windows_test.go`, `contentview_test.go`, `contenturl_test.go`
 - [x] test-FileEncoding.md → `encoding_test.go`
 - [x] test-StatusDBLabels.md → `status_db_labels_test.go`

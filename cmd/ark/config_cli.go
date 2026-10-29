@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	ucli "github.com/urfave/cli/v3"
 	"github.com/zot/ark"
@@ -102,6 +103,106 @@ func withConfig(dbPath string, fn func(cfg *ark.Config) error) {
 	}
 }
 
+// mutateConfigCLI runs one config mutation through the server when one is up
+// (so its in-memory config stays current), else on ark.toml directly, and then
+// says what it did. Both paths exit on failure, so the line means success.
+// CRC: crc-CLI.md | R3677
+func mutateConfigCLI(route string, body map[string]string, local func(*ark.Config) error, done string) {
+	if client := serverClient(arkDir); client != nil {
+		if err := proxyOK(client, "POST", route, body); err != nil {
+			fatal(err)
+		}
+	} else {
+		withConfig(arkDir, local)
+	}
+	fmt.Println(done)
+}
+
+// listedSource is what `ark sources` shows of a source: decoded from the
+// server's GET /config JSON or taken from a local load, so neither path depends
+// on how the pattern fields are encoded.
+type listedSource struct {
+	Dir      string
+	FromGlob string
+	LogsFor  string
+}
+
+// sourcesListAction is bare `ark sources`: the effective sources, read-only.
+// The server's list when one runs; else ark.toml with the built-in sources
+// ensured on this private copy, as the server ensures them, so the answer does
+// not depend on whether a server is up.
+// CRC: crc-CLI.md | R3679
+func sourcesListAction(_ context.Context, _ *ucli.Command) error {
+	var sources []listedSource
+	if client := serverClient(arkDir); client != nil {
+		data, err := proxyRaw(client, "GET", "/config", nil)
+		if err != nil {
+			fatal(err)
+		}
+		var cfg struct{ Sources []listedSource }
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			fatal(fmt.Errorf("read the server's config: %w", err))
+		}
+		sources = cfg.Sources
+	} else {
+		cfg, err := ark.LoadConfig(filepath.Join(arkDir, "ark.toml"))
+		if err != nil {
+			fatal(err)
+		}
+		cfg.EnsureArkSource()
+		cfg.EnsureLuhmannSource()
+		for _, src := range cfg.Sources {
+			sources = append(sources, listedSource{Dir: src.Dir, FromGlob: src.FromGlob, LogsFor: src.LogsFor})
+		}
+	}
+	fmt.Print(formatSourceList(sources, func(dir string) bool {
+		_, err := os.Stat(dir)
+		return err == nil
+	}))
+	return nil
+}
+
+// formatSourceList renders the sources as baby-food bullets: a glob source as
+// its pattern, a concrete one as its directory, each with the marks that apply.
+// CRC: crc-CLI.md | R3679
+func formatSourceList(sources []listedSource, exists func(string) bool) string {
+	var b strings.Builder
+	b.WriteString("# Sources\n\n")
+	if len(sources) == 0 {
+		b.WriteString("No sources are configured.\n")
+		return b.String()
+	}
+	for _, src := range sources {
+		var marks []string
+		switch {
+		case ark.IsGlob(src.Dir):
+			marks = append(marks, "glob")
+		case !exists(src.Dir):
+			marks = append(marks, "missing")
+		}
+		if src.FromGlob != "" {
+			marks = append(marks, "from glob `"+src.FromGlob+"`")
+		}
+		if src.LogsFor != "" {
+			marks = append(marks, "logs for "+src.LogsFor)
+		}
+		b.WriteString("- `" + src.Dir + "`")
+		if len(marks) > 0 {
+			b.WriteString(" — " + strings.Join(marks, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// patternScope names where a pattern mutation applies, for its confirmation.
+func patternScope(source string) string {
+	if source == "" {
+		return "global"
+	}
+	return "source " + source
+}
+
 // CRC: crc-CLITree.md, crc-CLI.md | R85
 func configShowAction(_ context.Context, _ *ucli.Command) error {
 	if client := serverClient(arkDir); client != nil {
@@ -152,86 +253,66 @@ func configRecoverAction(_ context.Context, _ *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R143
+// CRC: crc-CLITree.md, crc-CLI.md | R143, R3677
 func configAddSourceAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("directory path required"))
 	}
 	dir := c.Args().First()
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/add-source", map[string]string{"dir": dir}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddSource(dir) })
+	mutateConfigCLI("/config/add-source", map[string]string{"dir": dir},
+		func(cfg *ark.Config) error { return cfg.AddSource(dir) },
+		"added source "+dir)
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R159
+// CRC: crc-CLITree.md, crc-CLI.md | R159, R3677
 func configRemoveSourceAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("directory path required"))
 	}
 	dir := c.Args().First()
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/remove-source", map[string]string{"dir": dir}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.RemoveSource(dir) })
+	mutateConfigCLI("/config/remove-source", map[string]string{"dir": dir},
+		func(cfg *ark.Config) error { return cfg.RemoveSource(dir) },
+		"removed source "+dir)
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R144
+// CRC: crc-CLITree.md, crc-CLI.md | R144, R3677
 func configAddIncludeAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("pattern required"))
 	}
 	pattern := c.Args().First()
 	source := c.String("source")
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/add-include", map[string]string{"pattern": pattern, "source": source}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddInclude(pattern, source) })
+	mutateConfigCLI("/config/add-include", map[string]string{"pattern": pattern, "source": source},
+		func(cfg *ark.Config) error { return cfg.AddInclude(pattern, source) },
+		"added include "+pattern+" ("+patternScope(source)+")")
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R145
+// CRC: crc-CLITree.md, crc-CLI.md | R145, R3677
 func configAddExcludeAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("pattern required"))
 	}
 	pattern := c.Args().First()
 	source := c.String("source")
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/add-exclude", map[string]string{"pattern": pattern, "source": source}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddExclude(pattern, source) })
+	mutateConfigCLI("/config/add-exclude", map[string]string{"pattern": pattern, "source": source},
+		func(cfg *ark.Config) error { return cfg.AddExclude(pattern, source) },
+		"added exclude "+pattern+" ("+patternScope(source)+")")
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md | R146
+// CRC: crc-CLITree.md, crc-CLI.md | R146, R3677
 func configRemovePatternAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 1 {
 		fatal(fmt.Errorf("pattern required"))
 	}
 	pattern := c.Args().First()
 	source := c.String("source")
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/remove-pattern", map[string]string{"pattern": pattern, "source": source}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.RemovePattern(pattern, source) })
+	mutateConfigCLI("/config/remove-pattern", map[string]string{"pattern": pattern, "source": source},
+		func(cfg *ark.Config) error { return cfg.RemovePattern(pattern, source) },
+		"removed pattern "+pattern+" ("+patternScope(source)+")")
 	return nil
 }
 
@@ -266,19 +347,15 @@ func configShowWhyAction(_ context.Context, c *ucli.Command) error {
 	return nil
 }
 
-// CRC: crc-CLITree.md, crc-CLI.md
+// CRC: crc-CLITree.md, crc-CLI.md | R3677
 func configAddStrategyAction(_ context.Context, c *ucli.Command) error {
 	if c.Args().Len() < 2 {
 		fatal(fmt.Errorf("pattern and strategy required (e.g. '*.md' markdown)"))
 	}
 	pattern := c.Args().Get(0)
 	strategy := c.Args().Get(1)
-	if client := serverClient(arkDir); client != nil {
-		if err := proxyOK(client, "POST", "/config/add-strategy", map[string]string{"pattern": pattern, "strategy": strategy}); err != nil {
-			fatal(err)
-		}
-		return nil
-	}
-	withConfig(arkDir, func(cfg *ark.Config) error { return cfg.AddStrategy(pattern, strategy) })
+	mutateConfigCLI("/config/add-strategy", map[string]string{"pattern": pattern, "strategy": strategy},
+		func(cfg *ark.Config) error { return cfg.AddStrategy(pattern, strategy) },
+		"added strategy "+pattern+" = "+strategy)
 	return nil
 }
